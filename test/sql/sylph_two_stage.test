@@ -69,7 +69,7 @@ SELECT count(*)
 0
 
 # --- building a .syl2db with sylph_index_create ---------------------------
-# The output format follows the output_path suffix.
+# Without an explicit two_stage parameter, the output_path suffix decides.
 statement ok
 CREATE TABLE refs AS
   SELECT * FROM read_fastx('data/sylph/tiny_refs/*.fasta.gz', include_filepath := true);
@@ -93,6 +93,37 @@ SELECT count(*)
 ----
 1
 
+# An explicit two_stage parameter wins over the suffix, in both directions.
+# The file's first four bytes are the two-stage magic (readers detect the
+# format from the file, never the name).
+query I
+SELECT num_genomes FROM sylph_index_create(
+  'refs', '__TEST_DIR__/named_plain.syldb', genome_id := 'filepath', two_stage := true);
+----
+3
+
+query T
+SELECT decode(content[1:4]) FROM read_blob('__TEST_DIR__/named_plain.syldb');
+----
+SY2D
+
+query I
+SELECT num_genomes FROM sylph_index_create(
+  'refs', '__TEST_DIR__/named_two.syl2db', genome_id := 'filepath', two_stage := false);
+----
+3
+
+query I
+SELECT count(*) FROM read_blob('__TEST_DIR__/named_two.syl2db') WHERE decode(content[1:4]) = 'SY2D';
+----
+0
+
+# Either way, profiling does not care which name the file was given.
+query I
+SELECT count(*) FROM sylph_profile('k12_reads', '__TEST_DIR__/named_plain.syldb');
+----
+1
+
 # The screen can be made sparser than the default ...
 query I
 SELECT num_genomes FROM sylph_index_create(
@@ -109,16 +140,28 @@ SELECT * FROM sylph_index_create(
 ----
 screen_c
 
-# A two-stage database always needs profiling k-mers.
+# A two-stage database always needs profiling k-mers, however it was requested.
 statement error
 SELECT * FROM sylph_index_create(
   'refs', '__TEST_DIR__/err.syl2db', genome_id := 'filepath', pseudotax := false);
 ----
 pseudotax
 
-# Two-stage-only knobs on a plain .syldb output are an error, not silently ignored.
+statement error
+SELECT * FROM sylph_index_create(
+  'refs', '__TEST_DIR__/err.syldb', genome_id := 'filepath', two_stage := true, pseudotax := false);
+----
+pseudotax
+
+# Two-stage-only knobs on a plain output are an error, not silently ignored.
 statement error
 SELECT * FROM sylph_index_create(
   'refs', '__TEST_DIR__/err.syldb', genome_id := 'filepath', screen_c := 5000);
 ----
-.syl2db
+two_stage
+
+statement error
+SELECT * FROM sylph_index_create(
+  'refs', '__TEST_DIR__/err.syl2db', genome_id := 'filepath', two_stage := false, screen_c := 5000);
+----
+two_stage

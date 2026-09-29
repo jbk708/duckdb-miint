@@ -72,11 +72,12 @@ public:
 		// matching `sylph sketch -t <cores>`); a `threads` named param overrides.
 		uint32_t user_threads = 0;
 
-		// Output format follows the output_path suffix: `.syl2db` writes sylph 1.0's
-		// two-stage seekable database (what `sylph convert-db-two-screen` produces)
-		// via sylph_index_builder_write_two_stage; anything else writes a plain
-		// `.syldb`. two_stage_params is seeded from sylph's converter defaults in
-		// Bind(); `screen_c` / `min_sparse_kmers` named params override fields.
+		// Output format: the `two_stage` named param if given, else inferred from the
+		// output_path suffix (`.syl2db`). true writes sylph 1.0's two-stage seekable
+		// database (what `sylph convert-db-two-screen` produces) via
+		// sylph_index_builder_write_two_stage; false writes a plain `.syldb`.
+		// two_stage_params is seeded from sylph's converter defaults in Bind();
+		// `screen_c` / `min_sparse_kmers` named params override fields.
 		bool two_stage = false;
 		SylphTwoStageParams two_stage_params;
 

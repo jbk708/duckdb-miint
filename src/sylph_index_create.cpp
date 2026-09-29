@@ -117,10 +117,17 @@ unique_ptr<FunctionData> SylphIndexCreateTableFunction::Bind(ClientContext &cont
 		data->user_threads = static_cast<uint32_t>(t);
 	}
 
-	// Two-stage output (`.syl2db`). The converter's own preconditions are
-	// checked here so the (non-atomic) build never runs for a database that
-	// could not be written; the FFI re-checks them.
-	data->two_stage = StringUtil::EndsWith(data->output_path, ".syl2db");
+	// Output format: an explicit `two_stage` parameter decides; without it the
+	// output_path suffix is the default (`.syl2db` = two-stage), as with
+	// DuckDB's COPY and the sylph CLI's converter. The converter's own
+	// preconditions are checked here so the (non-atomic) build never runs for
+	// a database that could not be written; the FFI re-checks them.
+	auto two_stage_param = input.named_parameters.find("two_stage");
+	if (two_stage_param != input.named_parameters.end() && !two_stage_param->second.IsNull()) {
+		data->two_stage = two_stage_param->second.GetValue<bool>();
+	} else {
+		data->two_stage = StringUtil::EndsWith(data->output_path, ".syl2db");
+	}
 	if (sylph_two_stage_params_default(&data->two_stage_params) != 0) {
 		throw IOException("sylph_index_create: sylph_two_stage_params_default failed");
 	}
@@ -131,7 +138,7 @@ unique_ptr<FunctionData> SylphIndexCreateTableFunction::Bind(ClientContext &cont
 		ApplyBoundedInt(input, "min_sparse_kmers", 4294967295LL, data->two_stage_params.min_sparse_kmers);
 		if (data->sketch_params.pseudotax == 0) {
 			throw BinderException("sylph_index_create: a two-stage (.syl2db) database needs profiling k-mers; "
-			                      "pseudotax := false cannot be combined with a .syl2db output_path");
+			                      "pseudotax := false cannot be combined with a two-stage output");
 		}
 		// 0 = sylph's default c (200), the same resolution Execute reports.
 		const uint32_t dense_c = data->sketch_params.c != 0 ? data->sketch_params.c : 200;
@@ -141,8 +148,8 @@ unique_ptr<FunctionData> SylphIndexCreateTableFunction::Bind(ClientContext &cont
 			                      data->two_stage_params.screen_c, dense_c);
 		}
 	} else if (has_two_stage_knobs) {
-		throw BinderException(
-		    "sylph_index_create: screen_c / min_sparse_kmers only apply to a two-stage (.syl2db) output_path");
+		throw BinderException("sylph_index_create: screen_c / min_sparse_kmers only apply to a two-stage output "
+		                      "(two_stage := true or a .syl2db output_path)");
 	}
 
 	// Fail-fast schema validation (before the build side effect). read_id +
@@ -397,6 +404,7 @@ TableFunction SylphIndexCreateTableFunction::GetFunction() {
 	tf.named_parameters["min_spacing"] = LogicalType::INTEGER;
 	tf.named_parameters["pseudotax"] = LogicalType::BOOLEAN;
 	tf.named_parameters["threads"] = LogicalType::INTEGER;
+	tf.named_parameters["two_stage"] = LogicalType::BOOLEAN;
 	tf.named_parameters["screen_c"] = LogicalType::INTEGER;
 	tf.named_parameters["min_sparse_kmers"] = LogicalType::INTEGER;
 

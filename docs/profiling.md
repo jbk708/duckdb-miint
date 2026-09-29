@@ -94,7 +94,7 @@ COPY (
 
 Builds a sylph reference database from a DuckDB table or view of reference sequences, then writes it to disk. The in-SQL counterpart to the upstream `sylph sketch` CLI: reference genomes come from a table (e.g. the output of [`read_fastx`](reading.md#fasta-and-fastq) over reference FASTAs) rather than file paths, so the reference set can be assembled with ordinary SQL (joins, filters, unions). The resulting file is consumable by [`sylph_profile`](#sylph_profile) and by the upstream sylph CLI.
 
-The output format follows the `output_path` suffix. A `.syl2db` suffix writes sylph 1.0's **two-stage** database (what `sylph convert-db-two-screen` produces): a small stage-1 screen index that is loaded in full, plus per-genome compressed dense blocks that are read on demand only for genomes passing the screen. Profiling against it scales with the sample rather than the reference, so it is the right choice for large (atlas-scale) references of prokaryotic genomes; upstream advises against it for small genomes (viruses, plasmids). Any other suffix writes a plain `.syldb`.
+The output format is chosen by the `two_stage` parameter, or, when it is not given, by the `output_path` suffix. Two-stage output (`two_stage := true`, or a `.syl2db` suffix) writes sylph 1.0's **two-stage** database (what `sylph convert-db-two-screen` produces): a small stage-1 screen index that is loaded in full, plus per-genome compressed dense blocks that are read on demand only for genomes passing the screen. Profiling against it scales with the sample rather than the reference, so it is the right choice for large (atlas-scale) references of typical-size microbial genomes. Upstream advises against it for small genomes such as viruses and plasmids, which the sparse stage-1 screen leaves with too few k-mers. Otherwise a plain `.syldb` is written.
 
 Sketching is done from in-memory sequence bytes via the same sylph 1.0.0-miint Rust static library that backs `sylph_profile`; a genome built here is byte-identical to one from `sylph sketch` given the same contigs in the same order. Linux and macOS only; not registered on WASM or Windows builds.
 
@@ -105,15 +105,16 @@ Sketching is done from in-memory sequence bytes via the same sylph 1.0.0-miint R
 **Parameters:**
 
 - `source_table` (VARCHAR, positional): Name of a table or view with columns `read_id` (VARCHAR or BIGINT) and `sequence1` (VARCHAR). Each row is one contig; `sequence1` is the contig sequence and `read_id` is its name. If a `comment` column is also present (as in `read_fastx` output), the contig name is reconstructed as the full FASTA header `read_id || ' ' || comment` — matching how `sylph sketch` (via needletail) stores `first_contig_name`. Without a `comment` column, the contig name is `read_id` as-is.
-- `output_path` (VARCHAR, positional): Destination path. A `.syl2db` suffix selects the two-stage format; anything else writes a plain `.syldb`. Overwritten if it exists.
+- `output_path` (VARCHAR, positional): Destination path. Overwritten if it exists. When `two_stage` is not given, a `.syl2db` suffix selects the two-stage format.
+- `two_stage` (BOOLEAN, default = inferred from the `output_path` suffix): Write a two-stage `.syl2db` database instead of a plain `.syldb`. An explicit value wins over the suffix, as `FORMAT` does for `COPY`; readers detect the format from the file, not the name.
 - `genome_id` (VARCHAR, **required**): Name of the grouping column. One `GenomeSketch` is produced per distinct value; all contigs sharing a value are merged into that genome (matching `sylph sketch`'s default whole-file behavior). A natural choice is the `filepath` column from `read_fastx(..., include_filepath := true)` — one genome per reference FASTA.
 - `order_by` (VARCHAR, default `read_id`): Column used to order a genome's contigs before sketching. Pass `sequence_index` to reproduce original FASTA order (and thus byte-parity with `sylph sketch`).
 - `k` (INTEGER, default 31): k-mer size. Only 21 and 31 are supported. Must match the `k` used at profile time.
 - `c` (INTEGER, default 200): FracMinHash subsampling rate. Must be ≥ the `c` of any sample sketch profiled against the database.
 - `min_spacing` (INTEGER, default 30): Minimum k-mer spacing; thins densely-seeded regions.
-- `pseudotax` (BOOLEAN, default true): Track min-spacing-dropped k-mers so the database supports pseudotax/profiling mode. Set false for query-only databases. Not allowed with a `.syl2db` output, which always needs profiling k-mers.
-- `screen_c` (INTEGER, default 3000, `.syl2db` only): FracMinHash rate of the stage-1 screen index. Must be ≥ `c`; larger is a smaller, faster, more permissive screen. Matches `--screen-c` on `sylph convert-db-two-screen`.
-- `min_sparse_kmers` (INTEGER, default 50, `.syl2db` only): Minimum screen k-mers per genome; genomes that would fall short at `screen_c` get a denser, genome-specific screen rate. Matches `--min-sparse-kmers`.
+- `pseudotax` (BOOLEAN, default true): Track min-spacing-dropped k-mers so the database supports pseudotax/profiling mode. Set false for query-only databases. Not allowed with a two-stage output, which always needs profiling k-mers.
+- `screen_c` (INTEGER, default 3000, two-stage only): FracMinHash rate of the stage-1 screen index. Must be ≥ `c`; larger is a smaller, faster, more permissive screen. Matches `--screen-c` on `sylph convert-db-two-screen`.
+- `min_sparse_kmers` (INTEGER, default 50, two-stage only): Minimum screen k-mers per genome; genomes that would fall short at `screen_c` get a denser, genome-specific screen rate. Matches `--min-sparse-kmers`.
 
 **Output schema:** a single status row.
 
@@ -154,7 +155,7 @@ ORDER BY taxonomic_abundance DESC;
 - Error if `source_table` does not exist or is missing required columns (`read_id`, `sequence1`).
 - Error if the `genome_id` parameter is not supplied, or if the `genome_id` / `order_by` column does not exist.
 - Error if `k` is not 21 or 31.
-- Error if `output_path` ends in `.syl2db` and `pseudotax := false`, or `screen_c` < `c`; error if `screen_c` / `min_sparse_kmers` are given for a plain `.syldb` output.
+- Error if the output is two-stage and `pseudotax := false`, or `screen_c` < `c`; error if `screen_c` / `min_sparse_kmers` are given for a plain `.syldb` output.
 - Error if no non-NULL `genome_id` values are found.
 - IO error surfaces the underlying sylph diagnostic string (e.g., failure to write the output path).
 
