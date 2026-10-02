@@ -69,18 +69,19 @@ experiment_accession	VARCHAR	YES	NULL	NULL	NULL
 statement ok
 PRAGMA explain_output = PHYSICAL_ONLY;
 
+# Case-insensitive: DuckDB 1.x prints INOUT_FUNCTION, 2.0 prints "Inout Function".
 query II
 EXPLAIN
 SELECT r.run_accession
 FROM runs AS r,
      LATERAL (SELECT 1 FROM read_ena_sequences(r.run_accession) LIMIT 1) seq;
 ----
-physical_plan	<REGEX>:.*INOUT_FUNCTION.*
+physical_plan	<REGEX>:(?i).*INOUT.FUNCTION.*
 
 # ---- max_sequences respected per-run in lateral mode ----
 
 statement ok
-PRAGMA explain_output = DEFAULT;
+RESET explain_output;
 
 query I
 SELECT COUNT(*) <= 5

@@ -125,10 +125,11 @@ SELECT COUNT(DISTINCT run_accession) FROM read_ena_sequences(['ERR1074767','ERR1
 statement ok
 PRAGMA explain_output = PHYSICAL_ONLY;
 
+# Case-insensitive: DuckDB 1.x prints INOUT_FUNCTION, 2.0 prints "Inout Function".
 query II
 EXPLAIN SELECT * FROM read_ena_sequences('ERR1074767') LIMIT 1;
 ----
-physical_plan	<!REGEX>:.*INOUT_FUNCTION.*
+physical_plan	<!REGEX>:(?i).*INOUT.FUNCTION.*
 
 # ---- max_sequences ----
 
