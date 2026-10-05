@@ -86,7 +86,7 @@ true
 # ---- Schema with include_filepath ----
 
 query IIIIII
-DESCRIBE SELECT * FROM read_ena_sequences('ERR1074767', include_filepath=true);
+DESCRIBE SELECT * FROM read_ena_sequences('ERR1074767', include_filepath => true);
 ----
 sequence_index	BIGINT	YES	NULL	NULL	NULL
 read_id	VARCHAR	YES	NULL	NULL	NULL
@@ -102,7 +102,7 @@ filepath	VARCHAR	YES	NULL	NULL	NULL
 
 # filepath should contain ebi.ac.uk
 query I
-SELECT filepath LIKE '%ebi.ac.uk%' AS has_ebi FROM read_ena_sequences('ERR1074767', include_filepath=true) LIMIT 1;
+SELECT filepath LIKE '%ebi.ac.uk%' AS has_ebi FROM read_ena_sequences('ERR1074767', include_filepath => true) LIMIT 1;
 ----
 true
 
@@ -134,14 +134,14 @@ physical_plan	<!REGEX>:(?i).*INOUT.FUNCTION.*
 # ---- max_sequences ----
 
 statement ok
-PRAGMA explain_output = DEFAULT;
+RESET explain_output;
 
 # max_sequences caps row count per run. ERR1074767 has thousands of reads,
 # so an exact-match assertion proves the cap actually fired (as opposed to
 # EOF returning fewer rows for some unrelated reason).
 query I
 SELECT COUNT(*) = 10 AS capped_exact
-FROM read_ena_sequences('ERR1074767', max_sequences=10);
+FROM read_ena_sequences('ERR1074767', max_sequences => 10);
 ----
 true
 
@@ -155,13 +155,13 @@ true
 # max_sequences=0 is the explicit sentinel for "unlimited".
 query I
 SELECT COUNT(*) > 10 AS uncapped
-FROM (SELECT * FROM read_ena_sequences('ERR1074767', max_sequences=0) LIMIT 20);
+FROM (SELECT * FROM read_ena_sequences('ERR1074767', max_sequences => 0) LIMIT 20);
 ----
 true
 
 # Negative max_sequences rejected at Bind time.
 statement error
-SELECT * FROM read_ena_sequences('ERR1074767', max_sequences=-5);
+SELECT * FROM read_ena_sequences('ERR1074767', max_sequences => -5);
 ----
 max_sequences must be >= 0
 
@@ -171,19 +171,19 @@ max_sequences must be >= 0
 # fastq_md5 must stream through unchanged (same row count as without the
 # parameter at all).
 query I
-SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', max_sequences=10);
+SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', max_sequences => 10);
 ----
 10
 
 query I
-SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', max_sequences=10, verify_md5 => true);
+SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', max_sequences => 10, verify_md5 => true);
 ----
 10
 
 # Explicit opt-out regression: verify_md5 => false must not change row count
 # (or otherwise affect the data) for a run whose md5 matches anyway.
 query I
-SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', max_sequences=10, verify_md5 => false);
+SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', max_sequences => 10, verify_md5 => false);
 ----
 10
 
