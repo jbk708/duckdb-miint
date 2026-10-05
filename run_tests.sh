@@ -65,6 +65,14 @@ if command -v gpl-boundary &> /dev/null; then
     export GPL_BOUNDARY_AVAILABLE=1
 fi
 
+# miint looks for gpl-boundary in its install cache before PATH, but DuckDB 2.0's unittest overrides $HOME, so
+# the tests can't see ~/.cache/miint/bin and fall back to whatever (possibly older) copy is on PATH. Point at the
+# cached binary explicitly (same lookup as MiintGplBoundaryCacheDir) unless the caller already chose one.
+GPL_BOUNDARY_CACHED="${XDG_CACHE_HOME:-$HOME/.cache}/miint/bin/gpl-boundary"
+if [ -z "${MIINT_GPL_BOUNDARY_PATH:-}" ] && [ -x "$GPL_BOUNDARY_CACHED" ]; then
+    export MIINT_GPL_BOUNDARY_PATH="$GPL_BOUNDARY_CACHED"
+fi
+
 # Independent native FastTree binary (bioconda or built from source) used as
 # the parity oracle for phylogeny_fasttree. Distinct from gpl-boundary's
 # vendored ext/fasttree library.
