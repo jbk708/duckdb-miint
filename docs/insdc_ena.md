@@ -40,8 +40,9 @@ WITH runs AS (
     FROM read_ena('PRJEB11419')
     WHERE library_layout = 'PAIRED'
 )
+-- A lateral call: options such as max_sequences can't be set here (see Read ENA Sequences).
 SELECT r.sample_accession, s.read_id, length(s.sequence1) AS r1_len
-FROM runs r, read_ena_sequences(r.run_accession, max_sequences => 1000) s;
+FROM runs r, read_ena_sequences(r.run_accession) s;
 ```
 
 ### Read ENA
@@ -194,15 +195,15 @@ Stream FASTA/FASTQ sequence data from EBI/ENA with run, sample, and experiment a
 - `accession` (VARCHAR or VARCHAR[]): ENA/SRA accession(s). Supports study (bulk download all runs), sample, run, and experiment accessions.
 - `include_filepath` (BOOLEAN, optional, default false): Add filepath column with the HTTPS download URL(s). For paired-end runs, URLs are semicolon-separated.
 - `qual_offset` (BIGINT, optional, default 33): Quality score offset (33 for Phred+33/Sanger, 64 for Phred+64/Illumina 1.3+)
-- `max_sequences` (BIGINT, optional, default 0): If `> 0`, stop emitting from each run after this many sequences. `0` (or NULL / absent) means unlimited. For paired-end runs the cap counts **pairs** (one output row per pair), not underlying FASTQ records — `max_sequences=N` yields at most N rows and corresponds to 2N downloaded reads. When downloading via Aspera the cap tears down the `ascp` transfer early, saving real bandwidth. For SFF runs the cap applies but the full file is downloaded before any record is parsed; a loud warning is printed in that case.
+- `max_sequences` (BIGINT, optional, default 0): If `> 0`, stop emitting from each run after this many sequences. `0` (or NULL / absent) means unlimited. For paired-end runs the cap counts **pairs** (one output row per pair), not underlying FASTQ records — `max_sequences => N` yields at most N rows and corresponds to 2N downloaded reads. When downloading via Aspera the cap tears down the `ascp` transfer early, saving real bandwidth. For SFF runs the cap applies but the full file is downloaded before any record is parsed; a loud warning is printed in that case.
 - `trim_sff` (BOOLEAN, optional, default true): For SFF runs, apply the quality and adapter clip positions from the SFF header to trim sequences and quality scores. Ignored for FASTQ runs. Named `trim_sff` rather than `trim` because `TRIM` is a SQL function keyword and this function is dual-path (supports both scalar and lateral invocation), which together prevent DuckDB's binder from accepting `trim=...`.
 - `verify_md5` (BOOLEAN, optional, default **true**): Verify each downloaded FASTQ file's bytes against ENA's reported `fastq_md5` once the file has been read to completion, raising a hard error (`IOException`) on mismatch. On by default — it's cheap (the digest is computed incrementally over bytes already in flight) and catches silent truncation/corruption that byte- or row-count checks miss. Verification is automatically skipped (with a loud warning, never silently) when it doesn't apply:
   - ENA reported no `fastq_md5` for a given file.
   - The file is not gzip-compressed (verification hashes the raw pre-decompression bytes, matching the basis of ENA's reported digest; a non-gzip file has no such basis here).
-  - The run routes through SFF (`OpenSFF`) or Aspera (`download_method='aspera'`) — neither transport is wired to the verification tap.
+  - The run routes through SFF (`OpenSFF`) or Aspera (`download_method => 'aspera'`) — neither transport is wired to the verification tap.
   - `max_sequences` capped the run before it reached the file's true end — verification requires having seen every byte, so a deliberately partial read is never treated as a failure.
 
-Because `read_ena_sequences` supports lateral / correlated invocation, named parameters must be passed with arrow syntax (`name => value`), not `name = value`. For example: `read_ena_sequences('X', prefer_format => 'sff', trim_sff => false)`.
+Pass named parameters with arrow syntax (`name => value`). Because `read_ena_sequences` also supports lateral / correlated invocation, `name = value` is read as a comparison and fails with a Binder Error. For example: `read_ena_sequences('X', prefer_format => 'sff', trim_sff => false)`. This works only when the accession argument is a literal (or a list of literals). In a lateral / correlated call, where the accession comes from another table's column, DuckDB doesn't bind named parameters in any syntax (passing one fails with a Binder Error), so those calls run with the defaults ([#295](https://github.com/the-miint/duckdb-miint/issues/295)).
 
 **Output schema:**
 - `sequence_index` (BIGINT): 1-based sequence index (per run)
@@ -244,7 +245,7 @@ GROUP BY ALL;
 
 -- Stream with filepath for provenance tracking
 SELECT run_accession, read_id, filepath
-FROM read_ena_sequences('ERR1074767', include_filepath=true) LIMIT 5;
+FROM read_ena_sequences('ERR1074767', include_filepath => true) LIMIT 5;
 ```
 
 **Notes:**
@@ -312,7 +313,9 @@ FROM read_ena('PRJEB11419') AS r,
 ```
 
 Limitations in lateral mode:
-- `download_method='aspera'` is not supported (use HTTP; the lateral use case is
+- Named parameters (`max_sequences`, `verify_md5`, `include_filepath`, ...) can't be passed in any syntax: the call
+  fails to bind. Every option keeps its default ([#295](https://github.com/the-miint/duckdb-miint/issues/295)).
+- Downloads always use HTTP, even when `ascp` is available (the lateral use case is
   short-circuit-driven, not throughput-driven).
 - `table_scan_progress` reports `-1.0` (indeterminate) because the total work is
   driven by the outer side and not known at bind time.

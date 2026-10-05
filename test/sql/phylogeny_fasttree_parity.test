@@ -137,7 +137,7 @@ SELECT DISTINCT
     END AS bipartition
 FROM (
     SELECT s.subtree,
-           list_filter(t.tips, x -> NOT list_contains(s.subtree, x)) AS complement,
+           list_filter(t.tips, lambda x: NOT list_contains(s.subtree, x)) AS complement,
            s.k, t.n
     FROM subtrees s, all_tips t
     WHERE s.k < t.n
@@ -169,7 +169,7 @@ SELECT DISTINCT
     END AS bipartition
 FROM (
     SELECT s.subtree,
-           list_filter(t.tips, x -> NOT list_contains(s.subtree, x)) AS complement,
+           list_filter(t.tips, lambda x: NOT list_contains(s.subtree, x)) AS complement,
            s.k, t.n
     FROM subtrees s, all_tips t
     WHERE s.k < t.n
@@ -279,7 +279,7 @@ SELECT DISTINCT
     END AS bipartition
 FROM (
     SELECT s.subtree,
-           list_filter(t.tips, x -> NOT list_contains(s.subtree, x)) AS complement,
+           list_filter(t.tips, lambda x: NOT list_contains(s.subtree, x)) AS complement,
            s.k, t.n
     FROM subtrees s, all_tips t
     WHERE s.k < t.n
@@ -311,7 +311,7 @@ SELECT DISTINCT
     END AS bipartition
 FROM (
     SELECT s.subtree,
-           list_filter(t.tips, x -> NOT list_contains(s.subtree, x)) AS complement,
+           list_filter(t.tips, lambda x: NOT list_contains(s.subtree, x)) AS complement,
            s.k, t.n
     FROM subtrees s, all_tips t
     WHERE s.k < t.n
