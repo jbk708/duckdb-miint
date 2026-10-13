@@ -8,12 +8,14 @@
 # per-sample streaming path handles a single sample whose materialised size far
 # exceeds the configured memory_limit.
 #
-# The pre-streaming implementation read the whole relation into RAM, so this
-# would OOM. The SendQuery streaming path Fetches one DataChunk at a time: peak
-# RSS was measured (manually, /usr/bin/time -v) at ~48 MB for 200k reads and
-# ~49 MB for 2M reads — flat in N. This test is the in-suite functional smoke
-# that a multi-GB single sample uploads losslessly without error; it does not
-# itself assert RSS.
+# The streaming evidence is RSS, not this test. The SendQuery path Fetches one
+# DataChunk at a time: peak RSS was measured (manually, /usr/bin/time -v) at
+# ~48 MB for 200k reads and ~49 MB for 2M reads — flat in N. This test is the
+# in-suite functional smoke that a multi-GB single sample uploads losslessly
+# without error; it does not itself assert RSS, and it cannot catch a return to
+# reading the whole sample through Query (the pre-streaming implementation): a
+# materialized Query result is allocated outside DuckDB's tracked memory, so it
+# completes under memory_limit whenever the machine has the RAM.
 
 require miint
 
@@ -21,8 +23,8 @@ require-env MIINT_ENA_BIG_STREAM_TEST
 
 # Bound DuckDB's tracked memory well below the dataset's materialised footprint
 # (~1.4 GB for 3M x 200 bp reads + equal-length quality lists). A streaming scan
-# stays comfortably under this; a regression that materialised the scan (e.g. an
-# ORDER BY on the payload) would blow past it.
+# stays comfortably under this; a blocking operator over the payload (e.g. an
+# ORDER BY) fails with Out of Memory.
 statement ok
 SET memory_limit = '512MB';
 

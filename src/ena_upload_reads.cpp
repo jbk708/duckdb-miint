@@ -603,8 +603,10 @@ void UploadOneSample(ClientContext &context, const ENAUploadReadsBindData &bind,
 
 		// Stream this sample's rows once and encode straight into the sink(s).
 		// SendQuery, not Query: the result streams, so Fetch pulls one DataChunk
-		// at a time and peak memory stays bounded instead of holding the whole
-		// sample in RAM. Draining to exhaustion closes the stream before the
+		// at a time instead of holding the whole sample in RAM. Peak memory stays
+		// bounded only while the plan has no blocking operator; a relation that
+		// sorts (a view with an ORDER BY) buffers the sample before the first
+		// chunk. Draining to exhaustion closes the stream before the
 		// next sample's query. If EncodeChunk throws mid-stream the result is
 		// abandoned un-closed, but the exception aborts the statement: `conn` is
 		// torn down (its dtor runs cleanup) and never reused, so the dangling
