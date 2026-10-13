@@ -148,6 +148,12 @@ SQL tests use `require-env VAR_NAME` (after `require miint`) to skip gracefully 
 
 When adding a new guard: detect in `run_tests.sh`, add `require-env` to the test file(s), and leave availability-check tests (that only verify the scalar/feature-flag query itself) unguarded so they always run.
 
+## Reviewing a branch
+
+Every PR runs the review loop on its own changes before it is opened. The `miint-review` skill (`.claude/skills/miint-review/`) owns the loop: one `/code-review` pass, then fresh `miint-reviewer` rounds until a stop rule holds; the rules live in `.claude/agents/miint-reviewer.md`. The loop ends by printing a `## Reviewer loop` block for the PR description, and the `review-loop-check` workflow fails a PR whose block is missing or names a commit that is not one of the PR's own. A PR that cannot run the loop carries the `no-agent-review` label and says why under that heading. The check shows that the block is present, not that the loop ran.
+
+When a human review turns up a pattern the reviewer missed, add it to the agent file in the PR that fixes the instance: a bullet under the rule that owns it and a Trigger-map row so it can fire, with no names, quotes or PR numbers.
+
 ## Architecture and Patterns (detailed docs)
 
 The entry point is `src/miint_extension.cpp` — `LoadInternal()` registers every table function, scalar function, aggregate, and COPY format. That file is the authoritative catalog.
