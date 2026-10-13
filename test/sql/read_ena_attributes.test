@@ -77,9 +77,10 @@ SELECT tag, value FROM checklist_attrs WHERE tag LIKE '%country%';
 geographic location (country and/or sea)	Netherlands
 
 query I
-SELECT COUNT(*) FROM read_ena_attributes('SAMEA110746363') WHERE tag = 'country';
+SELECT (SELECT COUNT(*) FROM read_ena_attributes('SAMEA110746363') WHERE tag = 'country')
+     = (SELECT COUNT(*) FROM checklist_attrs WHERE tag = 'country');
 ----
-0
+true
 
 query II
 SELECT tag, value FROM read_ena_attributes('SAMEA110746363')

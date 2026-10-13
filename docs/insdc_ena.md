@@ -112,7 +112,7 @@ Fetch custom sample attributes from EBI/ENA via the Browser XML API. Returns all
 - Returns ALL attributes including custom/submitter-defined ones (e.g., primer sequences, custom identifiers) that are not available via `read_ena`
 
 **Tag names and filtering:**
-Tags are the names in the sample XML, so the same attribute can be spelled differently from one sample to the next (`collection_date` in one, `collection date` in another). A `WHERE tag = ...` filter is ordinary, case-sensitive SQL equality on those names, and every sample's XML is still fetched. ENA's own names for sample attributes (`collection_date`, `country`, `host_body_site`) are fields of `read_ena(..., result='sample', fields='...')`, which reads them from ENA's search index without fetching each sample's XML; list them with [`ena_searchable_fields('sample')`](#ena-searchable-fields).
+Tags are the names in the sample XML, so the same attribute can be spelled differently from one sample to the next, even within one study (`collection_date` in one, `collection date` in another). A `WHERE tag = ...` filter is ordinary, case-sensitive SQL equality on those names, and every sample's XML is still fetched. ENA's own names for sample attributes (`collection_date`, `country`, `host_body_site`) are fields of `read_ena(..., result='sample', fields='...')`, which reads them from ENA's search index without fetching each sample's XML; list them with [`ena_searchable_fields('sample')`](#ena-searchable-fields).
 
 **Examples:**
 ```sql
@@ -126,10 +126,11 @@ SELECT * FROM read_ena_attributes('SAMEA3610311');
 SELECT tag, value FROM read_ena_attributes('ERR1074767')
 WHERE tag LIKE '%primer%' OR tag LIKE '%Primer%';
 
--- Pivot attributes to wide format for a study
+-- Pivot attributes to wide format for a study. Samples in one study can
+-- spell the same attribute differently, so match every spelling.
 SELECT sample_accession,
-       MAX(CASE WHEN tag = 'collection date' THEN value END) AS collection_date,
-       MAX(CASE WHEN tag = 'geographic location (country and/or sea)' THEN value END) AS country
+       MAX(CASE WHEN tag IN ('collection_date', 'collection date') THEN value END) AS collection_date,
+       MAX(CASE WHEN tag IN ('country', 'geographic location (country and/or sea)') THEN value END) AS country
 FROM read_ena_attributes('PRJEB11419')
 GROUP BY sample_accession;
 
@@ -142,7 +143,7 @@ WHERE host_body_site = 'UBERON:feces';
 
 ### ENA Searchable Fields
 
-Enumerate the fields that ENA's Portal API can return for a result type (its `/returnFields` list). Use this to discover what field names are available for a given result type (sample, read_run, study, experiment, etc.) before constructing a query — a `fields=` list for `read_ena`, or a direct Portal API `/search` URL.
+Enumerate the fields that ENA's Portal API can return for a result type (its `/returnFields` list). Use this to discover what field names are available for a given result type (sample, read_run, study, experiment, etc.) before constructing a query — a `fields=` list for `read_ena` (result types `read_run`, `sample` and `study`), or a direct Portal API `/search` URL.
 
 **Requirements:**
 - Requires the `httpfs` extension (automatically loaded)
@@ -162,10 +163,10 @@ Enumerate the fields that ENA's Portal API can return for a result type (its `/r
 
 **Examples:**
 ```sql
--- All searchable fields for the sample result type
+-- All fields the sample result type can return
 SELECT field_name, type FROM ena_searchable_fields('sample') ORDER BY field_name;
 
--- Check whether a specific field exists before using it in a filter
+-- Check whether a field exists before requesting it
 SELECT COUNT(*) > 0 AS exists
 FROM ena_searchable_fields('sample')
 WHERE field_name = 'host_body_site';
