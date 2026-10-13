@@ -47,7 +47,7 @@ FROM runs r, read_ena_sequences(r.run_accession) s;
 
 ### Read ENA
 
-Query metadata from the EBI European Nucleotide Archive (ENA) Portal API. Returns run, sample, or study metadata as a table of VARCHAR columns.
+Query metadata from the EBI European Nucleotide Archive (ENA) Portal API. Returns run, sample, or study metadata as a table.
 
 **Requirements:**
 - Requires the `httpfs` extension (automatically loaded)
@@ -59,7 +59,7 @@ Query metadata from the EBI European Nucleotide Archive (ENA) Portal API. Return
 - `fields` (VARCHAR, optional): Comma-separated list of ENA field names to return. If omitted, a sensible default set is used per result type.
 
 **Output schema:**
-- All columns are VARCHAR, named according to the requested fields
+- Columns are named after the requested fields. `read_count`, `base_count` and `tax_id` are BIGINT; `fastq_ftp`, `fastq_aspera` and `fastq_md5` are VARCHAR[] and `fastq_bytes` is BIGINT[] (ENA's `;`-separated lists, split); every other field is VARCHAR
 - Default `read_run` fields include: `run_accession`, `experiment_accession`, `sample_accession`, `study_accession`, `fastq_ftp`, `fastq_bytes`, `fastq_md5`, `library_strategy`, `library_layout`, `instrument_model`, `read_count`, `base_count`, and more
 - Default `sample` fields include: `sample_accession`, `scientific_name`, `tax_id`, `collection_date`, `country`, `lat`, `lon`, `depth`, and more
 - Default `study` fields include: `study_accession`, `study_title`, `study_description`, `center_name`, and more
