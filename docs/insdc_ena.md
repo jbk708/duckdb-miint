@@ -13,7 +13,7 @@ Both surfaces share the same accession types, the same authentication model (Web
   - [Metadata](#read-ena) - Run / sample / study etc level metadata.
   - [Attributes](#read-ena-attributes) - Submitter-defined sample attributes.
   - [Sequences](#read-ena-sequences) - Stream FASTA / FASTQ / SFF data into a `read_fastx` compatible schema.
-  - [Searchable fields](#ena-searchable-fields) - List the field names `read_ena` can return for a result type.
+  - [Searchable fields](#ena-searchable-fields) - List the fields ENA's Portal API can return for a result type.
 - [Writing](#writing) - Detail on submitting data to ENA.
   - [Register](#register-secret) - Register your submission credentials. 
   - [Attach](#attach-the-catalog) - Attach the ENA catalog.
@@ -91,7 +91,7 @@ CREATE TABLE project_runs AS SELECT * FROM read_ena('PRJNA555783');
 
 ### Read ENA Attributes
 
-Fetch custom sample attributes from EBI/ENA via the Browser XML API. Returns all submitter-defined key-value attributes that are not available through the Portal API's fixed schema.
+Fetch sample attributes from EBI/ENA via the Browser XML API. Returns every submitter-defined key-value attribute of a sample, named as the submitter wrote it, including those the Portal API does not carry.
 
 **Requirements:**
 - Requires the `httpfs` extension (automatically loaded)
@@ -109,10 +109,10 @@ Fetch custom sample attributes from EBI/ENA via the Browser XML API. Returns all
 - Resolves non-sample accessions to sample accessions via the Portal API
 - Fetches XML from the Browser API in batches of 200 samples
 - Parses `<SAMPLE_ATTRIBUTE>` `<TAG>`/`<VALUE>` pairs
-- Returns ALL attributes including custom/submitter-defined ones (e.g., primer sequences, custom identifiers) that are not available via `read_ena`
+- Returns ALL attributes, including custom ones (e.g., primer sequences, custom identifiers) that `read_ena` does not carry
 
 **Tag names and filtering:**
-Tags are the names in the sample XML, so the same attribute can be spelled differently from one sample to the next, even within one study (`collection_date` in one, `collection date` in another). A `WHERE tag = ...` filter is ordinary, case-sensitive SQL equality on those names, and every sample's XML is still fetched. ENA's own names for sample attributes (`collection_date`, `country`, `host_body_site`) are fields of `read_ena(..., result='sample', fields='...')`, which reads them from ENA's search index without fetching each sample's XML; list them with [`ena_searchable_fields('sample')`](#ena-searchable-fields).
+Tags are the names in the sample XML, so the same attribute can be spelled differently from one sample to the next, even within one study (`collection_date` in one, `collection date` in another). A `WHERE tag = ...` filter is ordinary, case-sensitive SQL equality on those names, and every sample's XML is still fetched. The Portal API's sample fields carry many of the same attributes under one name each (`collection_date`, `country`, `host_body_site`); read them with `read_ena(..., result='sample', fields='...')`, which makes one Portal API request per input accession instead of one XML request per 200 samples, and list them with [`ena_searchable_fields('sample')`](#ena-searchable-fields).
 
 **Examples:**
 ```sql
@@ -127,15 +127,15 @@ SELECT tag, value FROM read_ena_attributes('ERR1074767')
 WHERE tag LIKE '%primer%' OR tag LIKE '%Primer%';
 
 -- Pivot attributes to wide format for a study. Samples in one study can
--- spell the same attribute differently, so match every spelling.
+-- spell the same attribute differently, so list each spelling the study uses.
 SELECT sample_accession,
        MAX(CASE WHEN tag IN ('collection_date', 'collection date') THEN value END) AS collection_date,
        MAX(CASE WHEN tag IN ('country', 'geographic location (country and/or sea)') THEN value END) AS country
 FROM read_ena_attributes('PRJEB11419')
 GROUP BY sample_accession;
 
--- ENA's own field names come from read_ena, not read_ena_attributes.
--- Fast on large studies: no per-sample XML.
+-- The Portal API's sample fields come from read_ena, not read_ena_attributes:
+-- one request for the study, no per-sample XML.
 SELECT sample_accession
 FROM read_ena('PRJEB11419', result='sample', fields='sample_accession,host_body_site')
 WHERE host_body_site = 'UBERON:feces';

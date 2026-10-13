@@ -459,14 +459,17 @@ TEST_CASE("BuildSearchURLBatch starts with portal base", "[ena]") {
 
 // ---- PercentEncodeQueryValue ----
 
-TEST_CASE("PercentEncodeQueryValue escapes control characters, quotes and separators", "[ena]") {
-	// Values come from user-supplied SQL (aliases, Reports API identifiers); a
-	// hostile value must not break out of a quoted `field="..."` filter or end
-	// the query string. Unreserved characters pass through.
+TEST_CASE("PercentEncodeQueryValue escapes control characters, quotes, separators and non-ASCII bytes", "[ena]") {
+	// Values come from user-supplied SQL. Spliced into a URL, a value must not
+	// end its own component or start another, so every byte outside the
+	// unreserved set is escaped, including UTF-8 bytes >= 0x80. Unreserved
+	// characters pass through.
 	std::string value = "\r\n\t";
 	value.push_back('\0');
-	value += " &\"a-_.~";
-	CHECK(miint::PercentEncodeQueryValue(value) == "%0D%0A%09%00%20%26%22a-_.~");
+	value += " &\"";
+	value += "\xC3\xA9"; // UTF-8 for U+00E9
+	value += "a-_.~";
+	CHECK(miint::PercentEncodeQueryValue(value) == "%0D%0A%09%00%20%26%22%C3%A9a-_.~");
 }
 
 // ---- ENAColumnIndexMap ----
