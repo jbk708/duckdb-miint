@@ -91,7 +91,7 @@ CREATE TABLE project_runs AS SELECT * FROM read_ena('PRJNA555783');
 
 ### Read ENA Attributes
 
-Fetch sample attributes from EBI/ENA via the Browser XML API. Returns every submitter-defined key-value attribute of a sample, named as the submitter wrote it, including those the Portal API does not carry.
+Fetch sample attributes from EBI/ENA via the Browser XML API. Returns every attribute in a sample's XML: the submitter-defined key-value attributes, named as the submitter wrote them and including those the Portal API does not carry, plus ENA's own (such as `ENA-LAST-UPDATE`).
 
 **Requirements:**
 - Requires the `httpfs` extension (automatically loaded)
@@ -102,7 +102,7 @@ Fetch sample attributes from EBI/ENA via the Browser XML API. Returns every subm
 
 **Output schema:**
 - `sample_accession` (VARCHAR): BioSample accession (SAMN\*/SAME\*)
-- `tag` (VARCHAR): Attribute name as the submitter wrote it in the sample XML (e.g., 'collection date', 'geographic location (country and/or sea)', custom fields)
+- `tag` (VARCHAR): Attribute name as it appears in the sample XML (e.g., 'collection date', 'geographic location (country and/or sea)', custom fields, 'ENA-LAST-UPDATE')
 - `value` (VARCHAR): Attribute value
 
 **Behavior:**
@@ -112,7 +112,7 @@ Fetch sample attributes from EBI/ENA via the Browser XML API. Returns every subm
 - Returns ALL attributes, including custom ones (e.g., primer sequences, custom identifiers) that `read_ena` does not carry
 
 **Tag names and filtering:**
-Tags are the names in the sample XML, so the same attribute can be spelled differently from one sample to the next, even within one study (`collection_date` in one, `collection date` in another). A `WHERE tag = ...` filter is ordinary, case-sensitive SQL equality on those names, and every sample's XML is still fetched. The Portal API's sample fields carry many of the same attributes under one name each (`collection_date`, `country`, `host_body_site`); read them with `read_ena(..., result='sample', fields='...')`, which makes one Portal API request per input accession instead of one XML request per 200 samples, and list them with [`ena_searchable_fields('sample')`](#ena-searchable-fields).
+Tags are the names in the sample XML, so the same attribute can be spelled differently from one sample to the next, even within one study (`collection_date` in one, `collection date` in another). A `WHERE tag = ...` filter is ordinary, case-sensitive SQL equality on those names, and every sample's XML is still fetched. The Portal API's sample fields carry many of the same attributes under one name each (`collection_date`, `country`, `host_body_site`); read them with `read_ena(..., result='sample', fields='...')`, which does not fetch each sample's XML, and list them with [`ena_searchable_fields('sample')`](#ena-searchable-fields).
 
 **Examples:**
 ```sql
