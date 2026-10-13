@@ -3,9 +3,9 @@
 # the review-loop-check workflow: which descriptions it accepts, which it refuses,
 # and with what message.
 #
-# Each scenario runs the script inside a throwaway repository holding a base branch
-# (one commit), a PR branch two commits ahead of it, and a third branch with a commit
-# on neither, so "is this sha one of the PR's own commits" is decided by real git
+# Each scenario runs the script inside a throwaway repository holding a base branch,
+# a PR branch two commits ahead of the point it branched from (the base has moved on
+# since), and a third branch with a commit on neither, so "is this sha one of the PR's own commits" is decided by real git
 # ancestry. The repository is removed when all scenarios pass and kept otherwise.
 #
 # Usage: bash test/shell/check_review_loop.sh [script-under-test]
@@ -44,6 +44,9 @@ SHA_base="$(commit base)"
 g checkout -q -b pr
 SHA_first="$(commit first)"
 SHA_second="$(commit second)"
+# The base branch moves on after the PR branches, so its tip is not the branch point.
+g checkout -q base
+commit base_tip > /dev/null
 g checkout -q -b elsewhere base
 SHA_elsewhere="$(commit elsewhere)"
 g checkout -q pr
@@ -164,7 +167,7 @@ for heading in "Fixed:" "Declined:" "Deferred:" "Not probed:"; do
     ok=0
     [[ $EXIT -eq 1 && "$ERR" == *"no '- $heading' line"* ]] && ok=1
     report "a block without the '- $heading' line is refused" \
-        "the four ledger headings are what hands the open findings to the human reviewer" "$ok"
+        "the Fixed, Declined, Deferred and Not probed lines hand the open findings to the human reviewer" "$ok"
 done
 
 body="$(block "$SHA_first")"
@@ -187,7 +190,16 @@ invoke $'## Reviewer loop\n\n'"${body/"$heading"/"$other"}"
 ok=0
 [[ $EXIT -eq 1 && "$ERR" == *"does not name a commit sha"* ]] && ok=1
 report "a filled block under another heading does not fill an empty section" \
-    "the ledger is read from the Reviewer loop section only, not from anywhere in the description" "$ok"
+    "the block is read from the Reviewer loop section only, not from anywhere in the description" "$ok"
+
+# Three of the four lines in the section, the fourth only under a later heading.
+np=$'- Not probed:\n  - none\n'
+body="$(block "$SHA_first")"
+invoke "${body/"$np"/}"$'\n'"$np"
+ok=0
+[[ $EXIT -eq 1 && "$ERR" == *"no '- Not probed:' line"* ]] && ok=1
+report "a line found only under another heading does not count" \
+    "each of the four lines is read from the Reviewer loop section, not from anywhere in the description" "$ok"
 
 invoke "$(block "$SHA_base")" "" no-such-ref
 ok=0

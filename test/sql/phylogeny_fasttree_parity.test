@@ -80,9 +80,9 @@ statement ok
 CREATE TABLE tiny_miint AS SELECT * FROM read_newick('__TEST_DIR__/tiny.miint.nwk');
 
 # The freshness check at the top of this file fails before this comparison when
-# a fixture no longer matches its golden. If you relocate either golden in
-# run_tests.sh, update the corresponding read_newick path here in the same
-# commit.
+# a fixture no longer matches the sha256 recorded with its golden. If you
+# relocate a fixture or golden in run_tests.sh, update its paths here (the
+# freshness check and the read_fastx / read_newick calls) in the same commit.
 statement ok
 CREATE TABLE tiny_golden AS SELECT * FROM read_newick('data/fasttree/tiny.golden.nwk');
 

@@ -5,7 +5,7 @@ description: Run the miint-reviewer agent to convergence on the current branch �
 
 # Reviewing a branch to convergence
 
-One review pass is not a review. The first pass finds what reading the diff finds;
+The first review pass finds what reading the diff finds;
 the fixes then change the diff, and the next pass reads what the fixes wrote. This
 skill owns that loop. The rules, the trigger map, and the report format live in
 `.claude/agents/miint-reviewer.md` — do not restate them here or in your prompts.
@@ -91,10 +91,11 @@ Then apply the fixes and run what the change touches: rebuild (`bash build.sh`),
 changed or affected SQL test file (`./build/release/test/unittest test/sql/<file>.test`),
 the C++ tests for a changed module (`./build/release/extension/miint/tests "[<tag>]"`),
 and `make format-check` in the pinned environment (`CLAUDE.md`, "Formatting"). Run
-`bash run_tests.sh` before the last round. A round that ships unfixed test failures
-into the next review wastes it. Commit the fixes before the next round: a reviewer reads
-`git diff <base>...HEAD`, so a fix left in the working tree is invisible to it. A test the handoff lists as skipped in CI is run here,
-or recorded under "Not probed" with the reason.
+`bash run_tests.sh` before the last round. Fix test failures before the next round, so
+it reads code that passes. Commit the fixes before the next round: a reviewer reads
+`git diff <base>...HEAD`, so a fix left in the working tree is invisible to it. A test
+the handoff lists as skipped in CI is run here, or recorded under "Not probed" with the
+reason.
 
 **Round N+1 — a new agent, carrying the ledger in its prompt.** Three things, and
 nothing else:
@@ -103,7 +104,7 @@ nothing else:
    already settled. This is what keeps a fresh spawn from costing a full-branch read.
 2. **The standing ledger** — every `declined` and `deferred` finding and every answered
    question, with its reason. This is what stops round 3 from re-raising what round 2
-   settled, and it is a token cut as much as a convergence one.
+   settled.
 3. **The ask** — review the current state of the named paths, confirm each `fixed`
    finding is actually fixed, and flag anything the fixes introduced.
 
@@ -112,8 +113,7 @@ reviewer made — it did not make these calls and should not treat them as its o
 
 ## When to stop
 
-**There is no round cap. Stopping is your judgment, and you make the call.** Stop when
-any of these holds, and say which one in your summary:
+There is no round cap. Stop when any of these holds, and say which one in your summary:
 
 - **Nothing new.** Every finding in this round is one already in the ledger.
 - **Nothing actionable.** The new findings are all ones you decline, on reasons already
@@ -124,8 +124,7 @@ any of these holds, and say which one in your summary:
 - **What's left isn't a fix.** Everything open is `deferred` (an issue) or
   `needs-probe` (run the probe, or file it — do not spend a round on it).
 - **Diminishing returns.** The findings are real but minor, and each round is
-  returning less than the last. Say so plainly and stop; you do not need a rule's
-  permission.
+  returning less than the last. Say so and stop.
 
 A stop is not a pass. End with what remains open and why, so the human reviewer
 inherits the ledger rather than re-deriving it.
@@ -134,12 +133,11 @@ inherits the ledger rather than re-deriving it.
 
 The reviewer has its own, in the agent file. Yours:
 
-- **Scope the prompt — this is the lever.** A fresh reviewer is only expensive if you
-  let it re-read the branch. Round 2+ names the changed paths and the rules still in
-  play, so it reads a slice. A full review of a large branch fans out to several
-  family reviewers; a scoped round should not.
-- **The ledger is a token cut, not just bookkeeping.** A decline the reviewer can see
-  is a decline it does not re-derive.
+- **Scope the prompt.** A fresh reviewer re-reads the whole branch unless the prompt
+  names a slice. Round 2+ names the changed paths and the rules still in play, so it
+  reads only those.
+- **Carry the ledger.** A decline the reviewer can see is a decline it does not
+  re-derive.
 - **Keep each reviewer short-lived.** A reviewer carried across rounds accumulates every
   diff and span it has read. Per-round spawns keep each one's context to a single round.
 - **Don't fan out from here.** The reviewer decides its own fan-out. A second layer of
@@ -162,8 +160,8 @@ Open: 1 deferred (#N), 0 needs-probe.
 **When you stop, the last thing you write is a plain-language list of everything left
 open** — every `deferred` finding, every unrun `needs-probe`, every follow-up the
 reviewer proposed, and anything you declined that a human might reasonably re-decide.
-This is not optional and it is not the per-round table above: the table tracks
-convergence, this hands over the work.
+It is separate from the per-round table above: the table tracks convergence, this
+hands over the work.
 
 The reader is deciding what to do next, so write it for someone who has not read the
 diff:

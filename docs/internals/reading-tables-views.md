@@ -118,13 +118,12 @@ nothing else.
 
 `conn.Query()` returns a `MaterializedQueryResult`: the whole relation in memory. To
 stream, use `conn.SendQuery(sql)` and call `result->Fetch()` until it returns null; the
-result is a `StreamQueryResult`. A prepared statement does not stream even with
-`allow_stream_result = true`: `PreparedStatement::Execute` streams only when the
-statement's properties also allow it (`duckdb/src/main/prepared_statement.cpp`), and
-those default to forced materialization. For a per-row filter, interpolate a quoted
-literal (`KeywordHelper::WriteQuoted`) rather than a `?` parameter. Precedents:
-`src/alignment_slice.cpp` and `src/rype_input_stream.cpp`. Check streaming by
-measurement: peak RSS stays flat as the input grows.
+result is a `StreamQueryResult`. A prepared `SELECT` streams too when executed with
+`allow_stream_result` true, which is `PreparedStatement::Execute`'s default; passing
+false materializes (measured on v1.5.5: a `StreamQueryResult` and a
+`MaterializedQueryResult` respectively). Precedents: `src/alignment_slice.cpp` and
+`src/rype_input_stream.cpp`. Check streaming by measurement: peak RSS stays flat as the
+input grows.
 
 ## Read the relation ONCE (#229)
 

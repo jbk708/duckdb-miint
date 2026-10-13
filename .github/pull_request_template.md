@@ -10,14 +10,14 @@ touches and whether it ran, since CI skips those whose dependency it lacks. -->
 ## Reviewer loop
 
 <!--
-Run the `miint-review` skill on the branch and replace this section, heading included,
-with the block it prints.
+Run the `miint-review` skill (`.claude/skills/miint-review/SKILL.md`, in Claude Code) on
+the branch and replace this section, heading included, with the block it prints.
 `review-loop-check` reads this section. A PR that cannot run the loop carries the
 `no-agent-review` label and says why in this section.
 Open the issue for each deferred finding before opening the PR, and name it here as #N.
 -->
 
-- Reviewed at: <sha> · rounds: <N> · stopped: <stop rule>
+- Reviewed at: <sha> · rounds: <N> · code-review: <level> · stopped: <stop rule>
 - Fixed: <count>
 - Declined:
   - none

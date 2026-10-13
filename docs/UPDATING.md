@@ -26,7 +26,7 @@ Outside this repo (do these after CI is green and a release tag is pushed):
 
 Two traps when verifying a bump:
 
-- `scripts/test_wasm_load.sh` reuses `build/wasm_shell/src/libduckdb_static.a` whenever it exists, and `DUCKDB_GIT_VERSION` is fixed at configure time. After a bump, run it with `--clean`; an old core fails with a version-lock error that looks like an incompatibility.
+- `scripts/test_wasm_load.sh` reuses `build/wasm_shell/src/libduckdb_static.a` whenever it exists, so after a bump it still links the old DuckDB core. Run it with `--clean`; an old core fails with a version-lock error that looks like an incompatibility.
 - DuckDB release tags are lightweight, so `git ls-remote <url> 'refs/tags/vX.Y.Z^{}'` matches nothing; query the plain ref as well, as `scripts/check-duckdb-version.sh` does.
 
 # API changes

@@ -491,8 +491,7 @@ if [ -n "$KREPP_TOY_WANT" ]; then
     elif [ ! -d "$KREPP_TOY_INDEX" ]; then
         # Reached when a previous run failed and parked a .partial. Without this
         # branch the guard above is simply false, nothing builds, nothing warns,
-        # and place_krepp_toy.test skips forever with CI green - the same silent
-        # -skip trap this file already calls out for the FastTree goldens.
+        # and place_krepp_toy.test skips forever with CI green.
         echo "Warning: an incomplete krepp toy index is parked at $KREPP_TOY_PARTIAL,"
         echo "         so place_krepp end-to-end tests are being skipped."
         echo "         Remove that directory to retry the build."

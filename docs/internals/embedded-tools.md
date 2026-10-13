@@ -28,14 +28,14 @@ Corresponding preprocessor macros: `MIINT_HAS_CURL`, `MIINT_HAS_HDF5`, `MIINT_HA
 
 `MIINT_HAS_AVX2` and `MIINT_HAS_AVX512` are different in kind: not user-facing options but the results of a configure-time **compiler probe** (mirroring htslib's `hts_probe_cc.sh`), so an old toolchain builds fewer kernel variants instead of failing. Set only on x86-64 and never under Emscripten. See "Per-instruction-set compilation of the mmvec kernel" in §3.
 
-## Adding a dependency
+Run-time / conditional: `MIINT_USE_JEMALLOC` is set when DuckDB's jemalloc is linked (not on musl/macOS/Windows). `MIINT_SIMD` selects the mmvec kernel at run time (`baseline` / `avx2` / `avx512` / `auto`); it is an environment variable rather than a DuckDB setting because the C++ unit tests need it and they never construct a database.
 
-1. `CMakeLists.txt`: capture the version (`git describe`, or the library's version macro) and pass it as a compile definition to both `${EXTENSION_NAME}` and `${LOADABLE_EXTENSION_NAME}`.
+## Reporting a new dependency's version
+
+1. `CMakeLists.txt`: when the version comes from `git describe`, capture it and pass it as a compile definition to both `${EXTENSION_NAME}` and `${LOADABLE_EXTENSION_NAME}`. A library that reports its own version through a header macro or a runtime call needs no capture.
 2. `src/miint_extension.cpp`, `MiintVersionsBind`: add the row, under `#ifdef MIINT_HAS_<LIB>` when the library is optional.
 3. `test/sql/miint_versions.test`: update the library list and counts.
 4. This file: a section for the library and, when it is gated, a row in the feature-flag table above.
-
-Run-time / conditional: `MIINT_USE_JEMALLOC` is set when DuckDB's jemalloc is linked (not on musl/macOS/Windows). `MIINT_SIMD` selects the mmvec kernel at run time (`baseline` / `avx2` / `avx512` / `auto`); it is an environment variable rather than a DuckDB setting because the C++ unit tests need it and they never construct a database.
 
 ## 1. Statically Linked from Source (ExternalProject)
 
@@ -43,14 +43,14 @@ Run-time / conditional: `MIINT_USE_JEMALLOC` is set when DuckDB's jemalloc is li
 - **Location:** `ext/htslib-1.22.1/` (release tarball, not a submodule)
 - **Purpose:** SAM/BAM/CRAM parsing
 - **Build:** autotools `configure` + `make`; produces `libhts.a`
-- **Configure flags:** `--disable-libcurl --disable-bz2 --disable-lzma`, plus `--with-libdeflate` when `MIINT_ENABLE_LIBDEFLATE` is on (the default on Linux, using vcpkg's libdeflate; configure fails if it is missing) and `--without-libdeflate` otherwise. zstd is auto-detected via `PKG_CONFIG_PATH`.
+- **Configure flags:** `--disable-libcurl --disable-bz2 --disable-lzma`, plus `--with-libdeflate` when `MIINT_ENABLE_LIBDEFLATE` is on (the default on Linux, using vcpkg's libdeflate; when the package is not found, CMake warns and turns the option off) and `--without-libdeflate` otherwise. zstd is auto-detected via `PKG_CONFIG_PATH`.
 - **Gotchas:**
   - **Windows/MinGW:** autotools configure is skipped — `config.h` and `config.mk` are generated manually (rtools42 CI lacks a full MSYS2 shell). `NONCONFIGURE_OBJS=` blanked to prevent `hfile_libcurl.o`.
   - **Emscripten:** `make lib-static` only (shared libs not supported on WASM); cross-compiled with `--host=wasm32-unknown-emscripten`.
   - **macOS cross-compile:** `--host=x86_64-apple-darwin` / `--host=aarch64-apple-darwin` selected from `OSX_BUILD_ARCH`.
   - **Explicit ZLIB linking:** `LIBS=<path-to-libz>` passed to configure because `-lz` doesn't always find vcpkg's zlib on macOS.
-  - **`sam_read1` has three negative returns:** `-1` end of stream, `-2` a record that failed to parse, and `-3` a rejected file format (`empty_format` for a zero-byte file, EFTYPE for anything unidentifiable, including a whitespace-only file). `-3` is also returned for per-record corruption once the format is readable: `bam_read1` on a record cut between its length prefix and its core, `sam_read1_bam` on a tid or mtid outside the header. Leniency for `-3` is gated on `fp->format.format`, not on the code. A reader that treats every negative return as end of stream ends the batch, and the next `read()` resumes after the bad record, so the scan returns the records on both sides of it with no error.
-  - **A BGZF file truncated exactly at a block boundary cannot be detected by reading it.** htslib and samtools both return the short count and only warn that the EOF marker is absent; `samtools quickcheck` catches it. `bam_write1` flushes per record, so htslib-written BAMs never straddle blocks and such a truncation always lands on a record boundary.
+  - **`sam_read1`'s negative returns are not all end of stream:** `-1` is end of stream; `-2` is a record that failed to parse; `-3` is a rejected file format (`empty_format` for a zero-byte file, EFTYPE for anything unidentifiable, including a whitespace-only file) and, once the format is readable, per-record corruption (`bam_read1` on a record cut between its length prefix and its core, `sam_read1_bam` on a tid or mtid outside the header); `bam_read1` also returns `-4` for a malformed or unallocatable record (`ext/htslib-1.22.1/sam.c`, `bam_read1`). Leniency for `-3` is gated on `fp->format.format`, not on the code. A reader that treats every negative return as end of stream ends the batch, and the next `read()` resumes after the bad record, so the scan returns the records on both sides of it with no error.
+  - **A BGZF file truncated exactly at a block boundary cannot be detected by reading it.** htslib and samtools both return the short count and only warn that the EOF marker is absent; `samtools quickcheck` catches it.
 
 ### minimap2 (v2.30)
 - **Location:** `ext/minimap2/` (git submodule; version captured via `git describe` at configure time → `MINIMAP2_GIT_VERSION`)
@@ -198,7 +198,7 @@ Two Rust crates — rype and sylph — are statically linked into the extension.
   - `with-sylph` — on when `MIINT_ENABLE_SYLPH=ON` (default). Off on Emscripten and Windows/MinGW (sylph leans on POSIX APIs in its sketch indexer).
   - `rype-fastx` — enables rype's needletail-based FASTX reader. Off on Emscripten and Windows/MinGW because needletail's `cdylib` crate type triggers linker errors (standalone-linking failures on WASM; unresolved `___chkstk_ms` on MSVC).
   - `arrow-ffi` — always on for both crates; the extension consumes both via the Arrow C Data Interface for zero-copy FFI.
-- **CMake exposure:** the umbrella is one `IMPORTED STATIC` target, `rype`, pointing at `libmiint_rust_glue.a`. The archive holds both crates' symbols, so linking `rype` provides sylph too; there is no `sylph` target. A second IMPORTED target on the same archive put it on the link line twice, and with `--allow-multiple-definition` plus `--gc-sections` the Rust runtime symbols resolved to different copies, corrupting the heap (see the comment at the target in `CMakeLists.txt`).
+- **CMake exposure:** the umbrella is one `IMPORTED STATIC` target, `rype`, pointing at `libmiint_rust_glue.a`. The archive holds both crates' symbols, so linking `rype` provides sylph too; there is no `sylph` target. The comment at the target in `CMakeLists.txt` says why a second target on the same archive is not used.
 - **Cross-compilation gotchas:**
   - Cargo `--target` flag selected per platform; `rustup target add` called at configure time.
   - **Emscripten:** `--target wasm32-unknown-emscripten` + `RUSTFLAGS=-C relocation-model=pic` (default wasm32 is static; DuckDB WASM side modules need PIC).
@@ -281,7 +281,7 @@ Three things here are load-bearing and easy to undo by accident:
 
 A related trap in the fallback path: the pinned Eigen tarball's own `CMakeLists.txt` sets `-msse2` / `-mavx` / `-mavx512f` **globally** (lines 207–237). It is inert only because `FetchContent_Declare` points `SOURCE_SUBDIR` at a nonexistent directory so Eigen's CMake never runs. Removing that would inject arch flags into every target and silently move the baseline variant.
 
-Product code dispatches through `DetectIsa()`, which clamps to the minimum of the `MIINT_SIMD` request, the build and the CPU. A test that calls an `avx2::` or `avx512::` kernel directly bypasses that clamp, and on a runner that built AVX-512 but cannot execute it the process dies with SIGILL rather than failing an assertion. Guard such calls with `CpuIsaCeiling()` and report the skip, as `test/cpp/test_MMvec.cpp` does. The docker build lanes run `make test_<type>`, not `run_tests.sh`, so `MainDistributionPipeline.yml` sets `MIINT_SIMD=baseline` for them through `test_config`.
+Product code dispatches through `DetectIsa()`, which clamps to the minimum of the `MIINT_SIMD` request, the build and the CPU. A test that calls an `avx2::` or `avx512::` kernel directly bypasses that clamp, and on a runner that built AVX-512 but cannot execute it the process dies with SIGILL rather than failing an assertion. Guard such calls with `CpuIsaCeiling()` and report the skip, as `test/cpp/test_MMvec.cpp` does. The distribution lanes run `make test_<type>`, not `run_tests.sh`, so `MainDistributionPipeline.yml` sets `MIINT_SIMD=baseline` for them through `test_config`.
 
 ## 4. Runtime Binaries (not compiled in)
 
@@ -311,7 +311,7 @@ These are invoked via `fork`/`exec` at runtime; the extension links no code for 
   - **Pinned tag:** `apache-arrow-nanoarrow-0.8.0` (commit `a579fbf5...`).
   - **Symbol namespace:** `NANOARROW_NAMESPACE=miint` set in `third_party/nanoarrow_ipc/include/nanoarrow/nanoarrow_config.h`. Mangles every `Arrow*` and `ArrowIpc*` symbol to `miint_Arrow*` so we can't collide with DuckDB's bundled `duckdb_nanoarrow` (a C++ namespace).
   - **CMake integration:** declared as an OBJECT library `miint_nanoarrow_ipc`. The main `CMakeLists.txt` wires it via `target_sources(... PRIVATE $<TARGET_OBJECTS:miint_nanoarrow_ipc>)` rather than `target_link_libraries` — the latter triggers DuckDB's export-set machinery and demands the static lib be exported, which it has no business being.
-- **Parity oracle:** `data/fasttree/{tiny,moderate}.golden.nwk` are bioconda FastTree binary outputs for committed input fixtures (`*.fa`); freshness is pinned via `*.golden.fixture.sha` (input-content hash) and `*.golden.fasttree.version` (binary version). The parity test checks each fixture's SHA against its sidecar and fails on a mismatch. `test/sql/phylogeny_fasttree_parity.test` then verifies miint's daemon path produces topologically-identical trees (RF=0 via canonical bipartition multisets) with branch lengths matching within hybrid tolerance `max(1e-9, 1e-6 × max(|m|,|g|))`. Regenerate with `MIINT_FASTTREE_REGENERATE=1 bash run_tests.sh`.
+- **Parity oracle:** `data/fasttree/{tiny,moderate}.golden.nwk` are bioconda FastTree binary outputs for committed input fixtures (`*.fa`); `*.golden.fixture.sha` holds the input's sha256 and `*.golden.fasttree.version` records which FastTree binary generated the golden. The parity test checks each fixture's SHA against its sidecar and fails on a mismatch. `test/sql/phylogeny_fasttree_parity.test` then verifies miint's daemon path produces topologically-identical trees (RF=0 via canonical bipartition multisets) with branch lengths matching within hybrid tolerance `max(1e-9, 1e-6 × max(|m|,|g|))`. Regenerate with `MIINT_FASTTREE_REGENERATE=1 bash run_tests.sh`.
 
 ### IBM Aspera ascp
 - **Gated by:** `MIINT_ASPERA_SUPPORTED` (build-time; `0` on Windows/WASM)

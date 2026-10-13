@@ -10,16 +10,18 @@
 #
 # Passes when the 'no-agent-review' label is present, or when the description has a
 # "## Reviewer loop" section whose "Reviewed at:" line names one of the PR's own
-# commits and whose four ledger headings are present. It checks that the block is
-# there and points at this branch; it cannot check that the loop was run.
+# commits and whose Fixed, Declined, Deferred and Not probed lines are present. It
+# checks that the block is there and points at this branch; it cannot check that the
+# loop was run.
 set -euo pipefail
 
 fail() {
     {
         echo "ERROR: $1"
-        echo "Run the miint-review skill on the branch and replace the '## Reviewer loop'"
-        echo "section of the PR description with the block it prints. If the loop cannot be"
-        echo "run for this PR, add the 'no-agent-review' label and say why under that heading."
+        echo "Run the miint-review skill (.claude/skills/miint-review/SKILL.md) on the branch and"
+        echo "replace the '## Reviewer loop' section of the PR description with the block it"
+        echo "prints. If the loop cannot be run for this PR, add the 'no-agent-review' label"
+        echo "and say why under that heading."
     } >&2
     exit 1
 }
