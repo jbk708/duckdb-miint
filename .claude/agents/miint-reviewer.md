@@ -231,7 +231,7 @@ Safety must not rest on convention or a comment; and a guard must be real, so do
 ### R5 — Build, embedded tools and portability [strong]
 
 - **A new dependency is its own decision.** A capability is built from DuckDB, an already-embedded library or an existing miint function first. A new library states what it buys against the best path without it, and how it is disabled on platforms that cannot build it.
-- **A new library is reported.** It gets a `miint_versions()` row, under its `MIINT_HAS_*` guard when optional, the `test/sql/miint_versions.test` list changes with it, and `docs/internals/embedded-tools.md` gets its section ("Adding a dependency").
+- **A new library is reported.** It gets a `miint_versions()` row, under its `MIINT_HAS_*` guard when optional, the `test/sql/miint_versions.test` list changes with it, and `docs/internals/embedded-tools.md` gets its section ("Reporting a new dependency's version").
 - **Upstream, not a fork** [soft]: a submodule pointing at a fork asks why, and whether the change is going upstream.
 - **WASM is a first-class target.** Code in `src/` and `test/cpp/` builds for Emscripten unless a `MIINT_ENABLE_*` flag or `__EMSCRIPTEN__` guard excludes it; a POSIX-only call outside a guard breaks a build pull-request CI does not run (`docs/wasm-testing.md`, "What it verifies"). Prefer the standard library.
 - **An include sits under no more conditions than its uses.** A use guarded by fewer preprocessor conditions than its include builds only where the condition holds, and with libcurl off on macOS and WASM a Linux build cannot see the error. Probe: the file's command from `compile_commands.json`, minus the condition's `-D`, with `-fsyntax-only`.

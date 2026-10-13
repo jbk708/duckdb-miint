@@ -85,7 +85,9 @@ into the ledger:
 
 **Questions** get an answer, recorded once in the ledger; a later round does not
 re-raise an answered question. **Follow-ups** are pre-existing problems: they need no
-disposition, and they go into the closing prose list, not the loop.
+disposition, and they go into the closing prose list, not the loop. **Unprobed** lines
+go into the closing prose list too, and into the PR block's `Not probed` when they bear
+on this PR.
 
 Then apply the fixes and run what the change touches: rebuild (`bash build.sh`), each
 changed or affected SQL test file (`./build/release/test/unittest test/sql/<file>.test`),

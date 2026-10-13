@@ -5,8 +5,9 @@
 #
 # Each scenario runs the script inside a throwaway repository holding a base branch,
 # a PR branch two commits ahead of the point it branched from (the base has moved on
-# since), and a third branch with a commit on neither, so "is this sha one of the PR's own commits" is decided by real git
-# ancestry. The repository is removed when all scenarios pass and kept otherwise.
+# since), and a third branch with a commit on neither, so "is this sha one of the PR's
+# own commits" is decided by real git ancestry. The repository is removed when all
+# scenarios pass and kept otherwise.
 #
 # Usage: bash test/shell/check_review_loop.sh [script-under-test]
 
@@ -153,7 +154,7 @@ invoke "$(block "$SHA_base")"
 ok=0
 [[ $EXIT -eq 1 && "$ERR" == *"a commit of the base branch"* ]] && ok=1
 report "a base-branch commit is refused" \
-    "the base tip is an ancestor of the PR head, so ancestry alone would accept a review of none of the PR's code" "$ok"
+    "the branch point is an ancestor of the PR head, so ancestry alone would accept a review of none of the PR's code" "$ok"
 
 invoke "$(block "$SHA_elsewhere")"
 ok=0

@@ -881,7 +881,7 @@ ORDER BY iteration, axis;
 
 #### Reproducibility
 
-Same seed → same output **at fp32 precision**. The randomized FSVD produces ~1e-7 bit-level noise across runs even with `OMP_NUM_THREADS=1`. For seed-reproducibility checks, compare with a tolerance:
+Same seed → same output **at fp32 precision**. Runs with the same seed differ by ~1e-7 at the bit level, even with `OMP_NUM_THREADS=1`. For seed-reproducibility checks, compare with a tolerance:
 
 ```sql
 WITH a AS (SELECT * FROM unifrac_pcoa('observations', 'tree', seed := 42)),
