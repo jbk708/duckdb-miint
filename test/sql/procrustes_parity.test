@@ -1,8 +1,19 @@
 # name: test/sql/procrustes_parity.test
-# description: procrustes parity vs SciPy (scipy.spatial.procrustes full + q2#338 numpy partial). Goldens SHA-pinned in data/procrustes/goldens.sha256; run_tests.sh fails when they do not match.
+# description: procrustes parity vs SciPy (scipy.spatial.procrustes full + q2#338 numpy partial). Goldens SHA-pinned in data/procrustes/goldens.sha256.
 # group: [sql]
 
 require miint
+
+# The goldens are committed. Every file the manifest lists is present and matches its
+# recorded sha256; after an intended change, regenerate with
+# test/scripts/gen_procrustes_oracle.py, which rewrites the manifest.
+query III
+SELECT count(*), count(b.filename), count(*) FILTER (WHERE sha256(b.content) <> m.hash)
+FROM read_csv('data/procrustes/goldens.sha256', delim = ' ', header = false,
+              columns = {'hash': 'VARCHAR', 'pad': 'VARCHAR', 'file': 'VARCHAR'}) m
+LEFT JOIN read_blob('data/procrustes/*.csv') b ON parse_filename(b.filename) = m.file;
+----
+8	8	0
 
 # ── full_small: n=6, d=3 ──
 statement ok

@@ -92,7 +92,8 @@ changed or affected SQL test file (`./build/release/test/unittest test/sql/<file
 the C++ tests for a changed module (`./build/release/extension/miint/tests "[<tag>]"`),
 and `make format-check` in the pinned environment (`CLAUDE.md`, "Formatting"). Run
 `bash run_tests.sh` before the last round. A round that ships unfixed test failures
-into the next review wastes it. A test the handoff lists as skipped in CI is run here,
+into the next review wastes it. Commit the fixes before the next round: a reviewer reads
+`git diff <base>...HEAD`, so a fix left in the working tree is invisible to it. A test the handoff lists as skipped in CI is run here,
 or recorded under "Not probed" with the reason.
 
 **Round N+1 — a new agent, carrying the ledger in its prompt.** Three things, and
@@ -205,7 +206,9 @@ included:
 ```
 
 - `Reviewed at` is a commit on the branch. If commits land after the last round, say so
-  on that line ("plus 1 later commit: format fix") instead of moving the sha.
+  on that line ("plus 1 later commit: format fix") instead of moving the sha. A rebase
+  rewrites the reviewed commit: name its rebased counterpart, and say so on the line
+  ("rebased from abc1234 onto the new base").
 - Write `none` under a heading with no entries; do not drop the heading.
 - A deferred item names its issue by number. Every deferred issue is opened before
   the PR is, so the description carries `#N` from its first version; `issue to file`

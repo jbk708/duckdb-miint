@@ -43,6 +43,18 @@ require miint
 
 require-env GPL_BOUNDARY_AVAILABLE
 
+# The goldens are committed. Each fixture still matches the sha256 recorded when its
+# golden was generated; after an edit to a fixture, regenerate with
+# MIINT_FASTTREE_REGENERATE=1 bash run_tests.sh.
+query II
+SELECT
+    (SELECT sha256(content) FROM read_blob('data/fasttree/tiny.fa')) =
+        (SELECT rtrim(content, chr(10)) FROM read_text('data/fasttree/tiny.golden.fixture.sha')) AS tiny_fresh,
+    (SELECT sha256(content) FROM read_blob('data/fasttree/moderate.fa')) =
+        (SELECT rtrim(content, chr(10)) FROM read_text('data/fasttree/moderate.golden.fixture.sha')) AS moderate_fresh;
+----
+true	true
+
 # Old single-arrow lambda syntax used in the bipartition CTE; without this
 # DuckDB 1.5 emits a deprecation warning. The lambda is structurally simple
 # enough that the older syntax remains the readable choice here.
@@ -67,10 +79,10 @@ COPY (
 statement ok
 CREATE TABLE tiny_miint AS SELECT * FROM read_newick('__TEST_DIR__/tiny.miint.nwk');
 
-# run_tests.sh fails when a fixture's SHA no longer matches the one recorded
-# with its golden, so a stale golden fails the run before this comparison. If
-# you relocate either golden in run_tests.sh, update the corresponding
-# read_newick path here in the same commit.
+# The freshness check at the top of this file fails before this comparison when
+# a fixture no longer matches its golden. If you relocate either golden in
+# run_tests.sh, update the corresponding read_newick path here in the same
+# commit.
 statement ok
 CREATE TABLE tiny_golden AS SELECT * FROM read_newick('data/fasttree/tiny.golden.nwk');
 

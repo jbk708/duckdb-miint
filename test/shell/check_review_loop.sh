@@ -12,6 +12,10 @@
 
 set -e
 
+# A git hook or wrapper that exports these would point every git call below at the
+# developer's repository instead of the throwaway one.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="${1:-$HERE/../../scripts/check-review-loop.sh}"
 TEMPLATE="$HERE/../../.github/pull_request_template.md"
@@ -168,7 +172,7 @@ heading='## Reviewer loop'
 other='## Something else'
 invoke "${body/"$heading"/"$other"}"
 ok=0
-[[ $EXIT -eq 1 ]] && ok=1
+[[ $EXIT -eq 1 && "$ERR" == *"no '## Reviewer loop' section"* ]] && ok=1
 report "the block's lines under another heading do not count" \
     "only the Reviewer loop section is read, so a stray copy elsewhere must not satisfy it" "$ok"
 
