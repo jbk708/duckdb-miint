@@ -13,7 +13,7 @@ Both surfaces share the same accession types, the same authentication model (Web
   - [Metadata](#read-ena) - Run / sample / study etc level metadata.
   - [Attributes](#read-ena-attributes) - Submitter-defined sample attributes.
   - [Sequences](#read-ena-sequences) - Stream FASTA / FASTQ / SFF data into a `read_fastx` compatible schema.
-  - [Searchable fields](#ena-searchable-fields) - List the structured fields which search can be optimized against.
+  - [Searchable fields](#ena-searchable-fields) - List the field names `read_ena` can return for a result type.
 - [Writing](#writing) - Detail on submitting data to ENA.
   - [Register](#register-secret) - Register your submission credentials. 
   - [Attach](#attach-the-catalog) - Attach the ENA catalog.
@@ -102,29 +102,17 @@ Fetch custom sample attributes from EBI/ENA via the Browser XML API. Returns all
 
 **Output schema:**
 - `sample_accession` (VARCHAR): BioSample accession (SAMN\*/SAME\*)
-- `tag` (VARCHAR): Attribute name (e.g., 'collection date', 'geographic location', custom fields)
+- `tag` (VARCHAR): Attribute name as the submitter wrote it in the sample XML (e.g., 'collection date', 'geographic location (country and/or sea)', custom fields)
 - `value` (VARCHAR): Attribute value
 
 **Behavior:**
 - Resolves non-sample accessions to sample accessions via the Portal API
-- Fetches XML from the Browser API in batches of 50 samples
+- Fetches XML from the Browser API in batches of 200 samples
 - Parses `<SAMPLE_ATTRIBUTE>` `<TAG>`/`<VALUE>` pairs
 - Returns ALL attributes including custom/submitter-defined ones (e.g., primer sequences, custom identifiers) that are not available via `read_ena`
 
-**Predicate pushdown:**
-When the `WHERE` clause references `tag` (and optionally `value`) with equality-only operators, and every referenced tag is a known ENA sample-search field, the scan switches from per-sample XML fetches to a single `/search?result=sample` TSV request per batch. This converts an O(N)-per-sample XML scan into one HTTP call per 200 samples and can cut minutes off large studies (e.g., a 33 000-sample study drops from a ~3.7-minute rate-limit floor to a few seconds for `WHERE tag='host_body_site'`).
-
-Pushdown triggers when:
-- The filter is a conjunction (AND) of `tag = 'X'`, `tag IN ('X','Y',...)`, or `tag = 'X' AND value = 'Y'`
-- Every referenced tag passes `ena_searchable_fields('sample')` (see the curated allowlist under the hood; uppercase/mixed-case names are accepted)
-
-Pushdown is **declined** (falls back to the XML path, preserving correctness) when:
-- Any referenced tag is not in the searchable-field allowlist (including any single unknown tag inside an `IN` list)
-- Any `OR`, `LIKE`, `!=`, `NOT IN`, etc. appears anywhere in the filter tree
-- `value` is constrained without a single pinned `tag` (ambiguous)
-- Any predicate is on `sample_accession` or another non-`tag`/`value` column
-
-DuckDB always re-applies the original filter above the scan, so the output of the pushdown path is guaranteed to be a subset of what the XML path would have returned — a pushdown mistake degrades to extra work, never to wrong rows.
+**Tag names and filtering:**
+Tags are the names in the sample XML, so the same attribute can be spelled differently from one sample to the next (`collection_date` in one, `collection date` in another). A `WHERE tag = ...` filter is ordinary, case-sensitive SQL equality on those names, and every sample's XML is still fetched. ENA's own names for sample attributes (`collection_date`, `country`, `host_body_site`) are fields of `read_ena(..., result='sample', fields='...')`, which reads them from ENA's search index without fetching each sample's XML; list them with [`ena_searchable_fields('sample')`](#ena-searchable-fields).
 
 **Examples:**
 ```sql
@@ -145,16 +133,16 @@ SELECT sample_accession,
 FROM read_ena_attributes('PRJEB11419')
 GROUP BY sample_accession;
 
--- Pushdown-enabled: uses /search endpoint (single TSV per batch) instead of
--- per-sample XML. Fast on large studies.
+-- ENA's own field names come from read_ena, not read_ena_attributes.
+-- Fast on large studies: no per-sample XML.
 SELECT sample_accession
-FROM read_ena_attributes('PRJEB11419')
-WHERE tag='host_body_site' AND value='UBERON:feces';
+FROM read_ena('PRJEB11419', result='sample', fields='sample_accession,host_body_site')
+WHERE host_body_site = 'UBERON:feces';
 ```
 
 ### ENA Searchable Fields
 
-Enumerate the fields that ENA's Portal API `/search?result=<result_type>` endpoint accepts as structured filters. Use this to discover what field names are available for a given result type (sample, read_run, study, experiment, etc.) before constructing a query — either a direct Portal API `/search` URL or a `WHERE tag='X'` filter on `read_ena_attributes` that can be pushed down to the structured search.
+Enumerate the fields that ENA's Portal API can return for a result type (its `/returnFields` list). Use this to discover what field names are available for a given result type (sample, read_run, study, experiment, etc.) before constructing a query — a `fields=` list for `read_ena`, or a direct Portal API `/search` URL.
 
 **Requirements:**
 - Requires the `httpfs` extension (automatically loaded)

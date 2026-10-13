@@ -457,6 +457,18 @@ TEST_CASE("BuildSearchURLBatch starts with portal base", "[ena]") {
 	CHECK(url.find("&limit=0&format=tsv") != std::string::npos);
 }
 
+// ---- PercentEncodeQueryValue ----
+
+TEST_CASE("PercentEncodeQueryValue escapes control characters, quotes and separators", "[ena]") {
+	// Values come from user-supplied SQL (aliases, Reports API identifiers); a
+	// hostile value must not break out of a quoted `field="..."` filter or end
+	// the query string. Unreserved characters pass through.
+	std::string value = "\r\n\t";
+	value.push_back('\0');
+	value += " &\"a-_.~";
+	CHECK(miint::PercentEncodeQueryValue(value) == "%0D%0A%09%00%20%26%22a-_.~");
+}
+
 // ---- ENAColumnIndexMap ----
 
 TEST_CASE("ENAColumnIndexMap maps column names to indices", "[ena]") {
