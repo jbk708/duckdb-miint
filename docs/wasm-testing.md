@@ -45,6 +45,12 @@ updating submodules):
   into the side module via `DUCKDB_EXTENSION_MIINT_LINKED_LIBS`)
 - A `.wasm` file is produced
 
+The Catch2 `tests` target (`add_executable(tests …)` in `CMakeLists.txt`) is not gated on
+Emscripten, so `test/cpp/` is held to the same rule as `src/`: a POSIX-only call outside a
+`MIINT_ENABLE_*` or `__EMSCRIPTEN__` guard breaks the WASM build. Pull-request CI does not
+build `wasm_eh`; it builds on tag pushes, so such a break first appears at release unless
+this level is run locally.
+
 ### What it does NOT catch
 
 - Unresolved symbols that become WASM imports (deferred to load time)

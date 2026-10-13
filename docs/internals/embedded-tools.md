@@ -28,6 +28,13 @@ Corresponding preprocessor macros: `MIINT_HAS_CURL`, `MIINT_HAS_HDF5`, `MIINT_HA
 
 `MIINT_HAS_AVX2` and `MIINT_HAS_AVX512` are different in kind: not user-facing options but the results of a configure-time **compiler probe** (mirroring htslib's `hts_probe_cc.sh`), so an old toolchain builds fewer kernel variants instead of failing. Set only on x86-64 and never under Emscripten. See "Per-instruction-set compilation of the mmvec kernel" in §3.
 
+## Adding a dependency
+
+1. `CMakeLists.txt`: capture the version (`git describe`, or the library's version macro) and pass it as a compile definition to both `${EXTENSION_NAME}` and `${LOADABLE_EXTENSION_NAME}`.
+2. `src/miint_extension.cpp`, `MiintVersionsBind`: add the row, under `#ifdef MIINT_HAS_<LIB>` when the library is optional.
+3. `test/sql/miint_versions.test`: update the library list and counts.
+4. This file: a section for the library and, when it is gated, a row in the feature-flag table above.
+
 Run-time / conditional: `MIINT_USE_JEMALLOC` is set when DuckDB's jemalloc is linked (not on musl/macOS/Windows). `MIINT_SIMD` selects the mmvec kernel at run time (`baseline` / `avx2` / `avx512` / `auto`); it is an environment variable rather than a DuckDB setting because the C++ unit tests need it and they never construct a database.
 
 ## 1. Statically Linked from Source (ExternalProject)
@@ -36,12 +43,14 @@ Run-time / conditional: `MIINT_USE_JEMALLOC` is set when DuckDB's jemalloc is li
 - **Location:** `ext/htslib-1.22.1/` (release tarball, not a submodule)
 - **Purpose:** SAM/BAM/CRAM parsing
 - **Build:** autotools `configure` + `make`; produces `libhts.a`
-- **Configure flags:** `--disable-libcurl --disable-bz2 --disable-lzma --without-libdeflate` (minimal feature set; zlib-only by default, zstd auto-detected via `PKG_CONFIG_PATH`)
+- **Configure flags:** `--disable-libcurl --disable-bz2 --disable-lzma`, plus `--with-libdeflate` when `MIINT_ENABLE_LIBDEFLATE` is on (the default on Linux, using vcpkg's libdeflate; configure fails if it is missing) and `--without-libdeflate` otherwise. zstd is auto-detected via `PKG_CONFIG_PATH`.
 - **Gotchas:**
   - **Windows/MinGW:** autotools configure is skipped — `config.h` and `config.mk` are generated manually (rtools42 CI lacks a full MSYS2 shell). `NONCONFIGURE_OBJS=` blanked to prevent `hfile_libcurl.o`.
   - **Emscripten:** `make lib-static` only (shared libs not supported on WASM); cross-compiled with `--host=wasm32-unknown-emscripten`.
   - **macOS cross-compile:** `--host=x86_64-apple-darwin` / `--host=aarch64-apple-darwin` selected from `OSX_BUILD_ARCH`.
   - **Explicit ZLIB linking:** `LIBS=<path-to-libz>` passed to configure because `-lz` doesn't always find vcpkg's zlib on macOS.
+  - **`sam_read1` has three negative returns:** `-1` end of stream, `-2` a record that failed to parse, and `-3` a rejected file format (`empty_format` for a zero-byte file, EFTYPE for anything unidentifiable, including a whitespace-only file). `-3` is also returned for per-record corruption once the format is readable: `bam_read1` on a record cut between its length prefix and its core, `sam_read1_bam` on a tid or mtid outside the header. Leniency for `-3` is gated on `fp->format.format`, not on the code. A reader that treats every negative return as end of stream ends the batch, and the next `read()` resumes after the bad record, so the scan returns the records on both sides of it with no error.
+  - **A BGZF file truncated exactly at a block boundary cannot be detected by reading it.** htslib and samtools both return the short count and only warn that the EOF marker is absent; `samtools quickcheck` catches it. `bam_write1` flushes per record, so htslib-written BAMs never straddle blocks and such a truncation always lands on a record boundary.
 
 ### minimap2 (v2.30)
 - **Location:** `ext/minimap2/` (git submodule; version captured via `git describe` at configure time → `MINIMAP2_GIT_VERSION`)
@@ -163,7 +172,7 @@ Two coupled submodules implementing the UniFrac distance + Faith's PD + PERMANOV
   - `ExternalProject_Add(unifrac_build)`: depends on `skbb_build`; receives `SKBB_DIR=${SKBB_SRC_DIR}` make-arg. Same target split as skbb; produces `libssu_inmem.a` or `libssu_wasm.a`.
   - **WASM `-fPIC` patch:** upstream's `wasm/emscripten_build.mk` (in both submodules) omits `-fPIC` from `WASM_CXXFLAGS`. DuckDB WASM extensions are side modules (`-sSIDE_MODULE=2`) so every TU must be position-independent — without the patch, `wasm-ld` fails with `R_WASM_MEMORY_ADDR_SLEB cannot be used against symbol ...; recompile with -fPIC`. Idempotent `sed` patches are applied as part of `skbb_build` / `unifrac_build`'s configure step; remove them once upstream lands the fix.
 - **Native vs WASM divergence:**
-  - **Native (inmem path):** uses cblas + LAPACKE for QR/SVD inside skbb's FSVD; OpenMP enabled via `INMEM_MPFLAG := -fopenmp` (see `ext/unifrac-binaries/src/inmem_build.mk`). `find_package(OpenMP REQUIRED COMPONENTS CXX)` is gated `MIINT_ENABLE_UNIFRAC AND NOT EMSCRIPTEN`; `OpenMP::OpenMP_CXX` is linked into extension/loadable_extension/tests.
+  - **Native (inmem path):** uses Eigen for QR/SVD inside skbb's FSVD, with no BLAS or LAPACKE linked (`ext/scikit-bio-binaries/src/inmem_build.mk`); OpenMP enabled via `INMEM_MPFLAG := -fopenmp` (see `ext/unifrac-binaries/src/inmem_build.mk`). `find_package(OpenMP REQUIRED COMPONENTS CXX)` is gated `MIINT_ENABLE_UNIFRAC AND NOT EMSCRIPTEN`; `OpenMP::OpenMP_CXX` is linked into extension/loadable_extension/tests.
   - **WASM:** uses Eigen for QR/SVD (`linalg_backend_eigen.cpp`); no OpenMP, no LAPACKE. Eigen is fetched on demand by `scripts/fetch_eigen.sh` at configure time. WASM-linked archives are added to `DUCKDB_EXTENSION_MIINT_LINKED_LIBS`.
 - **Header inclusion contract:** translation units include libssu's `api.hpp` directly. It carries an `__UNIFRAC_API_H` include guard as of `v1.6.1-7-ga9cea63`, so double inclusion is safe; the `src/include/unifrac_libssu.hpp` shim that used to work around its absence is gone.
 - **`support_biom_t` orientation:** documented in `api.hpp:223` as "CSR-encoded input table" and consumed obs-major by `biom_inmem.cpp:144-156`. Layout: `indptr` length `n_obs+1`; `indices` stores **sample column indices** within each obs row; `data` holds count values. Misreading this as CSC corrupts every downstream call (the live `faith_pd_inmem` test in `test_UnifracSupportBiom.cpp` exists to keep this invariant honest).
@@ -173,7 +182,7 @@ Two coupled submodules implementing the UniFrac distance + Faith's PD + PERMANOV
   - **Never call `ssu_set_random_seed`.** It chains *two* generators — reseeds libssu's `std::mt19937`, then draws once from it to seed scikit-bio-binaries' own global one — so a single call silently changes every later unseeded draw in the process. This is why `Compute` no longer uses it.
   - The Faith PD path uses `subsample_table_inmem_seeded` (per-call seed) and `faith_pd_inmem` (no RNG at all, and on upstream's concurrency-safe list), so it takes only a bare `OmpThreadPin`.
   - **Concurrency costs bit-exactness, in two bounded ways** — worth knowing before chasing a "nondeterminism bug" that is neither ours nor a bug. (1) The first compute lazily fills non-atomic `static int`s recording which accelerator and CPU variant to use (`proc_use_acc`, `skbio_use_acc`, and one in the dependency), so **concurrent first calls race on them** (upstream README, "Detection caches"). Every writer stores the same value, so it is benign for the value — but a first call that reads the not-yet-written slot can take a different kernel for that one call. Measured effect: the FIRST concurrent progressive run in a process differs from every later one by ~1.6e-06, and runs after it agree exactly. A sanitizer will also flag this race. (2) skbb's centering is an OpenMP `reduction(+:)`, so its summation order — and last bits — depend on the OpenMP width of the calling thread; a serial run at `n_threads = N` and a parallel run whose workers each pin to 1 therefore differ at ~1e-06. This is why `test_ProgressivePcoa`'s serial-vs-parallel case holds `n_threads = 1` on BOTH sides to assert exact equality, and why the SQL-level test across `threads` values uses a 1e-5 tolerance instead.
-- **fp32 reproducibility quirk:** `skbb_pcoa_fsvd_fp32` on identical seeded inputs produces ~1e-7-magnitude bit-level differences across consecutive invocations even with `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`. Almost certainly cblas/LAPACKE reduction ordering inside QR/SVD. PCoA SQL seed-reproducibility tests use a `< 1e-5` tolerance. A future fp64 path (not in v1) would give byte equality. Faith PD and PERMANOVA are deterministic (no FSVD in either, and skbb_permanova reconstructs its `RandomGeneratorArray` from the seed every call).
+- **fp32 reproducibility quirk:** `skbb_pcoa_fsvd_fp32` on identical seeded inputs produces ~1e-7-magnitude bit-level differences across consecutive invocations even with `OMP_NUM_THREADS=1`. PCoA SQL seed-reproducibility tests use a `< 1e-5` tolerance. A future fp64 path (not in v1) would give byte equality. Faith PD and PERMANOVA are deterministic (no FSVD in either, and skbb_permanova reconstructs its `RandomGeneratorArray` from the seed every call).
 - **`skbb_pcoa_fsvd_fp32` output layout:** the API header comment says "Matrix of size (n_eighs × n_dims)", but the implementation in `principal_coordinate_analysis.cpp:574-578` writes `samples + row*n_eighs` with `row` iterating over **samples** — so the buffer is `(n_samples × n_dims)` sample-major. Index as `samples[sample_idx * n_dims + axis]`. The header comment is misleading; the implementation is canonical.
 - **Subsampling drops samples:** when `subsample_depth > 0`, libssu drops samples whose total counts fall below the depth. `mat->n_samples` and `mat->sample_ids` reflect the **post-subsample** view; always trust them over the input feature-table's size. `UnifracDistanceMatrix::sample_ids()` exposes the post-subsample list as a `std::vector<std::string>` for downstream consumers.
 
@@ -189,13 +198,13 @@ Two Rust crates — rype and sylph — are statically linked into the extension.
   - `with-sylph` — on when `MIINT_ENABLE_SYLPH=ON` (default). Off on Emscripten and Windows/MinGW (sylph leans on POSIX APIs in its sketch indexer).
   - `rype-fastx` — enables rype's needletail-based FASTX reader. Off on Emscripten and Windows/MinGW because needletail's `cdylib` crate type triggers linker errors (standalone-linking failures on WASM; unresolved `___chkstk_ms` on MSVC).
   - `arrow-ffi` — always on for both crates; the extension consumes both via the Arrow C Data Interface for zero-copy FFI.
-- **CMake exposure:** the umbrella is wired up as two `IMPORTED STATIC` targets — `rype` and `sylph` — both pointing at the same `libmiint_rust_glue.a`. Existing call sites like `target_link_libraries(... rype)` and `target_link_libraries(... sylph)` work unchanged; the linker dedupes the duplicate archive on the link line.
+- **CMake exposure:** the umbrella is one `IMPORTED STATIC` target, `rype`, pointing at `libmiint_rust_glue.a`. The archive holds both crates' symbols, so linking `rype` provides sylph too; there is no `sylph` target. A second IMPORTED target on the same archive put it on the link line twice, and with `--allow-multiple-definition` plus `--gc-sections` the Rust runtime symbols resolved to different copies, corrupting the heap (see the comment at the target in `CMakeLists.txt`).
 - **Cross-compilation gotchas:**
   - Cargo `--target` flag selected per platform; `rustup target add` called at configure time.
   - **Emscripten:** `--target wasm32-unknown-emscripten` + `RUSTFLAGS=-C relocation-model=pic` (default wasm32 is static; DuckDB WASM side modules need PIC).
   - **Windows/MinGW:** `--target x86_64-pc-windows-gnu` (NOT the MSVC default) so object files are compatible with MinGW `ld.exe`.
   - **macOS cross:** explicit `x86_64-apple-darwin` / `aarch64-apple-darwin` targets.
-- **Forcing a rebuild:** ExternalProject caches `miint_rust_glue_build` aggressively. Touching source files in `ext/rype/` or `ext/sylph/` does not invalidate it. To force a rebuild: `touch build/release/extension/miint/miint_rust_glue_build-prefix/src/miint_rust_glue_build-stamp/miint_rust_glue_build-configure`.
+- **Rebuilds:** `miint_rust_glue_build` has `BUILD_ALWAYS 1`, so cargo runs on every build and its own fingerprinting decides what to recompile. An edit under `ext/rype/` or `ext/sylph/`, or a submodule bump, is picked up by an incremental build; a no-op cargo run costs a few seconds.
 
 #### rype subsystem
 
@@ -203,6 +212,7 @@ Two Rust crates — rype and sylph — are statically linked into the extension.
 - **Purpose:** Rust implementations of classify, extract, and log-ratio operations, exposed via Arrow C Data Interface
 - **Compile definition:** `RYPE_ARROW`
 - **Reported as:** `rype` row in `miint_versions()`
+- **Arrow `id` column:** RYpe echoes it rather than interpreting it; it indexes reads by position in the batch and copies `id` into its output, so any i64 works. arrow-rs keeps a validity bitmap only when the exported `null_count` is nonzero, so an array built by hand with nulls under a zero count reads them as values, and a RYpe "Unexpected null in column …" error means the scan produced a real NULL. The arrow version linked is the one in `ext/miint-rust-glue/Cargo.lock`, since cargo runs on the umbrella crate; `ext/rype/Cargo.lock` is untracked and does not govern the build.
 
 #### sylph subsystem
 
@@ -270,6 +280,8 @@ Three things here are load-bearing and easy to undo by accident:
 - **`Workspace`'s Eigen-mapped buffers are SIMD-aligned** (`src/include/miint_aligned_vector.hpp`), and that is a *correctness* requirement, not tuning. Eigen peels leading scalars off an under-aligned buffer onto a different arithmetic path and decides how many from the runtime **address**, so without it the same seeded fit returns different models in one process as the allocator moves the scratch around. It reaches the matrix products, not just the exponential. The alternative — `EIGEN_MAX_ALIGN_BYTES=0`, which makes Eigen peel nothing — was measured at +75% (AVX2) and +113% (AVX-512), putting AVX-512 behind the SSE2 baseline; alignment costs 0.0025% of instructions retired.
 
 A related trap in the fallback path: the pinned Eigen tarball's own `CMakeLists.txt` sets `-msse2` / `-mavx` / `-mavx512f` **globally** (lines 207–237). It is inert only because `FetchContent_Declare` points `SOURCE_SUBDIR` at a nonexistent directory so Eigen's CMake never runs. Removing that would inject arch flags into every target and silently move the baseline variant.
+
+Product code dispatches through `DetectIsa()`, which clamps to the minimum of the `MIINT_SIMD` request, the build and the CPU. A test that calls an `avx2::` or `avx512::` kernel directly bypasses that clamp, and on a runner that built AVX-512 but cannot execute it the process dies with SIGILL rather than failing an assertion. Guard such calls with `CpuIsaCeiling()` and report the skip, as `test/cpp/test_MMvec.cpp` does. The docker build lanes run `make test_<type>`, not `run_tests.sh`, so `MainDistributionPipeline.yml` sets `MIINT_SIMD=baseline` for them through `test_config`.
 
 ## 4. Runtime Binaries (not compiled in)
 

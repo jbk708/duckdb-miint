@@ -159,7 +159,7 @@ SELECT * FROM read_alignments('some_alignments.sam')
 **Output schema includes:**
 - `position` (BIGINT): 1-based start position
 - `stop_position` (BIGINT): 1-based stop position (computed from CIGAR using `bam_endpos`)
-- `cigar` (VARCHAR): CIGAR string
+- `cigar` (VARCHAR): CIGAR string; `''` for a record whose CIGAR field is `*`, never NULL
 - `sequence` (VARCHAR, optional): Read sequence from SEQ field (when include_seq_qual=true)
 - `qual` (UTINYINT[], optional): Quality scores as array of integers 0-93 (when include_seq_qual=true)
 - Plus other standard SAM fields and optional tags

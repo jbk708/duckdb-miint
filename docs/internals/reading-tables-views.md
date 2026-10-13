@@ -114,6 +114,18 @@ checking for before writing a caveat: `mzml_peak_pair` already suffixed its two 
 tables from a process-wide counter, so it needed a `HelperTempRelation` guard and
 nothing else.
 
+## Streaming a relation
+
+`conn.Query()` returns a `MaterializedQueryResult`: the whole relation in memory. To
+stream, use `conn.SendQuery(sql)` and call `result->Fetch()` until it returns null; the
+result is a `StreamQueryResult`. A prepared statement does not stream even with
+`allow_stream_result = true`: `PreparedStatement::Execute` streams only when the
+statement's properties also allow it (`duckdb/src/main/prepared_statement.cpp`), and
+those default to forced materialization. For a per-row filter, interpolate a quoted
+literal (`KeywordHelper::WriteQuoted`) rather than a `?` parameter. Precedents:
+`src/alignment_slice.cpp` and `src/rype_input_stream.cpp`. Check streaming by
+measurement: peak RSS stays flat as the input grows.
+
 ## Read the relation ONCE (#229)
 
 A relation passed by name is not guaranteed to return the same rows twice. Reading
@@ -164,6 +176,9 @@ from a related table. `align_bowtie2_sharded` counts
 `query JOIN read_to_shard`, deliberately not `COUNT(*)` over `read_to_shard`
 alone — a mapping that legitimately lists reads absent from the query relation
 would otherwise look like data loss and fail a valid workload.
+
+Removing a snapshot moves every query that read it into the single pass; re-pointing
+those queries at the source relation turns one read into several.
 
 ### Audit status
 

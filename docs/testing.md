@@ -28,6 +28,8 @@ make test
 ./build/release/test/unittest "[alignment]"
 ```
 
+`build/release/duckdb`, `test/unittest`, `extension/miint/tests` and the loadable `miint.duckdb_extension` are separate build targets, so after an incremental `ninja` of one of them the others can be stale. Rebuild every binary you probe with, e.g. `ninja -C build/release duckdb test/unittest extension/miint/tests`.
+
 **Test file structure:**
 SQL logic tests consist of statements and expected outputs. Each test file follows this format:
 
@@ -75,6 +77,18 @@ File not found: nonexistent.fastq
 - Verify data types and column ordering
 - Keep test data files small and focused
 - Use clear, descriptive comments for each test section
+- A test that reads through a glob and asserts `filepath` values selects `replace(filepath, '\', '/')`: glob expansion returns native separators on Windows. A single path or an explicit path list keeps the caller's string and needs no wrapping.
+
+**Guards and skipped tests:**
+
+`require-env` guards only what a deployment can lack: an optional embedded library, a runtime binary, a network resource or served data. The one other category is process state the main pass cannot set, such as a lowered descriptor limit, which `run_tests.sh` provides in a rerun. `run_tests.sh` decides which guards are exported. A test of this repository's own C++ code is never guarded: an oracle produced by an external tool is committed as a fixture, and a missing or corrupted fixture fails the test. A checksum gate on committed data turns a corrupted golden into a skip and leaves the run green; `run_tests.sh` records where such gates were removed for that reason.
+
+A skipped file is not a passing one, and the suite's skip count is part of its result: a run that skips more files than before covers less, whatever its summary line says. `require httpfs` skips whenever the build does not include httpfs, and `extension_config.cmake` does not build it on this DuckDB version. That covers the ENA submission mock tests. Running them takes:
+
+- `DUCKDB_TEST_AUTOLOADING=all`, so `require httpfs` resolves and `require miint` installs from the build repository;
+- a throwaway `HOME` whose `.duckdb/extensions/<version>/<platform>/` holds httpfs and json, so the install does not conflict with an existing miint and loads resolve offline;
+- `DUCKDB_TEST_ON_INIT='LOAD httpfs;'`, because `require httpfs` under autoloading does not load it, and the ENA client's POST needs httpfs;
+- a freshly built loadable extension (`ninja -C build/release extension/miint/miint.duckdb_extension`) copied over `build/release/repository/<version>/<platform>/miint.duckdb_extension`, since autoloading installs that copy rather than the statically linked one.
 
 ## C++ Unit Tests
 
