@@ -95,10 +95,9 @@ fi
 #                                topologies/branch lengths even with the same
 #                                seed)
 #
-# Each fixture exports an independent gate (MIINT_FASTTREE_TINY_PARITY_OK,
-# MIINT_FASTTREE_MODERATE_PARITY_OK). The parity test require-envs both, so a
-# single stale fixture skips the whole file rather than silently letting the
-# other fixture mask the divergence.
+# The goldens are committed, so a fixture edited without an oracle refresh is
+# an error: the run fails and names the stale fixture, rather than skipping the
+# parity test.
 #
 # To regenerate: rm data/fasttree/*.golden.{nwk,fixture.sha,fasttree.version}
 # and rerun run_tests.sh with MIINT_FASTTREE_REGENERATE=1.
@@ -200,16 +199,16 @@ ft_regenerate_one "data/fasttree/moderate.fa" "data/fasttree/moderate.golden.nwk
 ft_tiny_status=$(ft_check_one     "data/fasttree/tiny.fa"     "data/fasttree/tiny.golden.nwk"     "data/fasttree/tiny.golden.fixture.sha"     "data/fasttree/tiny.golden.fasttree.version")
 ft_moderate_status=$(ft_check_one "data/fasttree/moderate.fa" "data/fasttree/moderate.golden.nwk" "data/fasttree/moderate.golden.fixture.sha" "data/fasttree/moderate.golden.fasttree.version")
 
-if [ "$ft_tiny_status" = "FRESH" ]; then
-    export MIINT_FASTTREE_TINY_PARITY_OK=1
-else
-    echo "Warning: tiny FastTree oracle: $ft_tiny_status; rerun with MIINT_FASTTREE_REGENERATE=1 to refresh"
+ft_stale=0
+if [ "$ft_tiny_status" != "FRESH" ]; then
+    echo "ERROR: tiny FastTree oracle: $ft_tiny_status; rerun with MIINT_FASTTREE_REGENERATE=1 to refresh" >&2
+    ft_stale=1
 fi
-if [ "$ft_moderate_status" = "FRESH" ]; then
-    export MIINT_FASTTREE_MODERATE_PARITY_OK=1
-else
-    echo "Warning: moderate FastTree oracle: $ft_moderate_status; rerun with MIINT_FASTTREE_REGENERATE=1 to refresh"
+if [ "$ft_moderate_status" != "FRESH" ]; then
+    echo "ERROR: moderate FastTree oracle: $ft_moderate_status; rerun with MIINT_FASTTREE_REGENERATE=1 to refresh" >&2
+    ft_stale=1
 fi
+[ "$ft_stale" = 0 ] || exit 1
 
 # ASR (ancestral-state) parity goldens: independent ground-truth reconstructions
 # (Brownian-motion GLS via the phylogenetic VCV; ape::ace for the discrete Mk models).
@@ -241,13 +240,12 @@ fi
 # technique, cross-checked against the shipped q2_diversity._partial_procrustes.
 # The expected CSVs under data/procrustes/ are the committed, SHA-pinned output
 # (data/procrustes/goldens.sha256); the generator (test/scripts/gen_procrustes_oracle.py)
-# needs only SciPy/NumPy (BSD, in-tree-compatible). The gate below just verifies
-# the committed goldens are intact before the parity test runs (require-env
-# MIINT_PROCRUSTES_PARITY_OK). To refresh: rerun the generator under a SciPy env.
-if [ -f data/procrustes/goldens.sha256 ] && (cd data/procrustes && sha256sum -c --quiet goldens.sha256) 2>/dev/null; then
-    export MIINT_PROCRUSTES_PARITY_OK=1
-else
-    echo "Warning: procrustes parity goldens missing or corrupt; parity test skipped"
+# needs only SciPy/NumPy (BSD, in-tree-compatible). The check below fails the
+# run when the committed goldens no longer match their checksums, rather than
+# skipping the parity test. To refresh: rerun the generator under a SciPy env.
+if [ ! -f data/procrustes/goldens.sha256 ] || ! (cd data/procrustes && sha256sum -c --quiet goldens.sha256) 2>/dev/null; then
+    echo "ERROR: procrustes parity goldens missing or corrupt (data/procrustes/goldens.sha256); regenerate with test/scripts/gen_procrustes_oracle.py" >&2
+    exit 1
 fi
 
 # NCBI BLAST network reachability. Probes the BLAST CGI endpoint so

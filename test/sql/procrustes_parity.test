@@ -1,10 +1,8 @@
 # name: test/sql/procrustes_parity.test
-# description: procrustes parity vs SciPy (scipy.spatial.procrustes full + q2#338 numpy partial). Goldens SHA-pinned in data/procrustes/goldens.sha256; gate exported by run_tests.sh only when they match.
+# description: procrustes parity vs SciPy (scipy.spatial.procrustes full + q2#338 numpy partial). Goldens SHA-pinned in data/procrustes/goldens.sha256; run_tests.sh fails when they do not match.
 # group: [sql]
 
 require miint
-
-require-env MIINT_PROCRUSTES_PARITY_OK
 
 # ── full_small: n=6, d=3 ──
 statement ok
