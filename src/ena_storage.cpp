@@ -358,11 +358,11 @@ struct ENAVirtualScanBindData : public TableFunctionData {
 	TableCatalogEntry &table;
 };
 
-BindInfo ENAVirtualScanGetBindInfo(const optional_ptr<FunctionData> bind_data) {
+optional_ptr<TableCatalogEntry> ENAVirtualScanGetTableEntry(optional_ptr<const FunctionData> bind_data) {
 	if (!bind_data) {
-		return BindInfo(ScanType::TABLE);
+		return nullptr;
 	}
-	return BindInfo(bind_data->Cast<ENAVirtualScanBindData>().table);
+	return &bind_data->Cast<ENAVirtualScanBindData>().table;
 }
 
 } // namespace
@@ -391,14 +391,14 @@ TableFunction ENATableEntry::GetScanFunction(ClientContext &, unique_ptr<Functio
 		fn.projection_pushdown = false;
 		return fn;
 	}
-	// Populate bind_data with a table back-reference and wire `get_bind_info`
+	// Populate bind_data with a table back-reference and wire `get_table_entry`
 	// so LogicalGet::GetTable() resolves; the DELETE binder relies on this
 	// (otherwise it throws "Can only delete from base table" before our
 	// PlanDelete override gets a chance to surface a real diagnostic).
 	bind_data = make_uniq<ENAVirtualScanBindData>(*this);
 	TableFunction fn("ena_virtual_scan", {}, NotImplementedScanFn);
 	fn.bind = NotImplementedBind;
-	fn.get_bind_info = ENAVirtualScanGetBindInfo;
+	fn.get_table_entry = ENAVirtualScanGetTableEntry;
 	return fn;
 }
 
