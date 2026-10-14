@@ -97,9 +97,9 @@ public:
 	// then INCOMPLETE_RESULT_MARKER in place of the rows: 3 of 150 identical
 	// requests on 2026-10-14, the other 147 returning the rows. Read as rows, that
 	// is no result at all, or, as the wording allows, a short result that looks
-	// complete. Matched anywhere in the body, not only at a line start, so a row
-	// cut off mid-field is caught too; the sentence is not plausible data. Inline
-	// for the same reason as IsRetryableStatus.
+	// complete. Matched anywhere in the body, so a row cut off mid-field is
+	// caught too; the sentence is not plausible data. Inline for the same
+	// reason as IsRetryableStatus.
 	static constexpr const char *INCOMPLETE_RESULT_MARKER = "ERROR occurred. Not all results may have been written.";
 	static inline bool IsIncompleteResult(const std::string &body) {
 		return body.find(INCOMPLETE_RESULT_MARKER) != std::string::npos;

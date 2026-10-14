@@ -12,9 +12,9 @@ require-env MIINT_ENA_PORTAL_URL_BASE
 # at the alias check, a GET the built-in HTTP client serves, before any POST.
 
 # The Portal API sometimes answers a search with HTTP 200, the header row, and
-# an error line where the rows should be. Every ENA GET goes through one retry
-# loop; the pre-INSERT alias check is the Portal search this mock can serve.
-# An alias starting with "INCOMPLETE_" gets that answer from the mock.
+# an error line where the rows should be. Every ENA metadata GET goes through
+# one retry loop; the pre-INSERT alias check is the Portal search this mock
+# can serve. An alias starting with "INCOMPLETE_" gets that answer from it.
 
 statement ok
 CREATE SECRET test_ena_incomplete_mock (
@@ -47,8 +47,8 @@ VALUES ('INCOMPLETE_always', 'never answered', 'METAGENOMIC');
 ----
 failed after 4 attempts: the last response was incomplete
 
-# Neither INSERT got as far as a submission. Not filtered on the payload: a
-# POST that fails logs a row with an empty request_payload.
+# Neither INSERT got as far as a submission. Any POST, even one that fails,
+# logs a row.
 query I
 SELECT count(*) FROM ena.submission_log WHERE object_type = 'projects';
 ----

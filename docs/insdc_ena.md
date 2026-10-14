@@ -32,7 +32,7 @@ Both surfaces share the same accession types, the same authentication model (Web
 
 Read paths target ENA's [Portal API](https://www.ebi.ac.uk/ena/portal/api/), [Browser XML API](https://www.ebi.ac.uk/ena/browser/api/), and the read-data FTP/HTTPS endpoints. No credentials are required.
 
-Every metadata request (`read_ena`, `read_ena_attributes`, `ena_searchable_fields`, run resolution in `read_ena_sequences`, and the alias check before an `INSERT`) is retried with backoff on HTTP 429, 500, 502, 503 and 504. The Portal API sometimes answers HTTP 200 with `ERROR occurred. Not all results may have been written.` in place of the results; that response is retried the same way. If the last retry gets it too, the query fails instead of returning a partial result. The exception is a `LATERAL` call to `read_ena_sequences`, which skips that accession with a warning in `miint_warnings()`.
+Every metadata request miint sends to ENA's Portal, Browser XML and Reports APIs, whether from a read or from the checks an `INSERT` makes first, is retried with backoff on HTTP 429, 500, 502, 503 and 504. The Portal API sometimes answers HTTP 200 with `ERROR occurred. Not all results may have been written.` in place of the results; that response is retried the same way. If the last retry gets it too, the query fails instead of returning a partial result, with two exceptions: a `LATERAL` call to `read_ena_sequences` skips that accession with a warning in `miint_warnings()`, and `INSERT INTO ena.samples` skips its client-side checklist check, leaving validation to Webin.
 
 A an example read pattern joins a study's metadata with its sequence data:
 

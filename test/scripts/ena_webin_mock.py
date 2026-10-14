@@ -46,8 +46,9 @@ import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# What the real Portal API writes in place of rows when a search fails after it
-# has sent HTTP 200 (captured 2026-10-14; it has no trailing newline).
+# A stand-in for the line the Portal API returned in place of rows in an HTTP
+# 200 (captured 2026-10-14 with the query's JSON after "Query: "; no trailing
+# newline).
 _PORTAL_INCOMPLETE_LINE = "ERROR occurred. Not all results may have been written.Query: {}"
 # Queries that have already failed once ("INCOMPLETE_ONCE_" aliases).
 _FAILED_ONCE_QUERIES: set[str] = set()
