@@ -26,6 +26,12 @@ fi
 export MIINT_SIMD="${MIINT_SIMD:-baseline}"
 echo "MIINT_SIMD=$MIINT_SIMD (mmvec kernel; expected values are carved against 'baseline')"
 
+# DuckDB's unittest skips any test whose error contains "HTTP" or "Unable to connect"
+# unless its config names other messages (duckdb/test/helpers/test_config.cpp). That
+# turned failures of the HTTP-reading tests into skips, so every unittest run below uses a
+# config under which every error fails the test.
+export DUCKDB_TEST_CONFIG="${DUCKDB_TEST_CONFIG:-$PWD/test/configs/no_skipped_errors.json}"
+
 # Start local HTTP server for HTTPS reader tests (unless already set externally)
 HTTP_SERVER_PID=""
 if [ -z "$MIINT_HTTPS_TEST_URL" ]; then
@@ -646,6 +652,58 @@ echo "Running $FD_RELEASE_TEST with RLIMIT_NOFILE<=$FD_RELEASE_LIMIT..."
     fi
     MIINT_LOW_FD_TEST=1 ./build/release/test/unittest "$FD_RELEASE_TEST"
 ) || exit 1
+
+# Every test that needs httpfs: the HTTP-reader tests against the local server, the ENA
+# mock-server tests, and the live ENA and NCBI tests. httpfs is not linked into unittest on
+# this DuckDB version (extension_config.cmake), so `require httpfs` skips all of them in
+# `make test` above. Rerun them with autoloading on and a throwaway HOME, so httpfs installs
+# there rather than into the user's ~/.duckdb. Their require-env guards still decide whether
+# each file runs: a live test runs only when its service answered the probe above.
+#
+# Autoloading runs miint from the copy installed in that HOME, not the linked one: it
+# installs that copy once, from build/release/repository, and reuses it on later runs. Both
+# copies are refreshed from the build so that no run tests stale code. A file whose
+# `require httpfs` or `require miint` cannot load is skipped, not failed, so the skip
+# summary is checked too.
+HTTPFS_TESTS=$(grep -l '^require httpfs' test/sql/*.test | paste -sd, -)
+DUCKDB_VERSION=$(./build/release/duckdb -noheader -list -c "SELECT version()")
+DUCKDB_PLATFORM=$(./build/release/duckdb -noheader -list -c "SELECT platform FROM pragma_platform()")
+HTTPFS_TEST_HOME="$PWD/build/release/httpfs_test_home"
+HTTPFS_EXT_DIR="$HTTPFS_TEST_HOME/.duckdb/extensions/$DUCKDB_VERSION/$DUCKDB_PLATFORM"
+if [ ! -f "$HTTPFS_EXT_DIR/httpfs.duckdb_extension" ]; then
+    mkdir -p "$HTTPFS_TEST_HOME"
+    if ! HOME="$HTTPFS_TEST_HOME" ./build/release/duckdb -c "INSTALL httpfs"; then
+        echo "ERROR: could not install httpfs into $HTTPFS_TEST_HOME; the tests that need it cannot run" >&2
+        exit 1
+    fi
+fi
+cp build/release/extension/miint/miint.duckdb_extension \
+    "build/release/repository/$DUCKDB_VERSION/$DUCKDB_PLATFORM/miint.duckdb_extension"
+if [ -f "$HTTPFS_EXT_DIR/miint.duckdb_extension" ]; then
+    cp build/release/extension/miint/miint.duckdb_extension "$HTTPFS_EXT_DIR/miint.duckdb_extension"
+fi
+HTTPFS_LOG="$PWD/build/release/httpfs_tests.log"
+# A stalled remote transfer would otherwise hang the run instead of failing it.
+HTTPFS_TIMEOUT_SECONDS="${MIINT_HTTPFS_TIMEOUT_SECONDS:-1800}"
+TIMEOUT_CMD=$(command -v timeout || command -v gtimeout || true)
+echo "Running the $(echo "$HTTPFS_TESTS" | tr ',' '\n' | wc -l) test files that need httpfs (log: $HTTPFS_LOG)..."
+HTTPFS_RC=0
+HOME="$HTTPFS_TEST_HOME" DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' \
+    ${TIMEOUT_CMD:+"$TIMEOUT_CMD" --kill-after=60 "$HTTPFS_TIMEOUT_SECONDS"} \
+    ./build/release/test/unittest "$HTTPFS_TESTS" > "$HTTPFS_LOG" 2>&1 || HTTPFS_RC=$?
+tail -n 20 "$HTTPFS_LOG"
+if [ "$HTTPFS_RC" -eq 124 ] || [ "$HTTPFS_RC" -eq 137 ]; then
+    echo "ERROR: tests that need httpfs did not finish within ${HTTPFS_TIMEOUT_SECONDS}s; see $HTTPFS_LOG" >&2
+    exit 1
+fi
+if [ "$HTTPFS_RC" -ne 0 ]; then
+    echo "ERROR: tests that need httpfs failed; see $HTTPFS_LOG" >&2
+    exit 1
+fi
+if grep -qE '^No tests ran|^require (httpfs|miint):' "$HTTPFS_LOG"; then
+    echo "ERROR: httpfs or miint did not load, so the tests that need httpfs were skipped; see $HTTPFS_LOG" >&2
+    exit 1
+fi
 
 # Run shell script tests
 echo "Running shell script tests..."
