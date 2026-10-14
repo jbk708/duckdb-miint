@@ -22,7 +22,8 @@ Behavior:
     one row per alias starting with the literal prefix "EXISTS_". All other
     aliases are reported as not present. An "INCOMPLETE_" alias makes the
     search answer with the Portal API's in-band failure line instead;
-    "INCOMPLETE_ONCE_" does so only on the first request for that query.
+    "INCOMPLETE_ONCE_" does so only on the first request for that query, for
+    the life of the mock process, so a test needs a fresh alias on every run.
   - On GET to /browser/api/xml/<accession> (Phase 8 checklist registry):
       * "TST000001" -> strict fixture (mandatory + units + CV) for the
         Phase 8 Step 8b validation tests.

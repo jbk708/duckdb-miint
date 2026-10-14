@@ -69,7 +69,7 @@ Query metadata from the EBI European Nucleotide Archive (ENA) Portal API. Return
 - Accession type is auto-detected from prefix and mapped to the appropriate query parameter
 - Cross-type resolution: e.g., a run accession with `result='study'` first resolves to the study accession, then queries the study
 - Rate-limited to ~3 requests/second with retry on 429/500/502/503/504
-- The Portal API sometimes answers HTTP 200 with the line `ERROR occurred. Not all results may have been written.` in place of rows. That answer is retried the same way; if every attempt gets it, the query fails instead of returning a partial result
+- The Portal API sometimes answers HTTP 200 with the line `ERROR occurred. Not all results may have been written.` in place of rows. That answer is retried the same way; if the last retry gets it too, the query fails instead of returning a partial result
 
 **Examples:**
 ```sql

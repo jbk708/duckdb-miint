@@ -94,15 +94,15 @@ public:
 	}
 
 	// The Portal API streams its TSV, so a search that fails after the HTTP 200
-	// has gone out cannot change the status. ENA instead writes a line starting
-	// with INCOMPLETE_RESULT_MARKER where the next row would go. Read as rows,
-	// that is a short result that looks complete, or no result at all. True when
-	// a line of `body` starts with the marker; inside a field it is data. Inline
-	// for the same reason as IsRetryableStatus.
+	// has gone out cannot change the status. ENA instead writes
+	// INCOMPLETE_RESULT_MARKER where the next row would go. Read as rows, that is
+	// a short result that looks complete, or no result at all. Matched anywhere in
+	// the body, not only at a line start, so a row cut off mid-field is caught
+	// too; the sentence is not plausible data. Inline for the same reason as
+	// IsRetryableStatus.
 	static constexpr const char *INCOMPLETE_RESULT_MARKER = "ERROR occurred. Not all results may have been written.";
 	static inline bool IsIncompleteResult(const std::string &body) {
-		const std::string marker = INCOMPLETE_RESULT_MARKER;
-		return body.compare(0, marker.size(), marker) == 0 || body.find("\n" + marker) != std::string::npos;
+		return body.find(INCOMPLETE_RESULT_MARKER) != std::string::npos;
 	}
 
 	explicit ENAClient(duckdb::DatabaseInstance &db);

@@ -8,8 +8,8 @@ require-env ENA_WEBIN_MOCK_URL
 
 require-env MIINT_ENA_PORTAL_URL_BASE
 
-# httpfs implements POST in DuckDB; the built-in HTTP client is GET-only.
-require httpfs
+# No `require httpfs`, unlike the other mock tests: every statement here stops
+# at the alias check, a GET the built-in HTTP client serves, before any POST.
 
 # The Portal API sometimes answers a search with HTTP 200, the header row, and
 # an error line where the rows should be. Every ENA GET goes through one retry
@@ -44,11 +44,11 @@ statement error
 INSERT INTO ena.projects (alias, title, project_type)
 VALUES ('INCOMPLETE_always', 'never answered', 'METAGENOMIC');
 ----
-incomplete result
+the last answer was incomplete
 
 query I
 SELECT count(*) FROM ena.submission_log
-WHERE request_payload LIKE '%INCOMPLETE_%';
+WHERE contains(request_payload, 'INCOMPLETE_');
 ----
 0
 
