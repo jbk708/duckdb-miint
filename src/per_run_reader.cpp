@@ -45,11 +45,26 @@ void PerRunReader::Open() {
 	} else {
 #if MIINT_ASPERA_SUPPORTED
 		if (use_aspera_) {
-			if (verify_md5_) {
-				WarnMd5Skipped("Aspera downloads do not go through the md5-verification tap; use "
-				               "download_method='http' to verify");
+			auto failure = OpenAspera();
+			if (failure.empty()) {
+				if (verify_md5_) {
+					WarnMd5Skipped("Aspera downloads do not go through the md5-verification tap; use "
+					               "download_method='http' to verify");
+				}
+			} else if (aspera_config_ && aspera_config_->fall_back_to_http) {
+				auto msg = "read_ena_sequences: WARNING: " + failure + "; falling back to HTTP";
+				if (log_context_) {
+					miint::EmitWarning(*log_context_, msg);
+				} else {
+					duckdb::Printer::Print(msg);
+				}
+				aspera_process_.reset();
+				aspera_process_paired_.reset();
+				use_aspera_ = false;
+				OpenHTTP();
+			} else {
+				throw duckdb::IOException("read_ena_sequences: %s", failure);
 			}
-			OpenAspera();
 		} else {
 			OpenHTTP();
 		}
@@ -312,7 +327,23 @@ void PerRunReader::OpenSFF() {
 
 #if MIINT_ASPERA_SUPPORTED
 
-void PerRunReader::OpenAspera() {
+// An ascp that cannot start a transfer (a rejected key, an unreachable host)
+// closes its stdout and exits non-zero before sending a byte. Returns that
+// failure as a message, or "" once data is flowing or ascp exited cleanly.
+static std::string AsperaStartFailure(AsperaProcess &proc, const std::string &run_accession) {
+	if (proc.AwaitData()) {
+		return "";
+	}
+	int exit_code = proc.WaitForExit();
+	if (exit_code == 0) {
+		return "";
+	}
+	auto detail = proc.StderrText();
+	return duckdb::StringUtil::Format("ascp exited with code %d before sending any data for run '%s'%s", exit_code,
+	                                  run_accession, detail.empty() ? std::string() : ": " + detail);
+}
+
+std::string PerRunReader::OpenAspera() {
 	if (run_.aspera_paths.empty()) {
 		throw duckdb::IOException("read_ena_sequences: no Aspera paths available for run '%s'", run_.run_accession);
 	}
@@ -327,6 +358,10 @@ void PerRunReader::OpenAspera() {
 			aspera_process_ =
 			    std::make_unique<AsperaProcess>(config, std::vector<std::string> {run_.aspera_paths[0].remote_path});
 		}
+		auto failure = AsperaStartFailure(*aspera_process_, run_.run_accession);
+		if (!failure.empty()) {
+			return failure;
+		}
 		std::string filename;
 		size_t file_size;
 		if (!aspera_process_->NextFile(filename, file_size)) {
@@ -340,7 +375,7 @@ void PerRunReader::OpenAspera() {
 		AsperaSeqStreamHandle s1(CreateAsperaSeqStream(aspera_process_.get(), is_gz), aspera_seq_close);
 		fastx_reader_ =
 		    std::make_unique<SequenceReader>(std::move(s1), AsperaSeqStreamHandle(nullptr, aspera_seq_close), true);
-		return;
+		return "";
 	}
 
 	// Paired-end: two ascp processes, one per remote path, each in stdio://
@@ -357,6 +392,13 @@ void PerRunReader::OpenAspera() {
 		    std::make_unique<AsperaProcess>(config, std::vector<std::string> {run_.aspera_paths[0].remote_path});
 		aspera_process_paired_ =
 		    std::make_unique<AsperaProcess>(config, std::vector<std::string> {run_.aspera_paths[1].remote_path});
+	}
+
+	for (auto *proc : {aspera_process_.get(), aspera_process_paired_.get()}) {
+		auto failure = AsperaStartFailure(*proc, run_.run_accession);
+		if (!failure.empty()) {
+			return failure;
+		}
 	}
 
 	std::string f1;
@@ -380,6 +422,7 @@ void PerRunReader::OpenAspera() {
 	AsperaSeqStreamHandle s1(CreateAsperaSeqStream(aspera_process_.get(), is_gz1), aspera_seq_close);
 	AsperaSeqStreamHandle s2(CreateAsperaSeqStream(aspera_process_paired_.get(), is_gz2), aspera_seq_close);
 	fastx_reader_ = std::make_unique<SequenceReader>(std::move(s1), std::move(s2), true);
+	return "";
 }
 
 #endif // MIINT_ASPERA_SUPPORTED

@@ -166,16 +166,17 @@ TEST_CASE("ENARunInfoExtractor degrades to empty fastq_md5 on a count mismatch r
 	CHECK(runs[0].fastq_md5.empty());
 }
 
-TEST_CASE("ShouldSkipRunIntegrityFailure skips a corrupt run only when siblings exist", "[ena_md5]") {
-	// A run's md5 mismatch (or bad ascp exit) at completion must not abort a
-	// multi-run scan and discard every sibling already downloaded -- the
+TEST_CASE("ShouldSkipFailedRun skips a failed run only when siblings exist", "[ena_md5]") {
+	// A run that fails to open (after its retry), or fails its md5 or ascp exit
+	// check at completion, must not abort a multi-run scan and discard every
+	// sibling already downloaded -- the
 	// varchar[] / project-accession case that would otherwise make bulk fetches
 	// unusable. A single-run scan keeps the hard throw: no sibling to protect,
 	// and a downstream that resolves a scalar accession one run per call (the
 	// Qiita ENA ingest job) relies on that error to fail the run.
-	CHECK_FALSE(miint::ShouldSkipRunIntegrityFailure(1)); // scalar / single run -> throw
-	CHECK(miint::ShouldSkipRunIntegrityFailure(2));       // varchar[] siblings -> skip the bad one
-	CHECK(miint::ShouldSkipRunIntegrityFailure(100));     // project expansion -> skip the bad one
+	CHECK_FALSE(miint::ShouldSkipFailedRun(1)); // scalar / single run -> throw
+	CHECK(miint::ShouldSkipFailedRun(2));       // varchar[] siblings -> skip the bad one
+	CHECK(miint::ShouldSkipFailedRun(100));     // project expansion -> skip the bad one
 }
 
 TEST_CASE("BuildMd5MismatchMessage names the label and attributes each digest", "[ena_md5]") {

@@ -197,6 +197,7 @@ Stream FASTA/FASTQ sequence data from EBI/ENA with run, sample, and experiment a
 - `qual_offset` (BIGINT, optional, default 33): Quality score offset (33 for Phred+33/Sanger, 64 for Phred+64/Illumina 1.3+)
 - `max_sequences` (BIGINT, optional, default 0): If `> 0`, stop emitting from each run after this many sequences. `0` (or NULL / absent) means unlimited. For paired-end runs the cap counts **pairs** (one output row per pair), not underlying FASTQ records — `max_sequences => N` yields at most N rows and corresponds to 2N downloaded reads. When downloading via Aspera the cap tears down the `ascp` transfer early, saving real bandwidth. For SFF runs the cap applies but the full file is downloaded before any record is parsed; a loud warning is printed in that case.
 - `trim_sff` (BOOLEAN, optional, default true): For SFF runs, apply the quality and adapter clip positions from the SFF header to trim sequences and quality scores. Ignored for FASTQ runs. Named `trim_sff` rather than `trim` because `TRIM` is a SQL function keyword and this function is dual-path (supports both scalar and lateral invocation), which together prevent DuckDB's binder from accepting `trim=...`.
+- `download_method` (VARCHAR, optional, default `'auto'`): `'http'`, `'aspera'` or `'auto'`. `'auto'` uses Aspera when `ascp` is on `PATH`, an Aspera key is found or downloaded, and every FASTQ run has Aspera paths; otherwise HTTP. When `ascp` exits before sending any data (a rejected key, an unreachable host), `'auto'` reads that run over HTTP with a warning and `'aspera'` raises the error with `ascp`'s message. Lateral calls always use HTTP.
 - `verify_md5` (BOOLEAN, optional, default **true**): Verify each downloaded FASTQ file's bytes against ENA's reported `fastq_md5` once the file has been read to completion, raising a hard error (`IOException`) on mismatch. On by default — it's cheap (the digest is computed incrementally over bytes already in flight) and catches silent truncation/corruption that byte- or row-count checks miss. Verification is automatically skipped (with a loud warning, never silently) when it doesn't apply:
   - ENA reported no `fastq_md5` for a given file.
   - The file is not gzip-compressed (verification hashes the raw pre-decompression bytes, matching the basis of ENA's reported digest; a non-gzip file has no such basis here).
@@ -252,7 +253,9 @@ FROM read_ena_sequences('ERR1074767', include_filepath => true) LIMIT 5;
 - For large projects, the FASTQ download can take significant time and bandwidth
 - The `run_accession` column enables easy JOIN back to metadata from `read_ena`
 - Quality scores are converted to numeric values using the specified offset (default Phred+33)
-- **Failure handling**: on a transient open failure, the run is retried once. On
+- **Failure handling**: on a transient open failure, the run is retried once.
+  If the retry also fails, a single-run literal scan raises the error; a scan
+  of several runs skips the run with a loud warning and continues. On
   a mid-stream failure (connection dropped after some rows have been emitted),
   the run is NOT retried — re-reading from scratch would emit the same reads
   again with duplicate `sequence_index` values downstream. Instead, the run is
@@ -277,7 +280,7 @@ FROM read_ena_sequences('ERR1074767', include_filepath => true) LIMIT 5;
   mismatch.
 
   Who receives the raised exception depends on
-  `ShouldSkipRunIntegrityFailure`: a **single-run** literal
+  `ShouldSkipFailedRun`: a **single-run** literal
   scan (`Execute`) raises the mismatch directly to the caller. A
   **multi-run** literal scan (a `varchar[]` of accessions, or a project
   accession that expands to many runs) and **any lateral** invocation

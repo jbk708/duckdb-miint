@@ -259,6 +259,7 @@ unique_ptr<FunctionData> ReadENASequencesTableFunction::Bind(ClientContext &cont
 					if (!key_path.empty()) {
 						data->use_aspera = true;
 						data->aspera_config = miint::AsperaUtils::BuildConfig(ascp_path, key_path);
+						data->aspera_config.fall_back_to_http = download_method == "auto";
 					}
 				}
 			}
@@ -398,9 +399,14 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 					global_state.readers[local_state.current_run_idx] = make_reader(local_state.current_run_idx);
 					global_state.readers[local_state.current_run_idx]->Open();
 				} catch (const std::exception &e2) {
+					global_state.readers[local_state.current_run_idx].reset();
+					// No sibling to protect in a single-run scan: raise rather than
+					// return 0 rows for it.
+					if (!miint::ShouldSkipFailedRun(global_state.total_runs)) {
+						throw;
+					}
 					miint::EmitWarning(context, "read_ena_sequences: warning: run '%s' failed on retry (%s), skipping",
 					                   run.run_accession, e2.what());
-					global_state.readers[local_state.current_run_idx].reset();
 					{
 						lock_guard<mutex> skip_guard(global_state.skipped_lock);
 						global_state.skipped_runs.push_back(run.run_accession);
@@ -472,7 +478,7 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 				// open-failure and mid-stream branches, and let the rest land.
 				// The skipped run's rows were already emitted by true EOF; the
 				// warning + skipped_runs summary flag them as unverified.
-				if (!miint::ShouldSkipRunIntegrityFailure(global_state.total_runs)) {
+				if (!miint::ShouldSkipFailedRun(global_state.total_runs)) {
 					throw;
 				}
 				auto &run = global_state.runs[current_run_idx];

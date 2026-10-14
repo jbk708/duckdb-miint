@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+# Stands in for ascp when the server rejects the key: ascp then prompts for a
+# password, reads it from stdin, and exits 1 when none comes. The pipe opened
+# first takes the lowest free descriptor, as ascp's connection does, so a
+# parent that closed stdin hands it fd 0 and the prompt waits on a pipe that
+# nothing writes. Like ascp, it also writes its session status to stdout, which
+# is the data stream under stdio://, unless -q is given.
+import os
+import sys
+
+os.pipe()
+sys.stderr.write("Password: ")
+sys.stderr.flush()
+os.read(0, 1)
+sys.stderr.write("ascp: failed to authenticate, exiting.\n")
+if "-q" not in sys.argv[1:]:
+    sys.stdout.write("\r\nSession Stop  (Error: failed to authenticate)\n")
+sys.exit(1)

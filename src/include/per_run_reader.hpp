@@ -131,7 +131,9 @@ private:
 	// returns non-null.
 	std::shared_ptr<miint::StreamMd5> MakeMd5Tap(size_t file_idx, std::shared_ptr<miint::StreamMd5> *slot);
 #if MIINT_ASPERA_SUPPORTED
-	void OpenAspera();
+	// Returns a non-empty message, and opens nothing, when ascp exits before
+	// sending any data; throws on every other failure.
+	std::string OpenAspera();
 #endif
 };
 

@@ -5,11 +5,11 @@
 
 namespace miint {
 
-// Policy and message formatting for a run's integrity failure detected at
-// completion (PerRunReader::Finish()): an md5 digest mismatch at true EOF, or
-// a bad ascp exit code.
+// Policy and message formatting for a run that fails: at open, after its one
+// retry, or at completion (PerRunReader::Finish()), with an md5 digest mismatch
+// at true EOF or a bad ascp exit code.
 //
-// ShouldSkipRunIntegrityFailure returns true if the run should be
+// ShouldSkipFailedRun returns true if the run should be
 // skipped-with-warning (recorded in skipped_runs, surfaced via
 // miint_warnings()) rather than thrown, which would abort the whole scan.
 //
@@ -22,7 +22,7 @@ namespace miint {
 // the bad run and lets the rest land. (By true EOF the skipped run's rows were
 // already emitted downstream; the warning flags them as unverified, the same
 // contract as the mid-stream-truncation skip.)
-inline bool ShouldSkipRunIntegrityFailure(size_t total_runs) {
+inline bool ShouldSkipFailedRun(size_t total_runs) {
 	return total_runs > 1;
 }
 
