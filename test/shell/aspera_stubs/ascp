@@ -5,8 +5,13 @@
 # parent that closed stdin hands it fd 0 and the prompt waits on a pipe that
 # nothing writes. Like ascp, it also writes its session status to stdout, which
 # is the data stream under stdio://, unless -q is given.
+#
+# MIINT_ASCP_STUB_MODE=empty instead exits 0 without writing anything.
 import os
 import sys
+
+if os.environ.get("MIINT_ASCP_STUB_MODE") == "empty":
+    sys.exit(0)
 
 os.pipe()
 sys.stderr.write("Password: ")

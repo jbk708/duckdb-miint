@@ -98,6 +98,9 @@ public:
 
 #if MIINT_ASPERA_SUPPORTED
 		miint::AsperaConfig aspera_config;
+		// Set by the first run that cannot start ascp and falls back to HTTP;
+		// the scan's later runs then skip ascp (PerRunReader::Open).
+		std::atomic<bool> aspera_fell_back {false};
 #endif
 
 		// Literal path: cap at 8 worker threads. In deferred (in-out) mode, runs
@@ -145,8 +148,9 @@ public:
 	// Shared column-fill helper used by both Execute (literal path) and
 	// ExecuteInOut (lateral path). Takes the sequence counter by reference so
 	// the caller (which owns the counter) can track progress across batches.
+	// `reader` is the run's open reader; filepath names the transport it used.
 	static void FillOutputFromBatch(DataChunk &output, const miint::SequenceRecordBatch &batch, const Data &bind_data,
-	                                const miint::ENARunInfo &run, uint64_t &seq_counter);
+	                                const miint::PerRunReader &reader, uint64_t &seq_counter);
 	static double Progress(ClientContext &context, const FunctionData *bind_data,
 	                       const GlobalTableFunctionState *global_state);
 	static TableFunction GetFunction();

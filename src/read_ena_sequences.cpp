@@ -316,14 +316,16 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 	// the PerRunReader; the GlobalState holds only the run metadata + counters.
 	auto make_reader = [&](size_t idx) {
 		const miint::AsperaConfig *cfg = nullptr;
+		std::atomic<bool> *fell_back = nullptr;
 #if MIINT_ASPERA_SUPPORTED
 		if (global_state.use_aspera) {
 			cfg = &global_state.aspera_config;
+			fell_back = &global_state.aspera_fell_back;
 		}
 #endif
 		return std::make_unique<miint::PerRunReader>(global_state.fs, global_state.runs[idx], global_state.use_aspera,
 		                                             global_state.trim, bind_data.verify_md5, global_state.open_mutex,
-		                                             cfg, bind_data.max_sequences, &context);
+		                                             cfg, bind_data.max_sequences, &context, fell_back);
 	};
 
 	miint::SequenceRecordBatch batch;
@@ -507,9 +509,8 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 		break;
 	}
 
-	const auto &run = global_state.runs[current_run_idx];
 	auto &seq_counter = global_state.run_sequence_counters[current_run_idx];
-	FillOutputFromBatch(output, batch, bind_data, run, seq_counter);
+	FillOutputFromBatch(output, batch, bind_data, *global_state.readers[current_run_idx], seq_counter);
 }
 
 // ---- FillOutputFromBatch (shared by Execute + ExecuteInOut) ----
@@ -519,8 +520,9 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 // LocalState for in-out runs), so we take it by reference and post-increment
 // one id per row.
 void ReadENASequencesTableFunction::FillOutputFromBatch(DataChunk &output, const miint::SequenceRecordBatch &batch,
-                                                        const Data &bind_data, const miint::ENARunInfo &run,
+                                                        const Data &bind_data, const miint::PerRunReader &reader,
                                                         uint64_t &seq_counter) {
+	const auto &run = reader.Run();
 	idx_t count = batch.size();
 	idx_t field_idx = 0;
 
@@ -572,7 +574,7 @@ void ReadENASequencesTableFunction::FillOutputFromBatch(DataChunk &output, const
 		std::string filepath;
 		if (run.format == miint::ENASequenceFormat::SFF) {
 			filepath = run.sff_url;
-		} else if (bind_data.use_aspera && !run.aspera_paths.empty()) {
+		} else if (reader.UsesAspera() && !run.aspera_paths.empty()) {
 			filepath = run.aspera_paths[0].host + ":" + run.aspera_paths[0].remote_path;
 			for (size_t u = 1; u < run.aspera_paths.size(); u++) {
 				filepath += ";" + run.aspera_paths[u].host + ":" + run.aspera_paths[u].remote_path;
@@ -777,7 +779,7 @@ OperatorResultType ReadENASequencesTableFunction::ExecuteInOut(ExecutionContext 
 	}
 
 	// Phase 4: emit the batch.
-	FillOutputFromBatch(output, batch, bind_data, local.current_reader->Run(), local.lateral_sequence_counter);
+	FillOutputFromBatch(output, batch, bind_data, *local.current_reader, local.lateral_sequence_counter);
 	return OperatorResultType::HAVE_MORE_OUTPUT;
 }
 

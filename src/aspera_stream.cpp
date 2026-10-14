@@ -109,11 +109,11 @@ AsperaProcess::AsperaProcess(const AsperaConfig &config, const std::vector<std::
 		std::string tmpl_str = miint::GetTempDir() + "/miint_ascp_stderr_XXXXXX";
 		std::vector<char> tmpl_buf(tmpl_str.begin(), tmpl_str.end());
 		tmpl_buf.push_back('\0');
-		stderr_fd_ = mkstemp(tmpl_buf.data());
+		// Close-on-exec from creation: only this process's child gets it, through
+		// the dup2 below, not a process another thread forks meanwhile.
+		stderr_fd_ = mkostemp(tmpl_buf.data(), O_CLOEXEC);
 		if (stderr_fd_ != -1) {
 			unlink(tmpl_buf.data());
-			// Only this process's child gets it, through the dup2 below.
-			fcntl(stderr_fd_, F_SETFD, FD_CLOEXEC);
 		}
 	}
 
@@ -135,29 +135,31 @@ AsperaProcess::AsperaProcess(const AsperaConfig &config, const std::vector<std::
 #ifdef __linux__
 		prctl(PR_SET_PDEATHSIG, SIGTERM);
 #endif
-		// Redirect stdout to pipe
-		dup2(stdout_pipe[1], STDOUT_FILENO);
-		close(stdout_pipe[0]);
-		close(stdout_pipe[1]);
-
-		if (stderr_fd_ != -1) {
-			dup2(stderr_fd_, STDERR_FILENO);
-			close(stderr_fd_);
-		}
-
-		// stdin from /dev/null, never closed: a closed fd 0 goes to whatever ascp
+		// stdin is /dev/null, never closed: a closed fd 0 goes to whatever ascp
 		// opens next, and when the server rejects the key, ascp's password prompt
 		// reads that descriptor and waits forever. /dev/null makes the prompt see
 		// end of input, so ascp exits.
-		int devnull = open("/dev/null", O_RDWR);
-		if (devnull == -1) {
+		//
+		// This process may itself run with fd 0, 1 or 2 closed, which puts a pipe
+		// end, the stderr file or /dev/null on one of them. So each source is
+		// first copied above fd 2, close-on-exec: no dup2 below then overwrites a
+		// source a later one needs, and nothing closes a standard descriptor.
+		int devnull = open("/dev/null", O_RDWR | O_CLOEXEC);
+		int in_fd = devnull == -1 ? -1 : fcntl(devnull, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+		int out_fd = fcntl(stdout_pipe[1], F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+		int err_src = stderr_fd_ != -1 ? stderr_fd_ : devnull;
+		int err_fd = err_src == -1 ? -1 : fcntl(err_src, F_DUPFD_CLOEXEC, STDERR_FILENO + 1);
+		if (in_fd == -1 || out_fd == -1 || err_fd == -1) {
 			_exit(127);
 		}
-		dup2(devnull, STDIN_FILENO);
-		if (stderr_fd_ == -1) {
-			dup2(devnull, STDERR_FILENO);
+		for (int fd : {stdout_pipe[0], stdout_pipe[1]}) {
+			if (fd > STDERR_FILENO) {
+				close(fd);
+			}
 		}
-		close(devnull);
+		if (dup2(in_fd, STDIN_FILENO) == -1 || dup2(out_fd, STDOUT_FILENO) == -1 || dup2(err_fd, STDERR_FILENO) == -1) {
+			_exit(127);
+		}
 
 		execv(config.ascp_path.c_str(), args.data());
 		_exit(127);
@@ -200,16 +202,20 @@ AsperaProcess::~AsperaProcess() {
 	}
 }
 
-bool AsperaProcess::ReadByte(char &c) {
-	if (has_peek_) {
-		c = peek_byte_;
+ssize_t AsperaProcess::ReadRaw(void *dst, size_t n) {
+	if (has_peek_ && n > 0) {
+		static_cast<char *>(dst)[0] = peek_byte_;
 		has_peek_ = false;
-		return true;
+		return 1;
 	}
+	return read(pipe_fd_, dst, n);
+}
+
+bool AsperaProcess::ReadByte(char &c) {
 	if (pipe_eof_) {
 		return false;
 	}
-	ssize_t n = read(pipe_fd_, &c, 1);
+	ssize_t n = ReadRaw(&c, 1);
 	if (n <= 0) {
 		pipe_eof_ = true;
 		return false;
@@ -220,13 +226,8 @@ bool AsperaProcess::ReadByte(char &c) {
 bool AsperaProcess::ReadExact(void *dst, size_t n) {
 	auto *buf = static_cast<char *>(dst);
 	size_t total = 0;
-	if (n > 0 && has_peek_) {
-		buf[0] = peek_byte_;
-		has_peek_ = false;
-		total = 1;
-	}
 	while (total < n) {
-		ssize_t r = read(pipe_fd_, buf + total, n - total);
+		ssize_t r = ReadRaw(buf + total, n - total);
 		if (r <= 0) {
 			pipe_eof_ = true;
 			return false;
@@ -332,14 +333,6 @@ int AsperaProcess::ReadBounded(void *dst, size_t len) {
 	if (remaining_ == 0) {
 		return 0;
 	}
-	if (has_peek_ && len > 0) {
-		static_cast<char *>(dst)[0] = peek_byte_;
-		has_peek_ = false;
-		if (tar_mode_ && remaining_ != SIZE_MAX) {
-			remaining_--;
-		}
-		return 1;
-	}
 	if (pipe_eof_) {
 		return 0;
 	}
@@ -349,7 +342,7 @@ int AsperaProcess::ReadBounded(void *dst, size_t len) {
 		to_read = std::min(len, remaining_);
 	}
 
-	ssize_t n = read(pipe_fd_, dst, to_read);
+	ssize_t n = ReadRaw(dst, to_read);
 	if (n <= 0) {
 		pipe_eof_ = true;
 		return (n == 0) ? 0 : -1;

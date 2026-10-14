@@ -69,6 +69,10 @@ private:
 	bool has_peek_;              // AwaitData() read peek_byte_ and no read has returned it yet
 	char peek_byte_;
 
+	// One read(2) of up to n bytes from the pipe, returning AwaitData's byte
+	// first. Every read of the data goes through here, so none can skip it.
+	ssize_t ReadRaw(void *dst, size_t n);
+
 	// Read exactly n bytes from pipe. Returns false on EOF/error before n bytes.
 	bool ReadExact(void *dst, size_t n);
 

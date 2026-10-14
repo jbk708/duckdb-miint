@@ -16,9 +16,10 @@ namespace miint {
 
 PerRunReader::PerRunReader(duckdb::FileSystem &fs, ENARunInfo run, bool use_aspera, bool trim, bool verify_md5,
                            std::mutex &open_mutex, const AsperaConfig *aspera_config, uint64_t max_sequences,
-                           duckdb::ClientContext *log_context)
+                           duckdb::ClientContext *log_context, std::atomic<bool> *aspera_fell_back)
     : fs_(fs), run_(std::move(run)), use_aspera_(use_aspera), trim_(trim), verify_md5_(verify_md5),
-      open_mutex_(open_mutex), aspera_config_(aspera_config), max_sequences_(max_sequences), log_context_(log_context) {
+      open_mutex_(open_mutex), aspera_config_(aspera_config), max_sequences_(max_sequences), log_context_(log_context),
+      aspera_fell_back_(aspera_fell_back) {
 }
 
 PerRunReader::~PerRunReader() {
@@ -44,6 +45,9 @@ void PerRunReader::Open() {
 		OpenSFF();
 	} else {
 #if MIINT_ASPERA_SUPPORTED
+		if (use_aspera_ && aspera_fell_back_ && aspera_fell_back_->load()) {
+			use_aspera_ = false; // an earlier run of this scan already fell back
+		}
 		if (use_aspera_) {
 			auto failure = OpenAspera();
 			if (failure.empty()) {
@@ -52,11 +56,9 @@ void PerRunReader::Open() {
 					               "download_method='http' to verify");
 				}
 			} else if (aspera_config_ && aspera_config_->fall_back_to_http) {
-				auto msg = "read_ena_sequences: WARNING: " + failure + "; falling back to HTTP";
-				if (log_context_) {
-					miint::EmitWarning(*log_context_, msg);
-				} else {
-					duckdb::Printer::Print(msg);
+				Warn("read_ena_sequences: WARNING: " + failure + "; falling back to HTTP for the rest of this scan");
+				if (aspera_fell_back_) {
+					aspera_fell_back_->store(true);
 				}
 				aspera_process_.reset();
 				aspera_process_paired_.reset();
@@ -75,14 +77,17 @@ void PerRunReader::Open() {
 	opened_ = true;
 }
 
-void PerRunReader::WarnMd5Skipped(const std::string &reason) {
-	auto msg = duckdb::StringUtil::Format("read_ena_sequences: WARNING: md5 verification skipped for run '%s' — %s",
-	                                      run_.run_accession, reason);
+void PerRunReader::Warn(const std::string &msg) {
 	if (log_context_) {
 		miint::EmitWarning(*log_context_, msg);
 	} else {
 		duckdb::Printer::Print(msg);
 	}
+}
+
+void PerRunReader::WarnMd5Skipped(const std::string &reason) {
+	Warn(duckdb::StringUtil::Format("read_ena_sequences: WARNING: md5 verification skipped for run '%s' — %s",
+	                                run_.run_accession, reason));
 }
 
 SequenceRecordBatch PerRunReader::ReadBatch(size_t max_size) {
@@ -161,11 +166,7 @@ void PerRunReader::Finish() {
 	// When both processes errored we surface R1 via the thrown exception;
 	// log R2's message first so the user doesn't lose half the story.
 	if (!err_r1.empty() && !err_r2.empty()) {
-		if (log_context_) {
-			miint::EmitWarning(*log_context_, err_r2);
-		} else {
-			duckdb::Printer::Print(err_r2);
-		}
+		Warn(err_r2);
 	}
 	if (!err_r1.empty()) {
 		throw duckdb::IOException(err_r1);
@@ -256,11 +257,7 @@ void PerRunReader::OpenSFF() {
 		                               "downloading the full file before any record can be parsed; the row cap applies "
 		                               "but bandwidth savings do not",
 		                               static_cast<unsigned long long>(max_sequences_), run_.run_accession);
-		if (log_context_) {
-			miint::EmitWarning(*log_context_, msg);
-		} else {
-			duckdb::Printer::Print(msg);
-		}
+		Warn(msg);
 	}
 
 	auto temp_dir = GetTempDir();
@@ -329,15 +326,13 @@ void PerRunReader::OpenSFF() {
 
 // An ascp that cannot start a transfer (a rejected key, an unreachable host)
 // closes its stdout and exits non-zero before sending a byte. Returns that
-// failure as a message, or "" once data is flowing or ascp exited cleanly.
+// failure as a message, or "" once data is flowing. Exiting 0 without a byte
+// is a failure too: an ENA FASTQ file is gzip, never empty.
 static std::string AsperaStartFailure(AsperaProcess &proc, const std::string &run_accession) {
 	if (proc.AwaitData()) {
 		return "";
 	}
 	int exit_code = proc.WaitForExit();
-	if (exit_code == 0) {
-		return "";
-	}
 	auto detail = proc.StderrText();
 	return duckdb::StringUtil::Format("ascp exited with code %d before sending any data for run '%s'%s", exit_code,
 	                                  run_accession, detail.empty() ? std::string() : ": " + detail);
