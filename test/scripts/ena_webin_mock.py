@@ -459,8 +459,8 @@ class Handler(BaseHTTPRequestHandler):
                 aliases.append(rhs[1:-1])
         # Only aliases that start with the literal prefix "EXISTS_" are
         # treated as already-present in the submission account. SQL tests
-        # use this convention to drive the collision path without a stateful
-        # mock. (Production users won't see this behaviour because the real
+        # use this convention to drive the collision path; it needs no mock
+        # state. (Production users won't see this behaviour because the real
         # ENA portal API replies with their actual submission history.)
         present = [a for a in aliases if a.startswith("EXISTS_")]
         lines = [fields] + present

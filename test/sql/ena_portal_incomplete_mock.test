@@ -39,16 +39,18 @@ INSERT INTO ena.projects (alias, title, project_type) VALUES
 ----
 alias already exists in submission account: 'EXISTS_behind_incomplete'
 
-# Every answer incomplete: the error says so, and nothing is submitted.
+# Every answer incomplete: the error says so, after as many attempts as a 5xx
+# gets.
 statement error
 INSERT INTO ena.projects (alias, title, project_type)
 VALUES ('INCOMPLETE_always', 'never answered', 'METAGENOMIC');
 ----
-the last answer was incomplete
+failed after 4 attempts: the last response was incomplete
 
+# Neither INSERT got as far as a submission. Not filtered on the payload: a
+# POST that fails logs a row with an empty request_payload.
 query I
-SELECT count(*) FROM ena.submission_log
-WHERE contains(request_payload, 'INCOMPLETE_');
+SELECT count(*) FROM ena.submission_log WHERE object_type = 'projects';
 ----
 0
 

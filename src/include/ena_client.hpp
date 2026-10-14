@@ -93,13 +93,13 @@ public:
 		return status == 429 || status == 500 || status == 502 || status == 503 || status == 504;
 	}
 
-	// The Portal API streams its TSV, so a search that fails after the HTTP 200
-	// has gone out cannot change the status. ENA instead writes
-	// INCOMPLETE_RESULT_MARKER where the next row would go. Read as rows, that is
-	// a short result that looks complete, or no result at all. Matched anywhere in
-	// the body, not only at a line start, so a row cut off mid-field is caught
-	// too; the sentence is not plausible data. Inline for the same reason as
-	// IsRetryableStatus.
+	// The Portal API sometimes answers a search with HTTP 200, the header row, and
+	// then INCOMPLETE_RESULT_MARKER in place of the rows: 3 of 150 identical
+	// requests on 2026-10-14, the other 147 returning the rows. Read as rows, that
+	// is no result at all, or, as the wording allows, a short result that looks
+	// complete. Matched anywhere in the body, not only at a line start, so a row
+	// cut off mid-field is caught too; the sentence is not plausible data. Inline
+	// for the same reason as IsRetryableStatus.
 	static constexpr const char *INCOMPLETE_RESULT_MARKER = "ERROR occurred. Not all results may have been written.";
 	static inline bool IsIncompleteResult(const std::string &body) {
 		return body.find(INCOMPLETE_RESULT_MARKER) != std::string::npos;
