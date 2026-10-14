@@ -8,6 +8,7 @@
 # - download_method => 'auto' (the default) falls back to HTTP with a warning,
 #   once per scan: later runs go straight to HTTP.
 # - an ascp that exits 0 without sending anything is a failure too.
+# - a scan of several runs that all fail raises instead of returning no rows.
 #
 # None may hang: a stub that inherits a closed stdin blocks on its prompt, so
 # every query runs under a hard timeout. Needs live ENA for run resolution.
@@ -97,6 +98,14 @@ run_query "SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', download_method
 ok=0
 if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] && echo "$OUT" | grep -q "exited with code 0 before sending any data"; then ok=1; fi
 check "error says no data came" "$ok"
+
+# Each run is skipped after its retry, which leaves nothing: an error, not 0 rows.
+echo "Running: download_method => 'aspera' over two runs that both fail"
+run_query "SELECT COUNT(*) FROM read_ena_sequences(['ERR1074767', 'ERR10360000'], download_method => 'aspera', max_sequences => 10);"
+ok=0
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] && echo "$OUT" | grep -q "every run failed" &&
+    echo "$OUT" | grep -q "failed to authenticate"; then ok=1; fi
+check "error says every run failed, with ascp's message" "$ok"
 
 if [ "$FAILED" -ne 0 ]; then
     exit 1

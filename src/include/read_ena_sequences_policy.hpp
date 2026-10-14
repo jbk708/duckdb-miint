@@ -21,7 +21,9 @@ namespace miint {
 // abort the query and throw away every sibling already downloaded, so it skips
 // the bad run and lets the rest land. (By true EOF the skipped run's rows were
 // already emitted downstream; the warning flags them as unverified, the same
-// contract as the mid-stream-truncation skip.)
+// contract as the mid-stream-truncation skip.) When every run of a literal scan
+// is skipped, there is no sibling left to protect, and Execute raises at the
+// end of the scan instead.
 inline bool ShouldSkipFailedRun(size_t total_runs) {
 	return total_runs > 1;
 }

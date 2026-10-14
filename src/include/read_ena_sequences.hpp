@@ -94,6 +94,7 @@ public:
 		// Skipped runs (transient failures after retry)
 		mutex skipped_lock;
 		std::vector<std::string> skipped_runs;
+		std::string first_skip_error; // guarded by skipped_lock
 		std::atomic<bool> skipped_warned;
 
 #if MIINT_ASPERA_SUPPORTED

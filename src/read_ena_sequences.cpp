@@ -328,6 +328,22 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 		                                             cfg, bind_data.max_sequences, &context, fell_back);
 	};
 
+	// Records a failed run as skipped, with the first such error, and completes
+	// it. The release on runs_completed publishes the push_back to the summary
+	// thread's acquire load (see the all_claimed branch).
+	auto skip_run = [&](const miint::ENARunInfo &run, const std::exception &error) {
+		{
+			lock_guard<mutex> skip_guard(global_state.skipped_lock);
+			global_state.skipped_runs.push_back(run.run_accession);
+			if (global_state.first_skip_error.empty()) {
+				global_state.first_skip_error = ErrorData(error).RawMessage();
+			}
+		}
+		global_state.bytes_completed.fetch_add(run.total_bytes, std::memory_order_relaxed);
+		global_state.runs_completed.fetch_add(1, std::memory_order_release);
+		local_state.has_run = false;
+	};
+
 	miint::SequenceRecordBatch batch;
 	size_t current_run_idx = 0;
 
@@ -365,16 +381,30 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 					// before EmitWarning acquires LogManager::lock. Avoids
 					// establishing a skipped_lock → LogManager::lock ordering
 					// that future code could deadlock against.
+					// When every run was skipped there is no sibling left to
+					// protect, so the scan raises rather than return what the
+					// failed runs left: no rows, or a partial run.
 					std::string msg;
+					bool every_run_failed = false;
 					{
 						lock_guard<mutex> skip_guard(global_state.skipped_lock);
-						if (!global_state.skipped_runs.empty()) {
-							msg = "read_ena_sequences: WARNING: " + std::to_string(global_state.skipped_runs.size()) +
-							      " run(s) skipped due to download errors:";
-							for (const auto &acc : global_state.skipped_runs) {
-								msg += " " + acc;
-							}
+						std::string accessions;
+						for (const auto &acc : global_state.skipped_runs) {
+							accessions += " " + acc;
 						}
+						every_run_failed = !global_state.skipped_runs.empty() &&
+						                   global_state.skipped_runs.size() == global_state.total_runs;
+						if (every_run_failed) {
+							msg = "read_ena_sequences: every run failed (" +
+							      std::to_string(global_state.skipped_runs.size()) + "):" + accessions +
+							      "; first error: " + global_state.first_skip_error;
+						} else if (!global_state.skipped_runs.empty()) {
+							msg = "read_ena_sequences: WARNING: " + std::to_string(global_state.skipped_runs.size()) +
+							      " run(s) skipped due to download errors:" + accessions;
+						}
+					}
+					if (every_run_failed) {
+						throw IOException(msg);
 					}
 					if (!msg.empty()) {
 						miint::EmitWarning(context, msg);
@@ -409,15 +439,7 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 					}
 					miint::EmitWarning(context, "read_ena_sequences: warning: run '%s' failed on retry (%s), skipping",
 					                   run.run_accession, e2.what());
-					{
-						lock_guard<mutex> skip_guard(global_state.skipped_lock);
-						global_state.skipped_runs.push_back(run.run_accession);
-					}
-					global_state.bytes_completed.fetch_add(run.total_bytes, std::memory_order_relaxed);
-					// release: publishes skipped_runs.push_back above to the summary
-					// thread's acquire load on runs_completed (see all_claimed branch).
-					global_state.runs_completed.fetch_add(1, std::memory_order_release);
-					local_state.has_run = false;
+					skip_run(run, e2);
 					continue;
 				}
 			}
@@ -450,15 +472,7 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 			                   "(%s); skipping remainder — downstream sees partial data for this run",
 			                   run.run_accession, static_cast<unsigned long long>(emitted), e.what());
 			global_state.readers[current_run_idx].reset();
-			{
-				lock_guard<mutex> skip_guard(global_state.skipped_lock);
-				global_state.skipped_runs.push_back(run.run_accession);
-			}
-			global_state.bytes_completed.fetch_add(run.total_bytes, std::memory_order_relaxed);
-			// release: publishes skipped_runs.push_back above to the summary
-			// thread's acquire load on runs_completed (see all_claimed branch).
-			global_state.runs_completed.fetch_add(1, std::memory_order_release);
-			local_state.has_run = false;
+			skip_run(run, e);
 			continue;
 		}
 
@@ -488,15 +502,7 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 				                   "read_ena_sequences: WARNING: run '%s' failed integrity verification at "
 				                   "completion (%s); skipping — its already-emitted rows are unverified",
 				                   run.run_accession, e.what());
-				{
-					lock_guard<mutex> skip_guard(global_state.skipped_lock);
-					global_state.skipped_runs.push_back(run.run_accession);
-				}
-				global_state.bytes_completed.fetch_add(run.total_bytes, std::memory_order_relaxed);
-				// release: publishes skipped_runs.push_back above to the summary
-				// thread's acquire load on runs_completed (see all_claimed branch).
-				global_state.runs_completed.fetch_add(1, std::memory_order_release);
-				local_state.has_run = false;
+				skip_run(run, e);
 				continue;
 			}
 			global_state.readers[current_run_idx].reset();
