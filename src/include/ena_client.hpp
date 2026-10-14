@@ -77,7 +77,8 @@ inline std::string BuildBasicAuthHeader(const std::string &user, const std::stri
 // For parsing utilities, use ENAParser directly (ena_parser.hpp).
 //
 // Rate Limiting: ~3 requests/second (no API key required)
-// Retry: HTTP 429, 500, 502, 503 with exponential backoff
+// Retry: HTTP 429, 500, 502, 503, 504 with exponential backoff; GETs also retry
+// an HTTP 200 that IsIncompleteResult flags
 class ENAClient {
 public:
 	static constexpr double RATE_LIMIT = 3.0;
@@ -90,6 +91,18 @@ public:
 	// frontend occasionally returns it for slow validation passes.
 	static inline bool IsRetryableStatus(int status) {
 		return status == 429 || status == 500 || status == 502 || status == 503 || status == 504;
+	}
+
+	// The Portal API streams its TSV, so a search that fails after the HTTP 200
+	// has gone out cannot change the status. ENA instead writes a line starting
+	// with INCOMPLETE_RESULT_MARKER where the next row would go. Read as rows,
+	// that is a short result that looks complete, or no result at all. True when
+	// a line of `body` starts with the marker; inside a field it is data. Inline
+	// for the same reason as IsRetryableStatus.
+	static constexpr const char *INCOMPLETE_RESULT_MARKER = "ERROR occurred. Not all results may have been written.";
+	static inline bool IsIncompleteResult(const std::string &body) {
+		const std::string marker = INCOMPLETE_RESULT_MARKER;
+		return body.compare(0, marker.size(), marker) == 0 || body.find("\n" + marker) != std::string::npos;
 	}
 
 	explicit ENAClient(duckdb::DatabaseInstance &db);

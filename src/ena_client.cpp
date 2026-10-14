@@ -43,16 +43,27 @@ std::string ENAClient::ExecuteGet(const std::string &url, duckdb::HTTPHeaders &h
 	for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
 		auto response = http_util.Request(get_request);
 
-		if (response->Success()) {
+		// A Portal API search can fail after its HTTP 200 has gone out; retry
+		// that like a 5xx. Checked on every GET rather than by URL, because tests
+		// point the Portal base at a mock. Another API's body trips it only with a
+		// line that starts with the marker, and then the query fails loudly.
+		const bool incomplete = response->Success() && IsIncompleteResult(response->body);
+		if (response->Success() && !incomplete) {
 			return response->body;
 		}
 
-		if (attempt < MAX_RETRIES && !response->HasRequestError() && IsRetryableStatus(int(response->status))) {
+		const bool retryable = incomplete || (!response->HasRequestError() && IsRetryableStatus(int(response->status)));
+		if (attempt < MAX_RETRIES && retryable) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
 			retry_delay_ms *= 2;
 			continue;
 		}
 
+		if (incomplete) {
+			throw duckdb::IOException("%s returned an incomplete result on all %d attempts: ENA wrote \"%s\" where "
+			                          "the rows belong (URL: %s)",
+			                          failure_label, MAX_RETRIES + 1, INCOMPLETE_RESULT_MARKER, url);
+		}
 		if (response->HasRequestError()) {
 			throw duckdb::IOException("%s failed: %s (URL: %s)", failure_label, response->GetRequestError(), url);
 		}

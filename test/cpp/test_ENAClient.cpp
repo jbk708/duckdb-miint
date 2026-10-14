@@ -1009,3 +1009,24 @@ TEST_CASE("ENAClient IsRetryableStatus: 4xx not retried, 5xx and 429 retried", "
 	CHECK_FALSE(miint::ENAClient::IsRetryableStatus(415));
 	CHECK_FALSE(miint::ENAClient::IsRetryableStatus(505));
 }
+
+TEST_CASE("ENAClient IsIncompleteResult: the Portal API's failure line in an HTTP 200", "[ena_retry]") {
+	// Captured live from the Portal API on 2026-10-14: the TSV header, then this
+	// line where the rows would go, with no trailing newline.
+	const std::string header = "run_accession\tsample_accession\n";
+	const std::string failure = "ERROR occurred. Not all results may have been written.Query: "
+	                            "{\"bool\":{\"must\":[{\"terms\":{\"run_accession\":[\"ERR1074767\"]}}]}}";
+
+	// Read as rows, this is "no such accession".
+	CHECK(miint::ENAClient::IsIncompleteResult(header + failure));
+	// Read as rows, this is a short result that looks complete.
+	CHECK(miint::ENAClient::IsIncompleteResult(header + "ERR1074767\tSAMEA3687211\n" + failure));
+	CHECK(miint::ENAClient::IsIncompleteResult("run_accession\r\nERR1074767\r\n" + failure));
+	CHECK(miint::ENAClient::IsIncompleteResult(failure));
+
+	CHECK_FALSE(miint::ENAClient::IsIncompleteResult(""));
+	CHECK_FALSE(miint::ENAClient::IsIncompleteResult(header));
+	CHECK_FALSE(miint::ENAClient::IsIncompleteResult(header + "ERR1074767\tSAMEA3687211\n"));
+	// Only a line that starts with it is the failure; inside a field it is data.
+	CHECK_FALSE(miint::ENAClient::IsIncompleteResult(header + "ERR1074767\t" + failure + "\n"));
+}
