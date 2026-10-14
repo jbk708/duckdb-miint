@@ -607,11 +607,11 @@ void UploadOneSample(ClientContext &context, const ENAUploadReadsBindData &bind,
 		GzipMd5FileSink *sink1 = sinks.size() > 1 ? sinks[1].get() : nullptr;
 
 		// Stream this sample's rows once and encode straight into the sink(s).
-		// SubmitStream (not a prepared statement) is deliberate: it returns a
-		// streaming result, so Fetch pulls one DataChunk at a time and peak memory
-		// stays bounded. On DuckDB 1.5 a prepared statement's result output_type defaulted to
-		// FORCE_MATERIALIZED — it would buffer the entire sample in RAM, defeating
-		// the whole refactor. Draining to exhaustion closes the stream before the
+		// SubmitStream, not Query: the result streams, so Fetch pulls one DataChunk
+		// at a time instead of holding the whole sample in RAM. Peak memory stays
+		// bounded only while the plan has no blocking operator over the sample's
+		// rows; a relation that sorts (a view with an ORDER BY) buffers the
+		// sample before the first chunk. Draining to exhaustion closes the stream before the
 		// next sample's query. If EncodeChunk throws mid-stream the result is
 		// abandoned un-closed, but the exception aborts the statement: `conn` is
 		// torn down (its dtor runs cleanup) and never reused, so the dangling
