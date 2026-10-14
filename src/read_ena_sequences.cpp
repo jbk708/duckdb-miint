@@ -369,8 +369,8 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 				// on one of those would append to skipped_runs *after* this thread
 				// snapshotted the list — producing a stale summary followed by an
 				// orphan per-run warning. The acquire load pairs with the release
-				// fetch_add on runs_completed in the failure paths below; once we
-				// observe total_runs, all skipped_runs.push_back's are visible.
+				// fetch_add on runs_completed in skip_run above; once we observe
+				// total_runs, all skipped_runs.push_back's are visible.
 				//
 				// Workers that lose this check just return empty; the worker that
 				// posts the final fetch_add will be the one to come back through
@@ -381,27 +381,20 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 					// before EmitWarning acquires LogManager::lock. Avoids
 					// establishing a skipped_lock → LogManager::lock ordering
 					// that future code could deadlock against.
-					//
-					// When every run was skipped there is no sibling left to
-					// protect, so the scan raises rather than return what the
-					// failed runs left: no rows, or a partial run.
 					std::string msg;
 					bool every_run_failed = false;
 					{
 						lock_guard<mutex> skip_guard(global_state.skipped_lock);
-						std::string accessions;
-						for (const auto &acc : global_state.skipped_runs) {
-							accessions += " " + acc;
-						}
-						every_run_failed = !global_state.skipped_runs.empty() &&
-						                   global_state.skipped_runs.size() == global_state.total_runs;
+						const auto &skipped = global_state.skipped_runs;
+						every_run_failed = miint::EveryRunFailed(skipped.size(), global_state.total_runs);
 						if (every_run_failed) {
-							msg = "read_ena_sequences: every run failed (" +
-							      std::to_string(global_state.skipped_runs.size()) + "):" + accessions +
-							      "; first error: " + global_state.first_skip_error;
-						} else if (!global_state.skipped_runs.empty()) {
-							msg = "read_ena_sequences: WARNING: " + std::to_string(global_state.skipped_runs.size()) +
-							      " run(s) skipped due to download errors:" + accessions;
+							msg = miint::BuildEveryRunFailedMessage(skipped, global_state.first_skip_error);
+						} else if (!skipped.empty()) {
+							msg = "read_ena_sequences: WARNING: " + std::to_string(skipped.size()) +
+							      " run(s) skipped due to download errors:";
+							for (const auto &acc : skipped) {
+								msg += " " + acc;
+							}
 						}
 					}
 					if (every_run_failed) {
@@ -592,10 +585,10 @@ void ReadENASequencesTableFunction::FillOutputFromBatch(DataChunk &output, const
 
 // ---- ExecuteInOut ----
 //
-// State machine for the lateral / in-out path: one retry on an open failure
-// and on a mid-stream read failure, then a skip with a warning. Unlike the
-// literal path (Execute), it skips a run even when it is the only one, and does
-// not raise when every run fails. Returning
+// State machine for the lateral / in-out path: one retry on an open failure,
+// then a skip with a warning; a mid-stream read failure skips the rest of the
+// run at once. Unlike the literal path (Execute), it skips a run even when it is
+// the only one, and does not raise when every run fails. Returning
 // `HAVE_MORE_OUTPUT` with cardinality=0 is safe because internal state
 // (current_reader reset, pending_runs popped, lateral_sequence_counter reset)
 // advances between callbacks — the dispatcher loops until state progresses to

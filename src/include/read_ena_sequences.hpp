@@ -97,7 +97,7 @@ public:
 		std::atomic<uint64_t> bytes_completed;
 		uint64_t total_bytes; // Sum across all runs; 0 means fall back to run-count progress
 
-		// Skipped runs (transient failures after retry)
+		// Skipped runs: failed at open after the retry, mid-stream, or at completion
 		mutex skipped_lock;
 		std::vector<std::string> skipped_runs;
 		std::string first_skip_error; // guarded by skipped_lock

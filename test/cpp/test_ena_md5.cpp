@@ -179,6 +179,23 @@ TEST_CASE("ShouldSkipFailedRun skips a failed run only when siblings exist", "[e
 	CHECK(miint::ShouldSkipFailedRun(100));     // project expansion -> skip the bad one
 }
 
+TEST_CASE("EveryRunFailed holds only when every run of the scan was skipped", "[ena_md5]") {
+	CHECK(miint::EveryRunFailed(1, 1));
+	CHECK(miint::EveryRunFailed(3, 3));
+	// A sibling's rows landed, so the scan returns them with a warning.
+	CHECK_FALSE(miint::EveryRunFailed(2, 3));
+	// A scan of no runs failed nothing.
+	CHECK_FALSE(miint::EveryRunFailed(0, 0));
+	CHECK_FALSE(miint::EveryRunFailed(0, 2));
+}
+
+TEST_CASE("BuildEveryRunFailedMessage names each run and the first failure", "[ena_md5]") {
+	// The order is the order the runs failed in, which parallel workers decide.
+	CHECK(miint::BuildEveryRunFailedMessage({"ERR2", "ERR1"}, "read_ena_sequences: ascp exited with code 1") ==
+	      "read_ena_sequences: every run failed (2): ERR2 ERR1; first error: read_ena_sequences: ascp exited with "
+	      "code 1");
+}
+
 TEST_CASE("BuildMd5MismatchMessage names the label and attributes each digest", "[ena_md5]") {
 	auto message = miint::BuildMd5MismatchMessage("ERR1074767", "d41d8cd98f00b204e9800998ecf8427e",
 	                                              "5eb63bbbe01eeed093cb22bb8f5acdc3");

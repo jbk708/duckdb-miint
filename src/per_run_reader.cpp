@@ -338,7 +338,7 @@ static std::string AsperaStartFailure(AsperaProcess &proc, const std::string &ru
 	int exit_code = proc.WaitForExit();
 	auto detail = proc.StderrText();
 	auto how = exit_code >= 0 ? duckdb::StringUtil::Format("exited with code %d", exit_code)
-	                          : std::string("was killed by a signal");
+	                          : std::string("ended without an exit code (killed by a signal, or its status was lost)");
 	return duckdb::StringUtil::Format("ascp %s before sending any data for run '%s'%s", how, run_accession,
 	                                  detail.empty() ? std::string() : ": " + detail);
 }

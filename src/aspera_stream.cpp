@@ -108,10 +108,12 @@ AsperaProcess::AsperaProcess(const AsperaConfig &config, const std::vector<std::
 		}
 	}
 
-	// Every descriptor made here is close-on-exec from creation: only this
-	// child gets them, through the dup2s below, not a process another thread
-	// forks meanwhile. A stray copy of the pipe's write end would keep it open
-	// after ascp exits, and AwaitData would wait on that process instead.
+	// Every descriptor made here is close-on-exec, so only this child gets them,
+	// through the dup2s below, not a process another thread forks meanwhile. A
+	// stray copy of the pipe's write end would keep it open after ascp exits,
+	// and AwaitData would wait on that process instead. pipe2 sets it at
+	// creation; without pipe2 (macOS) a fork between pipe() and fcntl() can
+	// still copy the ends.
 	int stdout_pipe[2];
 #ifdef __linux__
 	int pipe_rc = pipe2(stdout_pipe, O_CLOEXEC);
@@ -136,6 +138,7 @@ AsperaProcess::AsperaProcess(const AsperaConfig &config, const std::vector<std::
 
 	child_pid_ = fork();
 	if (child_pid_ == -1) {
+		int err = errno;
 		close(stdout_pipe[0]);
 		close(stdout_pipe[1]);
 		if (stderr_fd_ != -1) {
@@ -144,7 +147,7 @@ AsperaProcess::AsperaProcess(const AsperaConfig &config, const std::vector<std::
 		if (!file_list_path_.empty()) {
 			unlink(file_list_path_.c_str());
 		}
-		throw duckdb::IOException("AsperaProcess: failed to fork: %s", strerror(errno));
+		throw duckdb::IOException("AsperaProcess: failed to fork: %s", strerror(err));
 	}
 
 	if (child_pid_ == 0) {
@@ -406,7 +409,8 @@ int AsperaProcess::WaitForExit() {
 	// Drain remaining pipe data to avoid blocking the child
 	if (pipe_fd_ >= 0) {
 		char discard[4096];
-		while (read(pipe_fd_, discard, sizeof(discard)) > 0) {
+		ssize_t n;
+		while ((n = read(pipe_fd_, discard, sizeof(discard))) > 0 || (n == -1 && errno == EINTR)) {
 		}
 		close(pipe_fd_);
 		pipe_fd_ = -1;

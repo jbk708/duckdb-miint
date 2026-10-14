@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 namespace miint {
 
@@ -21,11 +22,28 @@ namespace miint {
 // abort the query and throw away every sibling already downloaded, so it skips
 // the bad run and lets the rest land. (By true EOF the skipped run's rows were
 // already emitted downstream; the warning flags them as unverified, the same
-// contract as the mid-stream-truncation skip.) When every run of a literal scan
-// is skipped, there is no sibling left to protect, and Execute raises at the
-// end of the scan instead.
+// contract as the mid-stream-truncation skip.) When every run is skipped, see
+// EveryRunFailed.
 inline bool ShouldSkipFailedRun(size_t total_runs) {
 	return total_runs > 1;
+}
+
+// True when every run of a literal scan was skipped. There is then no sibling
+// left to protect, so the scan raises BuildEveryRunFailedMessage instead of
+// returning what the failed runs left: no rows, or one run's partial rows.
+inline bool EveryRunFailed(size_t skipped_runs, size_t total_runs) {
+	return skipped_runs > 0 && skipped_runs == total_runs;
+}
+
+// `accessions` in the order the runs failed; `first_error` is the first failure
+// recorded, which with parallel workers need not be the first run's.
+inline std::string BuildEveryRunFailedMessage(const std::vector<std::string> &accessions,
+                                              const std::string &first_error) {
+	std::string msg = "read_ena_sequences: every run failed (" + std::to_string(accessions.size()) + "):";
+	for (const auto &acc : accessions) {
+		msg += " " + acc;
+	}
+	return msg + "; first error: " + first_error;
 }
 
 // The mismatch message is a published contract (docs/insdc_ena.md, "Message

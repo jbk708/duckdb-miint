@@ -255,12 +255,12 @@ FROM read_ena_sequences('ERR1074767', include_filepath => true) LIMIT 5;
 - Quality scores are converted to numeric values using the specified offset (default Phred+33)
 - **Failure handling**: on a transient open failure, the run is retried once.
   If the retry also fails, a single-run literal scan raises the error; a scan
-  of several runs skips the run with a loud warning and continues. When every
-  run of a literal scan fails, however it fails, the scan raises
-  `read_ena_sequences: every run failed (<n>): <accessions>; first error:
-  <message>` at the end rather than return what the failed runs left: no rows,
-  or a single run's partial rows. A lateral call skips a failed run with a
-  warning, even when every run fails. On
+  of several runs skips the run with a loud warning and continues. If every run
+  of such a scan fails, it raises `read_ena_sequences: every run failed (<n>):
+  <accessions>; first error: <message>` at the end rather than return no rows;
+  so does a single-run scan whose run fails mid-stream, rather than return its
+  partial rows. A lateral call skips a failed run with a warning, even when
+  every run fails. On
   a mid-stream failure (connection dropped after some rows have been emitted),
   the run is NOT retried — re-reading from scratch would emit the same reads
   again with duplicate `sequence_index` values downstream. Instead, the run is
@@ -291,7 +291,7 @@ FROM read_ena_sequences('ERR1074767', include_filepath => true) LIMIT 5;
   same treatment as any other completion-time integrity failure, since one
   corrupt run should not discard rows already emitted for its siblings. If
   every run of a scan of several runs fails, the scan raises the "every run
-  failed" error above, which quotes the first run's message.
+  failed" error above, which quotes the first failure recorded.
 
   **Message contract**: the raised message is `read_ena_sequences: md5
   mismatch for '<label>': ENA reported <expected> but downloaded bytes hash

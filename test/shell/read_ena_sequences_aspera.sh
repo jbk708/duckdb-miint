@@ -10,7 +10,8 @@
 #   - download_method => 'auto' (the default) warns and reads over HTTP, and
 #     the scan's later runs go straight to HTTP;
 #   - an ascp that exits 0 without sending anything fails the same way;
-#   - a scan of several runs that all fail raises instead of returning no rows.
+#   - a scan of several runs that all fail raises instead of returning no rows,
+#     and so does one run that fails partway, instead of returning part of it.
 # - With ASPERA_AVAILABLE, the real ascp neither hangs nor fails silently.
 #
 # None may hang: a prompt that reaches stdin or a terminal waits forever, so
@@ -98,12 +99,13 @@ R2="$ROOT/data/merge/ltp_50_R2.fq"
 DATA=(MIINT_ASCP_STUB_MODE=data "MIINT_ASCP_STUB_DATA_R1=$R1" "MIINT_ASCP_STUB_DATA_R2=$R2")
 
 # Every byte must arrive once, in order, including the first, which is read
-# early to tell a transfer that started from one that failed.
+# early to tell a transfer that started from one that failed. With the count,
+# matching sequence_index on both sides pins each read's position.
 echo "Running: an Aspera transfer that works, single-end"
 run_query "CREATE TABLE got AS SELECT * FROM read_ena_sequences('ERR1074767', download_method => 'aspera', include_filepath => true);
 SELECT (SELECT count(*) FROM got) = 50,
-       (SELECT count(*) FROM (SELECT read_id, sequence1, qual1 FROM got
-                              EXCEPT SELECT read_id, sequence1, qual1 FROM read_fastx('$R1'))) = 0,
+       (SELECT count(*) FROM (SELECT sequence_index, read_id, sequence1, qual1 FROM got
+                              EXCEPT SELECT sequence_index, read_id, sequence1, qual1 FROM read_fastx('$R1'))) = 0,
        (SELECT bool_and(filepath LIKE 'fasp.sra.ebi.ac.uk:%') FROM got);" "${DATA[@]}"
 ok=0
 if [ "$RC" -eq 0 ] && echo "$OUT" | grep -qx "true|true|true"; then ok=1; fi
@@ -112,8 +114,8 @@ check "the file's 50 reads, and an Aspera filepath" "$ok"
 echo "Running: an Aspera transfer that works, paired-end"
 run_query "CREATE TABLE got AS SELECT * FROM read_ena_sequences('ERR10682882', download_method => 'aspera');
 SELECT (SELECT count(*) FROM got) = 50,
-       (SELECT count(*) FROM (SELECT read_id, sequence1, qual1, sequence2, qual2 FROM got
-                              EXCEPT SELECT read_id, sequence1, qual1, sequence2, qual2
+       (SELECT count(*) FROM (SELECT sequence_index, read_id, sequence1, qual1, sequence2, qual2 FROM got
+                              EXCEPT SELECT sequence_index, read_id, sequence1, qual1, sequence2, qual2
                               FROM read_fastx('$R1', sequence2 => '$R2'))) = 0;" "${DATA[@]}"
 ok=0
 if [ "$RC" -eq 0 ] && echo "$OUT" | grep -qx "true|true"; then ok=1; fi
@@ -175,11 +177,25 @@ ok=0
 if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] && error_has "every run failed" && error_has "failed to authenticate"; then ok=1; fi
 check "the error says every run failed, with ascp's message" "$ok"
 
+# Rows from the first half went downstream before the break; the scan must not
+# end as if that were the whole run.
+echo "Running: a single-run transfer that breaks partway"
+run_query "SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', download_method => 'aspera');" \
+    MIINT_ASCP_STUB_MODE=truncated "MIINT_ASCP_STUB_DATA_R1=$R1"
+ok=0
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] && error_has "every run failed (1): ERR1074767"; then ok=1; fi
+check "the error says the run failed" "$ok"
+
 # The real ascp and key, against EBI: rows if the key works, ascp's error if it
 # does not, and never a hang, whatever DuckDB's stdin is.
-if [ -n "${ASPERA_AVAILABLE:-}" ]; then
+if [ -z "${ASPERA_AVAILABLE:-}" ]; then
+    echo "  SKIP: the real ascp (ASPERA_AVAILABLE not set)"
+else
     for how in open closed terminal; do
-        if [ "$how" = terminal ] && [ -z "$HAVE_SCRIPT" ]; then continue; fi
+        if [ "$how" = terminal ] && [ -z "$HAVE_SCRIPT" ]; then
+            echo "  SKIP: the real ascp under a terminal (needs util-linux script)"
+            continue
+        fi
         echo "Running: the real ascp, stdin $how"
         CLOSE_STDIN="$([ "$how" = closed ] && echo 1)" PTY="$([ "$how" = terminal ] && echo 1)" \
             run_query "SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', download_method => 'aspera', max_sequences => 10);" \

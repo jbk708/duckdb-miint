@@ -9,10 +9,12 @@
 # given.
 #
 # MIINT_ASCP_STUB_MODE selects other behaviour:
-#   empty  exit 0 without writing anything.
-#   data   write the gzip of $MIINT_ASCP_STUB_DATA_R1, or of
-#          $MIINT_ASCP_STUB_DATA_R2 for a remote path ending in _2.fastq.gz,
-#          to stdout and exit 0, as a transfer that works does.
+#   empty      exit 0 without writing anything.
+#   data       write the gzip of $MIINT_ASCP_STUB_DATA_R1, or of
+#              $MIINT_ASCP_STUB_DATA_R2 for a remote path ending in _2.fastq.gz,
+#              to stdout and exit 0, as a transfer that works does.
+#   truncated  write the first half of that gzip and exit 1, as a transfer that
+#              breaks partway does.
 import gzip
 import os
 import sys
@@ -20,11 +22,15 @@ import sys
 mode = os.environ.get("MIINT_ASCP_STUB_MODE", "")
 if mode == "empty":
     sys.exit(0)
-if mode == "data":
+if mode in ("data", "truncated"):
     remote_path = sys.argv[-2]
     mate = "R2" if remote_path.endswith("_2.fastq.gz") else "R1"
     with open(os.environ["MIINT_ASCP_STUB_DATA_" + mate], "rb") as f:
-        sys.stdout.buffer.write(gzip.compress(f.read()))
+        payload = gzip.compress(f.read())
+    if mode == "truncated":
+        sys.stdout.buffer.write(payload[: len(payload) // 2])
+        sys.exit(1)
+    sys.stdout.buffer.write(payload)
     sys.exit(0)
 
 os.pipe()
