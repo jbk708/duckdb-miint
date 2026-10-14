@@ -307,7 +307,8 @@ These are invoked via `fork`/`exec` at runtime; the extension links no code for 
 - Detected at runtime via `which ascp`; not required at build time
 - SSH key auto-discovered at `~/.aspera/connect/etc/`, `$CONDA_PREFIX/etc/`, or downloaded from GitHub on demand
 - Uses `stdio://` and `stdio-tar://` protocols to stream directly to stdout (confirmed working with ENA FASP servers)
-- `read_ena_fastx` with `download_method='auto'` falls back to HTTP transparently when `ascp` isn't available
+- The child runs `ascp -q`, since without `-q` its session status goes to stdout, which is the data stream. It runs in a new session, so it has no controlling terminal, with stdin on `/dev/null`: when the server rejects the key, ascp asks for a password on the terminal, or else on stdin, and would otherwise wait forever. Its stderr goes to an unlinked temp file, which the error message quotes.
+- `read_ena_sequences` with `download_method='auto'` reads over HTTP when `ascp` isn't on `PATH` or no key is found. When `ascp` starts but exits before sending any data (a rejected key, an unreachable host), it warns and reads over HTTP, and the scan's later runs skip `ascp`; `'aspera'` raises with `ascp`'s message. As of 2026-10, EBI rejects the public `asperaweb_id_dsa` key (#309), so `'auto'` falls back on every scan where `ascp` is installed
 
 ## 5. Vendored Source (compiled inline)
 

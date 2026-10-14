@@ -77,6 +77,12 @@ public:
 	struct GlobalState : public GlobalTableFunctionState {
 		mutex lock;
 		mutex open_mutex; // Serializes file opens to avoid overwhelming remote servers
+#if MIINT_ASPERA_SUPPORTED
+		// The readers point at both, so they come first and outlive the readers.
+		// aspera_fell_back: see PerRunReader's constructor.
+		miint::AsperaConfig aspera_config;
+		std::atomic<bool> aspera_fell_back {false};
+#endif
 		std::vector<std::unique_ptr<miint::PerRunReader>> readers;
 		std::vector<miint::ENARunInfo> runs;
 		size_t next_run_idx;
@@ -96,13 +102,6 @@ public:
 		std::vector<std::string> skipped_runs;
 		std::string first_skip_error; // guarded by skipped_lock
 		std::atomic<bool> skipped_warned;
-
-#if MIINT_ASPERA_SUPPORTED
-		miint::AsperaConfig aspera_config;
-		// Set by the first run that cannot start ascp and falls back to HTTP;
-		// the scan's later runs then skip ascp (PerRunReader::Open).
-		std::atomic<bool> aspera_fell_back {false};
-#endif
 
 		// Literal path: cap at 8 worker threads. In deferred (in-out) mode, runs
 		// is empty at Bind time so this returns 0 — harmless because DuckDB's

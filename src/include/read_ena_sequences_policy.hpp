@@ -17,7 +17,7 @@ namespace miint {
 // hard throw: there is nothing else to discard, and a downstream that resolves a
 // scalar accession one run per call (the Qiita ENA ingest job) relies on that
 // error to fail the run. A multi-run scan -- a `varchar[]` of accessions, or a
-// project accession that expands to many runs -- must NOT let one corrupt run
+// project accession that expands to many runs -- must NOT let one failed run
 // abort the query and throw away every sibling already downloaded, so it skips
 // the bad run and lets the rest land. (By true EOF the skipped run's rows were
 // already emitted downstream; the warning flags them as unverified, the same

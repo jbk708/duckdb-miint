@@ -48,8 +48,9 @@ public:
 	// next read.
 	bool AwaitData();
 
-	// What the child wrote to stderr, with each run of whitespace collapsed to one
-	// space. Empty when nothing was written or the capture file could not be made.
+	// The last 4 KiB the child wrote to stderr, after "[...] " when cut, with each
+	// run of whitespace collapsed to one space. Empty when nothing was written or
+	// the capture file could not be made.
 	std::string StderrText() const;
 
 	// Check if the process is using stdio-tar:// (multiple files) vs stdio:// (single).
@@ -70,7 +71,8 @@ private:
 	char peek_byte_;
 
 	// One read(2) of up to n bytes from the pipe, returning AwaitData's byte
-	// first. Every read of the data goes through here, so none can skip it.
+	// first and retrying on EINTR. Every read whose bytes are returned goes
+	// through here, so none can skip that byte.
 	ssize_t ReadRaw(void *dst, size_t n);
 
 	// Read exactly n bytes from pipe. Returns false on EOF/error before n bytes.

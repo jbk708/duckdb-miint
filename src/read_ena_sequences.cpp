@@ -381,6 +381,7 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 					// before EmitWarning acquires LogManager::lock. Avoids
 					// establishing a skipped_lock → LogManager::lock ordering
 					// that future code could deadlock against.
+					//
 					// When every run was skipped there is no sibling left to
 					// protect, so the scan raises rather than return what the
 					// failed runs left: no rows, or a partial run.
@@ -414,7 +415,8 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 				return;
 			}
 
-			// Open reader — retry once on failure before skipping.
+			// Open reader — retry once on failure, then skip the run, or raise in a
+			// single-run scan (ShouldSkipFailedRun).
 			// On retry, destroy the partially-initialized reader (its dtor runs
 			// any teardown) and recreate from scratch. Reset the run's
 			// sequence counter so the retry starts numbering from 1.
@@ -432,8 +434,6 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 					global_state.readers[local_state.current_run_idx]->Open();
 				} catch (const std::exception &e2) {
 					global_state.readers[local_state.current_run_idx].reset();
-					// No sibling to protect in a single-run scan: raise rather than
-					// return 0 rows for it.
 					if (!miint::ShouldSkipFailedRun(global_state.total_runs)) {
 						throw;
 					}
@@ -485,13 +485,6 @@ void ReadENASequencesTableFunction::Execute(ClientContext &context, TableFunctio
 				reader.Finish();
 			} catch (const std::exception &e) {
 				global_state.readers[current_run_idx].reset();
-				// A single-run scan still throws: nothing else to discard, and a
-				// downstream that resolves a scalar accession one run per call
-				// relies on the error. A multi-run scan (varchar[] of accessions,
-				// or a project accession expanded to many runs) must NOT let one
-				// corrupt run abort the whole scan and throw away every sibling
-				// already downloaded -- skip it with a loud warning, like the
-				// open-failure and mid-stream branches, and let the rest land.
 				// The skipped run's rows were already emitted by true EOF; the
 				// warning + skipped_runs summary flag them as unverified.
 				if (!miint::ShouldSkipFailedRun(global_state.total_runs)) {
@@ -599,9 +592,10 @@ void ReadENASequencesTableFunction::FillOutputFromBatch(DataChunk &output, const
 
 // ---- ExecuteInOut ----
 //
-// State machine for the lateral / in-out path. Mirrors the literal path's
-// retry policy (Execute): one-shot retry on open failure, one-shot retry on
-// mid-stream read failure, skip-with-warning on second failure. Returning
+// State machine for the lateral / in-out path: one retry on an open failure
+// and on a mid-stream read failure, then a skip with a warning. Unlike the
+// literal path (Execute), it skips a run even when it is the only one, and does
+// not raise when every run fails. Returning
 // `HAVE_MORE_OUTPUT` with cardinality=0 is safe because internal state
 // (current_reader reset, pending_runs popped, lateral_sequence_counter reset)
 // advances between callbacks — the dispatcher loops until state progresses to

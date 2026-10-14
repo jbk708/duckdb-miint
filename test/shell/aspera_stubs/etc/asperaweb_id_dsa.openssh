@@ -1,2 +1,0 @@
-Not a key. read_ena_sequences_aspera.sh sets CONDA_PREFIX here so key lookup
-finds this file instead of downloading EBI's key; the ascp stub never reads it.

@@ -97,7 +97,7 @@ private:
 	bool trim_;
 	bool verify_md5_;
 	std::mutex &open_mutex_;
-	const AsperaConfig *aspera_config_; // nullable; non-null only when use_aspera_ is true
+	const AsperaConfig *aspera_config_; // nullable; non-null when the scan uses Aspera, even after a fallback
 
 	std::unique_ptr<SequenceReader> fastx_reader_;
 	std::unique_ptr<SFFReader> sff_reader_;

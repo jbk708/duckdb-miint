@@ -154,10 +154,12 @@ void PerRunReader::Finish() {
 			return {};
 		}
 		int exit_code = proc->WaitForExit();
+		auto detail = proc->StderrText();
 		proc.reset();
 		if (exit_code != 0 && exit_code != -1) {
-			return duckdb::StringUtil::Format("read_ena_sequences: %s ascp exited with code %d for run '%s'", tag,
-			                                  exit_code, run_.run_accession);
+			return duckdb::StringUtil::Format("read_ena_sequences: %s ascp exited with code %d for run '%s'%s", tag,
+			                                  exit_code, run_.run_accession,
+			                                  detail.empty() ? std::string() : ": " + detail);
 		}
 		return {};
 	};
@@ -327,15 +329,18 @@ void PerRunReader::OpenSFF() {
 // An ascp that cannot start a transfer (a rejected key, an unreachable host)
 // closes its stdout and exits non-zero before sending a byte. Returns that
 // failure as a message, or "" once data is flowing. Exiting 0 without a byte
-// is a failure too: an ENA FASTQ file is gzip, never empty.
+// counts too: there is nothing to read, and over HTTP, where 'auto' falls back,
+// a paired run's empty second file is read as single-end.
 static std::string AsperaStartFailure(AsperaProcess &proc, const std::string &run_accession) {
 	if (proc.AwaitData()) {
 		return "";
 	}
 	int exit_code = proc.WaitForExit();
 	auto detail = proc.StderrText();
-	return duckdb::StringUtil::Format("ascp exited with code %d before sending any data for run '%s'%s", exit_code,
-	                                  run_accession, detail.empty() ? std::string() : ": " + detail);
+	auto how = exit_code >= 0 ? duckdb::StringUtil::Format("exited with code %d", exit_code)
+	                          : std::string("was killed by a signal");
+	return duckdb::StringUtil::Format("ascp %s before sending any data for run '%s'%s", how, run_accession,
+	                                  detail.empty() ? std::string() : ": " + detail);
 }
 
 std::string PerRunReader::OpenAspera() {
