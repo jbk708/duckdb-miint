@@ -125,6 +125,12 @@ SAM alignments compute `stop_position` using HTSlib's `bam_endpos()`:
 - Coverage length = `stop_position - position` (no `+1`)
 - Critical for interval operations and coverage analysis
 
+### Coordinate Axes for Readers
+A reader converts coordinates to miint's convention when it reads, and names each interval column after its axis. The user-facing rule, with the per-format conversions, is [Coordinate conventions](../reading.md#coordinate-conventions).
+- **Reference axis**: `position` / `stop_position`, 1-based half-open. A 0-based half-open source (PAF targets) adds 1 to both ends; a 1-based closed source (GFF3) adds 1 to the end only. An unmapped record reports 0 for both, matching `read_alignments`.
+- **Read axis**: `start` / `stop`, or `query_start` / `query_stop` when the row also has reference coordinates. These are 0-based half-open offsets on the read as sequenced, so they compose with `cigar_query_intervals` and `compress_intervals`. A reverse-strand alignment is still reported on the forward read; a format that writes reverse-complement offsets is mirrored on read.
+- A column that leaves the file's convention in place, or an interval column named for neither axis, means every caller has to know the source format to use it correctly — the off-by-one this rule exists to prevent.
+
 ### Identifier-column Codec (`id_column_codec` / `id_column_utils`)
 Functions that accept user-supplied identifier columns (`read_id`, `reference`, `mate_reference`) may opt in to BIGINT and UUID in addition to VARCHAR; `IsAllowedIdType` in `src/include/id_column_utils.hpp` defines the accepted set. The pattern is split across two layers:
 

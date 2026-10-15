@@ -1,18 +1,20 @@
 # Reading files
 
-MIINT supports reading FASTA, FASTQ, SAM, BAM, SFF, BIOM, mzML, mzXML, GFF, jplace and Newick.  
+MIINT supports reading FASTA, FASTQ, SAM, BAM, PAF, SFF, BIOM, mzML, mzXML, GFF, jplace and Newick.  
 
 ## Table of contents
 
 - [FASTA / FASTQ](#fasta-and-fastq) - FASTA and FASTQ sequence files.
 - [SAM / BAM](#sam-and-bam) - SAM and BAM alignment files.
   - [`read_alignment_header(path)`](#read_alignment_headerpath) - A header's `@SQ` lines as `(tid, reference, length)`.
+- [PAF](#paf) - PAF pairwise alignment files, as written by minimap2 and other long-read tools.
 - [SFF](#sff) - SFF sequence files.
 - [mzML / mzXML](#mzml-and-mzxml) - mzML and mzXML files.
 - [BIOM](#biom) - BIOM-Format v2.1 files.
 - [jplace](#jplace) - jplace formatted files.
 - [Newick](#newick) - Phylogenies in Newick.
 - [GFFv3](#gff) - GFF formatted annotation data.
+- [Coordinate conventions](#coordinate-conventions) - How positions on references and on reads are reported, and how each format is converted.
 
 ### FASTA and FASTQ
 
@@ -268,6 +270,68 @@ SELECT COUNT(*) = 0 AS header_is_name_sorted FROM (
   SELECT tid, ROW_NUMBER() OVER (ORDER BY reference) - 1 AS expected_tid
   FROM read_alignment_header('sorted.bam')
 ) WHERE tid != expected_tid;
+```
+
+### PAF
+
+Read PAF (Pairwise mApping Format) files, the tab-separated alignment format minimap2 and many long-read tools write, through the `read_paf` table function. Each row is one PAF record.
+
+**Basic example:**
+
+```sql
+SELECT * FROM read_paf('alignments.paf');
+```
+
+**Parameters:**
+- `filename` (VARCHAR or VARCHAR[]): Path to PAF file(s), or a glob pattern (e.g., `'data/*.paf.gz'`)
+  - **Glob patterns**: When a single VARCHAR contains glob characters (`*`, `?`, `[`), files are expanded and sorted alphabetically
+  - **Arrays**: VARCHAR[] elements are treated as literal paths (no glob expansion)
+- `include_filepath` (BOOLEAN, optional, default false): Add a `filepath` column to the output
+
+**Output schema:**
+- `read_id` (VARCHAR): Query sequence name (PAF column 1)
+- `query_length` (BIGINT): Query sequence length
+- `query_start` (BIGINT): Start of the aligned block on the query — **read axis**, 0-based
+- `query_stop` (BIGINT): End of the aligned block on the query, exclusive
+- `strand` (VARCHAR): `+` or `-`; `*` for an unmapped record
+- `reference` (VARCHAR): Target sequence name; `*` for an unmapped record
+- `reference_length` (BIGINT): Target sequence length
+- `position` (BIGINT): Start of the aligned block on the target — **reference axis**, 1-based; PAF's 0-based start `+ 1`
+- `stop_position` (BIGINT): End of the aligned block on the target, exclusive; PAF's end `+ 1`
+- `residue_matches` (BIGINT): Number of matching bases (PAF column 10)
+- `block_length` (BIGINT): Alignment block length (PAF column 11)
+- `mapq` (UTINYINT): Mapping quality; 255 means missing
+- `tags` (MAP(VARCHAR, VARCHAR)): Optional fields after column 12, as `tag → value`
+- `filepath` (VARCHAR, optional): File path when `include_filepath=true`
+
+**Behavior:**
+- Coordinates follow the two axes in [Coordinate conventions](#coordinate-conventions). The target interval moves to the 1-based reference axis, matching `read_alignments`, so `stop_position - position` is the aligned target length. The query interval stays 0-based on the read as sequenced, matching `cigar_query_intervals`, even on the `-` strand. A reverse-strand alignment of a read's last 3000 of 4500 bases is `[1500, 4500)`.
+- An unmapped record (`minimap2 --paf-no-hit`) reports `strand` and `reference` as `*` and `position` / `stop_position` as 0, as `read_alignments` does for an unmapped SAM record.
+- Tags such as `NM:i:3` become `tags['NM'] = '3'`. The type letter is validated and dropped, so cast values when you need numbers: `tags['NM']::INTEGER`. Untyped `key:value` fields, which some tools write instead of SAM-style tags, are accepted as well.
+- gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths (`s3://`, `https://`) are read through DuckDB's file system.
+- One thread reads each file; several files are read in parallel.
+- An empty file returns no rows.
+- stdin is not supported.
+
+**Malformed records fail the scan.** The error names the file, the line and the defect: fewer than 12 fields, a blank line, a field that is not a whole non-negative integer, an interval that runs backwards or past its sequence's length, a strand other than `+`/`-`, a malformed tag, or a tag that appears twice on one line.
+
+**Examples:**
+```sql
+-- Primary alignments of reads with at most 2% divergence
+SELECT read_id, reference, position, stop_position
+FROM read_paf('reads.paf.gz')
+WHERE tags['tp'] = 'P' AND tags['de']::DOUBLE <= 0.02;
+
+-- Fraction of each read covered by its alignments, pooling fragments on the read axis
+SELECT read_id, query_length,
+       list_sum([iv.stop - iv.start FOR iv IN compress_intervals(query_start, query_stop)]) / query_length
+           AS fraction_aligned
+FROM read_paf('reads.paf')
+WHERE reference <> '*'
+GROUP BY read_id, query_length;
+
+-- Unaligned reads
+SELECT read_id FROM read_paf('reads.paf') WHERE reference = '*';
 ```
 
 ### SFF
@@ -906,16 +970,6 @@ SELECT parse_gff_attributes('ID=gene1;Name=TEST1;biotype=protein_coding');
 - The 9th column (attributes) may be empty; a feature line must carry the 8 mandatory fields
 - **The GFF3 sequence section is honoured**: content after a `##FASTA` directive is not returned as feature rows. prokka and bakta always append the genome, so this is the common case. A feature line carrying only *some* of the 8 mandatory fields is a malformed GFF line and raises an error rather than being silently dropped.
 
-### Coordinate conventions
-
-**Every miint function reports intervals as 1-based half-open `[position, stop_position)`.** A feature's length is always `stop_position - position` — never `+ 1`.
-
-This holds across `read_alignments`, `align_minimap2` / `align_bowtie2` and friends, `alignment_slice`, `compute_coverage_depth`, `genome_coverage` / `genome_coverage_per_sample`, `read_gff` and `read_ncbi_annotation`.
-
-Some source formats are inherently **closed** (`[start, end]`): GFF3 and NCBI annotations both are. miint **normalizes these on read** by emitting `end + 1`, so a single convention holds throughout and intervals from different readers compose correctly. The value the file contained is always recoverable as `stop_position - 1`.
-
-> **Changed behaviour.** `read_gff` and `read_ncbi_annotation` previously emitted the source format's closed `end` directly under the same `stop_position` column name. Queries that consumed it now see a value one larger. Anything computing a length as `stop_position - position + 1` should drop the `+ 1`; anything that compensated with its own `+ 1` before feeding another miint function should remove that compensation. The motivation was that the mismatch was silent: feeding `read_gff` output to `genome_coverage` (which computes `SUM(stop - start)`) type-checked, ran, raised nothing, and under-counted every feature by exactly one base.
-
 **Use Cases:**
 - **Gene annotation analysis**: Extract genes, transcripts, exons from genome annotations
 - **Feature filtering**: Select specific feature types or genomic regions
@@ -932,3 +986,41 @@ Some source formats are inherently **closed** (`[start, end]`): GFF3 and NCBI an
   - Other standard GFF3 producers
 
 **Implementation note:** Implemented as a DuckDB macro using `read_csv` with GFF-specific parsing.
+
+### Coordinate conventions
+
+miint reports positions on two axes, and the column name says which one. Every reader converts the file's own convention when it reads, so intervals from different functions compose without adjustment.
+
+| Axis | Columns | Convention | Length |
+|---|---|---|---|
+| **Reference**: a reference, contig or annotated sequence | `position`, `stop_position` | 1-based half-open `[position, stop_position)` | `stop_position - position` |
+| **Read**: offsets into a read, in the orientation it was sequenced | `start`, `stop`, or `query_start`, `query_stop` | 0-based half-open `[start, stop)` | `stop - start` |
+
+Neither length takes a `+ 1`.
+
+#### Reference axis
+
+`position` / `stop_position` are used by `read_alignments`, `align_minimap2` / `align_bowtie2` and friends, `alignment_slice`, `compute_coverage_depth`, `genome_coverage` / `genome_coverage_per_sample`, `read_gff`, `read_ncbi_annotation` and `read_paf`.
+
+| Source convention | Formats | How miint converts it |
+|---|---|---|
+| 1-based closed `[start, end]` | GFF3, NCBI annotation | `position = start`, `stop_position = end + 1` |
+| 0-based half-open `[start, end)` | PAF target columns | `position = start + 1`, `stop_position = end + 1` |
+| 1-based `POS` plus the CIGAR's reference span | SAM / BAM | `position = POS`, `stop_position = POS + span` |
+
+The value a file contained is always recoverable: GFF's closed `end` is `stop_position - 1`, and PAF's 0-based `start` is `position - 1`. An unmapped record, a SAM record with `POS` 0 or a PAF record with target `*`, reports `position = 0` and `stop_position = 0`.
+
+> **Changed behaviour.** `read_gff` and `read_ncbi_annotation` previously emitted the source format's closed `end` directly under the same `stop_position` column name. Queries that consumed it now see a value one larger. Anything computing a length as `stop_position - position + 1` should drop the `+ 1`; anything that compensated with its own `+ 1` before feeding another miint function should remove that compensation. The motivation was that the mismatch was silent: feeding `read_gff` output to `genome_coverage` (which computes `SUM(stop - start)`) type-checked, ran, raised nothing, and under-counted every feature by exactly one base.
+
+#### Read axis
+
+Read-axis intervals say which bases of a read an alignment covers. They are 0-based because they are offsets into the read's sequence. `cigar_query_intervals` returns them as `start` / `stop`, and `compress_intervals` merges them as they are. `read_paf` reports `query_start` / `query_stop` on the same axis, so a PAF interval can be pooled with intervals from SAM records of the same read without conversion.
+
+Read-axis intervals are always on the read **as sequenced**, whatever strand the alignment is on. A reverse-strand alignment covering the read's last 3000 of 4500 bases is `[1500, 4500)`, not `[0, 3000)`. PAF already writes forward-strand query coordinates; `cigar_query_intervals` mirrors a reverse-strand CIGAR onto the read for the same reason.
+
+DuckDB's `substr` is 1-based, so the aligned bases of a read are `substr(sequence1, query_start + 1, query_stop - query_start)`.
+
+#### Deliberate exceptions
+
+- Bin indices from `bin_of` / `bin_start` / `interval_bins` ([Genome bins](alignment_analysis.md#genome-bins)) are 0-based array positions, not coordinates.
+- `absquant_orf_copies` takes 1-based **closed** ORF coordinates, the convention woltka's `coords.txt` uses; see [Absolute quantification](absolute_quantification.md).

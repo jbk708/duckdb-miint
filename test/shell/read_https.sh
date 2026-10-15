@@ -109,6 +109,14 @@ run_test "read_newick: Newick via HTTP" "5" \
 run_test "read_newick: gzipped Newick via HTTP" "5" \
     "SELECT COUNT(*) FROM read_newick('$BASE/newick/simple.nwk.gz');"
 
+# --- read_paf ---
+
+run_test "read_paf: PAF via HTTP" "7" \
+    "SELECT COUNT(*) FROM read_paf('$BASE/paf/k12_minimap2.paf');"
+
+run_test "read_paf: gzipped PAF via HTTP" "7" \
+    "SELECT COUNT(*) FROM read_paf('$BASE/paf/k12_minimap2.paf.gz');"
+
 # --- read_mzml ---
 
 run_test "read_mzml: mzML via HTTP" "3" \
