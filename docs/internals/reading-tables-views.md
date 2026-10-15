@@ -18,19 +18,24 @@ When extension code needs to read data from a user-specified table or view (e.g.
 auto conn = MakeReadOnlyHelperConnection(context);
 
 // Execute a query - works for both tables and views
-std::string query = "SELECT col1, col2 FROM " + KeywordHelper::WriteOptionallyQuoted(table_name);
+std::string query = "SELECT col1, col2 FROM " + SQLIdentifier::ToString(table_name);
 auto result = conn.Query(query);
 
 if (result->HasError()) {
     throw InvalidInputException("Failed to read: %s", result->GetError());
 }
 
-// Process the MaterializedQueryResult
-auto &materialized = result->Cast<MaterializedQueryResult>();
-while (auto chunk = materialized.Fetch()) {
+// Query() materializes the whole result; Fetch() walks its chunks
+while (auto chunk = result->Fetch()) {
     // Process chunk->data[0], chunk->data[1], etc.
 }
 ```
+
+`Connection::Query` holds the entire result in memory. For a relation that can be
+large, stream it instead with `SubmitStream(conn, query)`
+(`src/include/miint_streaming_query.hpp`): the producer then runs ahead of `Fetch()`
+only up to the connection's `max_streaming_buffer_size`. Its `HasError()` /
+`GetError()` / `Fetch()` behave as above.
 
 ## TEMP tables and views
 
@@ -105,7 +110,7 @@ Two things to keep in mind if you do this:
 
 - The scan must be single-threaded (`MaxThreads() == 1`) if the helper work is stateful,
   as it is here — otherwise several `Execute` calls issue overlapping nested queries.
-- Poll `context.interrupted` around the work and throw `InterruptException`. Nothing else
+- Poll `context.IsInterrupted()` around the work and throw `InterruptException`. Nothing else
   will: a blocked `Execute` is not a place DuckDB can cancel on its own, so long work
   behind a helper connection is uninterruptible unless the caller checks.
 
@@ -136,10 +141,24 @@ Three remedies are in use. Pick by what the consumer actually needs:
    `per_subject_database` path uses this; it replaced a
    `ORDER BY ... LIMIT n OFFSET k` pager, which is why no such pager exists in
    `sequence_table_reader.hpp` any more.
-2. **One pass into a shard-keyed TEMP snapshot** — `MaterializeShardedQueryReads`.
-   For consumers that genuinely need repeated access *by key* and already
-   materialize comparable volume. `align_minimap2_sharded` uses this; it also
-   removed that function's N-scans-of-the-query-relation behaviour.
+2. **One pass into a TEMP snapshot, replayed as streams** — `MaterializeQueryReads`
+   plus a `QuerySequenceStream` per replay. For consumers that genuinely need
+   repeated passes. `align_minimap2` with a multi-part index replays the whole
+   snapshot once per part. `align_minimap2_sharded` streams it once per shard and
+   part, filtered by `BuildShardReadsSelect` — and snapshots its **routing**
+   relation (`read_to_shard`) the same way, because that filter re-reads routing
+   on exactly the same schedule as the reads. Note that a snapshot is only as
+   faithful as its DDL: `MaterializeSelectIntoTemp` has to re-emit `COLLATE`
+   explicitly, because `LogicalType::ToString()` renders a collated VARCHAR as
+   plain `VARCHAR` and the lost collation turns every later comparison
+   case-sensitive without an error. Snapshot the relation itself,
+   **never** a join that fans it out: an earlier `align_minimap2_sharded`
+   snapshotted `query JOIN read_to_shard`, one copy of each read per shard. With
+   all-shards routing (1M HiFi reads × 1000 shards) that was about a thousand
+   copies of the corpus, >8 TB spilled before the first alignment. The per-shard
+   filter needs care too. A JOIN (or `IN` in WHERE) can be flipped to build its
+   hash table on the snapshot side, sequences included, once per shard.
+   `BuildShardReadsSelect` explains the MARK-join shape that prevents that.
 3. **Keep streaming and fail loud** — for consumers whose whole value is bounded
    memory, where buffering would be the worse bug. `align_bowtie2_sharded` uses
    this: it counts reads delivered per shard and throws when the cursor comes up
@@ -167,8 +186,8 @@ before trusting it. `test/sql/rype_single_read.test` documents both forms.
 
 | Reader | Reads relation | Status |
 | --- | --- | --- |
-| `align_minimap2` (default + `per_subject_database`) | once | fixed, remedy (1) |
-| `align_minimap2_sharded` | once | fixed, remedy (2) |
+| `align_minimap2` (default + `per_subject_database`) | once | fixed, remedy (1); multi-part index uses remedy (2) |
+| `align_minimap2_sharded` | query once; routing once in the scan, plus a separate bind-time scan for shard discovery | fixed, remedy (2) on both relations |
 | `align_bowtie2_sharded` | once per shard | fixed by remedy (3) — fails loud |
 | `rype_classify`, `rype_log_ratio`, `rype_extract_*` | once | fixed, remedy (1) — guarded by `test/sql/rype_single_read.test` |
 | `per_sample_table_function` (`DiscoverSamples` + per-sample re-read) | once per sample | **exposed** — shared by `woltka_ogu`, `sylph_profile`, `detect_chimera_uchime`, `align_abpoa`, `consensus_abpoa`, `align_mafft`, `uchime_denovo`, `deblur`, `massql` |
@@ -206,10 +225,13 @@ Registered Arrow relations **do** work by name. DuckDB's `register()` creates a
 pyarrow `Table`, a persistent view wrapping one, and an externally sourced
 `RecordBatchReader` (e.g. Arrow Flight) all read correctly.
 
-The exception is an Arrow relation whose stream is a `StreamQueryResult` **on the
+The exception is an Arrow relation whose stream is a streaming query result **on the
 caller's own connection** — which is what `con.execute(...).arrow()` returns in
 DuckDB 1.5.4 (a lazy `RecordBatchReader`, not a `Table`). Reading that from a
-helper connection **deadlocks the process**, with every worker parked:
+helper connection **deadlocks the process**, with every worker parked. The account
+below was diagnosed on DuckDB 1.5.4, whose class names it uses; DuckDB 2.0 replaced
+those classes (`StreamQueryResult`, `ResultArrowArrayStreamWrapper`) with
+`QueryResult` + `ArrowFormat`, and the deadlock has not been re-verified there:
 
 - `ArrowScanParallelStateNext` (`duckdb/src/function/table/arrow.cpp:118`) takes
   `parallel_state.main_mutex`, then calls `stream->GetNextChunk()` at line 125
@@ -222,8 +244,10 @@ There is no mitigation available to us. The lock ordering is DuckDB's; detection
 cannot distinguish a self-backed stream from an external one; `ClientContext::
 Interrupt()` does not help (verified — it returns cleanly and the query stays
 hung, because the threads are parked in a pthread mutex rather than polling the
-interrupt flag); and DuckDB has no statement-timeout setting. Stock DuckDB
-silently returns 0 rows for the same construct, which is its own defect.
+interrupt flag); and DuckDB 1.5 has no statement-timeout setting. (2.0's
+`max_execution_time` is enforced through the same interrupt checks, which parked
+threads never reach.) Stock DuckDB silently returns 0 rows for the same construct,
+which is its own defect.
 
 The user-facing remedy is to materialize first — `.read_all()`, or a TEMP table.
 
