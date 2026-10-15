@@ -1,8 +1,6 @@
 #include "gpl_boundary/session.hpp"
 
-#include <array>
 #include <cstring>
-#include <fcntl.h>
 #include <memory>
 #include <pthread.h>
 #include <signal.h>
@@ -63,53 +61,6 @@ YyjsonDocPtr make_doc(yj::yyjson_doc *p) {
 // small enough not to pollute SQL error displays. Excess is truncated from the
 // front (we want the tail — that's where the failing-batch output lives).
 constexpr std::size_t kStderrTailCap = 4096;
-
-// Non-blocking drain of an fd, appending everything currently available to
-// `sink`. Used per-batch (Session::PumpStderr — keeps the daemon's stderr pipe
-// from filling, which would wedge the daemon on a blocked write while we wait
-// for its batch response) and on the failure paths (to grab the daemon's last
-// words). MUST be non-blocking — the daemon is typically still alive, so the
-// pipe has no EOF and a blocking read would hang.
-//
-// Restores the original O_NONBLOCK state on exit so other readers (none today,
-// but defensive) aren't surprised. Truncation is the caller's job (see
-// TruncateHead) so the rolling buffer is only trimmed once after appending.
-void AppendAvailableStderr(int fd, std::string &sink) {
-	if (fd < 0) {
-		return;
-	}
-	const int orig_flags = ::fcntl(fd, F_GETFL, 0);
-	if (orig_flags < 0) {
-		return;
-	}
-	if (!(orig_flags & O_NONBLOCK)) {
-		if (::fcntl(fd, F_SETFL, orig_flags | O_NONBLOCK) < 0) {
-			return;
-		}
-	}
-	std::array<char, 4096> buf {};
-	for (;;) {
-		ssize_t n = ::read(fd, buf.data(), buf.size());
-		if (n > 0) {
-			sink.append(buf.data(), static_cast<size_t>(n));
-			continue;
-		}
-		// n == 0 (EOF) or -1 (EAGAIN/EWOULDBLOCK/other): stop draining.
-		break;
-	}
-	if (!(orig_flags & O_NONBLOCK)) {
-		(void)::fcntl(fd, F_SETFL, orig_flags); // best effort restore
-	}
-}
-
-// Trim `s` from the front to at most `cap` bytes, prefixing a marker so the
-// reader knows output was dropped. Keeps the tail — that's where the
-// failing-batch output lives.
-void TruncateHead(std::string &s, std::size_t cap) {
-	if (s.size() > cap) {
-		s = "...(truncated head)...\n" + s.substr(s.size() - cap);
-	}
-}
 
 // Compose a "why did the daemon vanish" suffix for Submit's failure paths.
 // Reaps the child to decode its termination — a SIGTERM (e.g. PR_SET_PDEATHSIG

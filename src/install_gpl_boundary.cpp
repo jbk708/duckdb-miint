@@ -3,13 +3,11 @@
 #include "gpl_boundary/process.hpp"
 #include "yyjson.hpp"
 
-#include <array>
 #include <cerrno>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 #include "duckdb/common/vector/flat_vector.hpp"
@@ -76,65 +74,6 @@ std::string sh_quote(const std::string &s) {
 	return out;
 }
 
-// Drain everything from `fd` until EOF. Used to pull stdout / stderr off a
-// `gb::ChildProcess`. Robust to short reads and EINTR.
-std::string drain_fd(int fd) {
-	std::string out;
-	std::array<char, 4096> buf {};
-	for (;;) {
-		ssize_t n = ::read(fd, buf.data(), buf.size());
-		if (n > 0) {
-			out.append(buf.data(), static_cast<size_t>(n));
-			continue;
-		}
-		if (n == 0) {
-			break;
-		}
-		if (errno == EINTR) {
-			continue;
-		}
-		break; // any other error: bail with whatever we got
-	}
-	return out;
-}
-
-// Result of running a child process with separate stdout/stderr capture.
-struct ProcResult {
-	bool spawned = false;         // true iff fork+exec succeeded
-	bool exited_normally = false; // true iff child returned via exit()
-	int exit_code = -1;           // valid iff exited_normally
-	int term_signal = 0;          // non-zero iff WIFSIGNALED — child was killed
-	std::string stdout_text;
-	std::string stderr_text;
-	std::string spawn_error; // populated iff !spawned
-};
-
-// Fork+exec the binary at argv[0] with argv[1..], capture stdout and stderr
-// separately, wait, and return a structured result. No shell — no quoting
-// required. This is the injection-safe version-probe path.
-ProcResult run_argv(const std::vector<std::string> &argv) {
-	ProcResult r;
-	try {
-		gb::ChildProcess child(argv);
-		// Close stdin so the child immediately sees EOF and won't block
-		// waiting for input on a one-shot probe.
-		child.CloseStdin();
-		r.stdout_text = drain_fd(child.stdout_fd());
-		r.stderr_text = drain_fd(child.stderr_fd());
-		const int status = child.Wait();
-		r.spawned = true;
-		if (WIFEXITED(status)) {
-			r.exited_normally = true;
-			r.exit_code = WEXITSTATUS(status);
-		} else if (WIFSIGNALED(status)) {
-			r.term_signal = WTERMSIG(status);
-		}
-	} catch (const std::exception &e) {
-		r.spawn_error = e.what();
-	}
-	return r;
-}
-
 // gpl-boundary --version emits a JSON document like
 //   { "gpl_boundary": "0.1.0", "tools": [ ... ] }
 // Pull just the top-level "gpl_boundary" string. Uses yyjson (already linked
@@ -180,7 +119,7 @@ bool probe_existing(InstallReport &r) {
 	if (p.empty() || ::access(p.c_str(), X_OK) != 0) {
 		return false;
 	}
-	const ProcResult result = run_argv({p, "--version"});
+	const gb::RunResult result = gb::RunCapture({p, "--version"});
 	if (!result.spawned || !result.exited_normally || result.exit_code != 0) {
 		return false; // present but unusable; treat as missing so install can fix it
 	}
@@ -274,10 +213,10 @@ InstallReport install_impl(bool force) {
 	                           " -o " + sh_quote(install_sh) + " && " + "INSTALL_DIR=" + sh_quote(cache_dir) + " sh " +
 	                           sh_quote(install_sh);
 
-	const ProcResult install = run_argv({"/bin/sh", "-c", sh_cmd});
+	const gb::RunResult install = gb::RunCapture({"/bin/sh", "-c", sh_cmd});
 
 	// Best-effort cleanup of the tmpdir.
-	(void)run_argv({"/bin/rm", "-rf", tmpdir});
+	(void)gb::RunCapture({"/bin/rm", "-rf", tmpdir});
 
 	if (!install.spawned) {
 		r.message = "install_gpl_boundary: failed to spawn /bin/sh: " + install.spawn_error;
@@ -304,7 +243,7 @@ InstallReport install_impl(bool force) {
 
 	// 7. Probe version on the fresh binary (argv-based — no shell, no
 	//    injection risk regardless of what's in cache_bin).
-	const ProcResult ver = run_argv({cache_bin, "--version"});
+	const gb::RunResult ver = gb::RunCapture({cache_bin, "--version"});
 
 	r.installed = true;
 	r.path = cache_bin;
