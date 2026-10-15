@@ -1,19 +1,20 @@
 # name: test/sql/ena_upload_reads_bigmem.test
-# description: ena_upload_reads streaming memory proof — a single sample far larger than memory_limit uploads losslessly
+# description: ena_upload_reads uploads a single sample far larger than memory_limit losslessly
 # group: [sql]
 
 #
 # Opt-in / expensive (encodes millions of reads), so it is gated behind
-# MIINT_ENA_BIG_STREAM_TEST (exported by run_tests.sh when set). It proves the
-# per-sample streaming path handles a single sample whose materialised size far
-# exceeds the configured memory_limit.
+# MIINT_ENA_BIG_STREAM_TEST (exported by run_tests.sh when set). It checks that
+# a single sample whose materialised size far exceeds the configured
+# memory_limit uploads losslessly.
 #
-# The pre-streaming implementation read the whole relation into RAM (and a
-# prepared statement's result FORCE-materialises), so this would OOM. The
-# SendQuery streaming path Fetches one DataChunk at a time: peak RSS was measured
-# (manually, /usr/bin/time -v) at ~48 MB for 200k reads and ~49 MB for 2M reads —
-# flat in N. This test is the in-suite functional smoke that a multi-GB single
-# sample uploads losslessly without error; it does not itself assert RSS.
+# The streaming evidence is RSS, not this test. The SendQuery path Fetches one
+# DataChunk at a time: peak RSS of the DuckDB shell running this file's view
+# through ena_upload_reads (/usr/bin/time) was 116 MB for 200k reads, 108 MB for
+# 2M and 95 MB for 3M — flat in N. This test does not assert RSS, and it cannot
+# catch a materialized read through Query: a materialized Query result is
+# allocated outside DuckDB's tracked memory, so it completes under memory_limit
+# whenever the machine has the RAM.
 
 require miint
 
@@ -21,8 +22,8 @@ require-env MIINT_ENA_BIG_STREAM_TEST
 
 # Bound DuckDB's tracked memory well below the dataset's materialised footprint
 # (~1.4 GB for 3M x 200 bp reads + equal-length quality lists). A streaming scan
-# stays comfortably under this; a regression that materialised the scan (e.g. an
-# ORDER BY on the payload, or a prepared statement) would blow past it.
+# stays comfortably under this; an ORDER BY over the payload fails with Out of
+# Memory.
 statement ok
 SET memory_limit = '512MB';
 

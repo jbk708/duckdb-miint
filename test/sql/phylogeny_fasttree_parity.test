@@ -8,8 +8,7 @@
 # produced once by the standalone bioconda FastTree binary on the same input
 # with the same seed and options.
 #
-# Two fixtures, each gated by an independent env var so a stale fixture cannot
-# be silently masked by the other being fresh:
+# Two fixtures:
 #
 #   tiny.fa     — 6 tips, synthetic two-clade structure. SMOKE TEST. The
 #                 topology is so cleanly separated that any reasonable ML
@@ -44,11 +43,17 @@ require miint
 
 require-env GPL_BOUNDARY_AVAILABLE
 
-require-env FASTTREE_AVAILABLE
-
-require-env MIINT_FASTTREE_TINY_PARITY_OK
-
-require-env MIINT_FASTTREE_MODERATE_PARITY_OK
+# The goldens are committed. Each fixture still matches the sha256 recorded when its
+# golden was generated; after an edit to a fixture, regenerate with
+# MIINT_FASTTREE_REGENERATE=1 bash run_tests.sh.
+query II
+SELECT
+    (SELECT sha256(content) FROM read_blob('data/fasttree/tiny.fa')) =
+        (SELECT rtrim(content, chr(10)) FROM read_text('data/fasttree/tiny.golden.fixture.sha')) AS tiny_fresh,
+    (SELECT sha256(content) FROM read_blob('data/fasttree/moderate.fa')) =
+        (SELECT rtrim(content, chr(10)) FROM read_text('data/fasttree/moderate.golden.fixture.sha')) AS moderate_fresh;
+----
+true	true
 
 # Old single-arrow lambda syntax used in the bipartition CTE; without this
 # DuckDB 1.5 emits a deprecation warning. The lambda is structurally simple
@@ -74,13 +79,10 @@ COPY (
 statement ok
 CREATE TABLE tiny_miint AS SELECT * FROM read_newick('__TEST_DIR__/tiny.miint.nwk');
 
-# Path below is hardcoded rather than read from
-# $MIINT_FASTTREE_{TINY,MODERATE}_PARITY_OK because sqllogictest does not
-# interpolate env vars in `read_newick(...)` arguments. run_tests.sh sets each
-# *_PARITY_OK var to "1" only after the fixture-SHA-match check, so the
-# `require-env` guards above still gate staleness. If you relocate either
-# golden in run_tests.sh, update the corresponding read_newick path here in
-# the same commit.
+# The freshness check at the top of this file fails before this comparison when
+# a fixture no longer matches the sha256 recorded with its golden. If you
+# relocate a fixture or golden in run_tests.sh, update its paths here (the
+# freshness check and the read_fastx / read_newick calls) in the same commit.
 statement ok
 CREATE TABLE tiny_golden AS SELECT * FROM read_newick('data/fasttree/tiny.golden.nwk');
 
