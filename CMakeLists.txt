@@ -1177,6 +1177,12 @@ fi
         set(GLUE_CONFIGURE_CMD sh ${GLUE_WASM_RUST_PIN_SH} ${MIINT_WASM_RUST_TOOLCHAIN} ${GLUE_RUST_SRC_ARG})
         set(GLUE_RUSTUP_TOOLCHAIN ${MIINT_WASM_RUST_TOOLCHAIN})
         message(STATUS "Rust glue: pinning WASM build to toolchain ${MIINT_WASM_RUST_TOOLCHAIN} (emsdk 3.1.71 binaryen compat)")
+    elseif(MIINT_WASM_NATIVE_EH)
+        message(FATAL_ERROR
+            "The C++ uses wasm-native exceptions (-fwasm-exceptions), so the Rust glue must too, "
+            "which takes unstable flags on the pinned toolchain ${MIINT_WASM_RUST_TOOLCHAIN} with "
+            "its rust-src component. rustup was not found to provide them. Install rustup "
+            "(https://rustup.rs) and reconfigure.")
     endif()
     message(STATUS "Rust glue cross-compiling for wasm32-unknown-emscripten")
 elseif(WIN32)
