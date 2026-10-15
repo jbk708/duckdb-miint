@@ -207,6 +207,16 @@ SELECT * FROM predict('p_full', 'p_full');
 ----
 has no 'task' column
 
+# name := filters on the relation's name column, so a relation without one is
+# missing that column, whatever else it holds.
+statement ok
+CREATE TABLE p_unnamed AS SELECT model_blob, task, feature_id_type FROM p_rmodel;
+
+statement error
+SELECT * FROM predict('p_full', 'p_unnamed', name := 'm');
+----
+predict: Model relation 'p_unnamed' has no 'name' column
+
 # A model_blob that is not a BLOB -- a hand-assembled or CSV-round-tripped
 # model table -- is an input error. Reading it as one used to raise an INTERNAL
 # error, which invalidates the whole database, not just the query.
@@ -351,7 +361,7 @@ predict: named parameter 'name' must not be NULL
 statement error
 SELECT * FROM predict('p_test', 'p_model', n_threads := -1);
 ----
-predict: n_threads must be >= 0 (0 = one per core), got -1
+predict: n_threads must be >= 0 (0 = DuckDB's threads setting), got -1
 
 # --- dropped cells are reported, not just counted in known_feature_fraction ---
 

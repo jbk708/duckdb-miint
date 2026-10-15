@@ -97,6 +97,36 @@ SELECT * FROM model_features('text_then_big');
 ----
 model_features: model relation 'text_then_big' changed between planning and execution: its feature_id_type was VARCHAR, now BIGINT
 
+# Bind reads a model relation once, for task and feature_id_type together, as
+# every read of a view re-runs it. EXPLAIN binds without executing, so the
+# sequence counts bind's reads alone: five calls, five reads.
+statement ok
+CREATE SEQUENCE bind_reads;
+
+statement ok
+CREATE VIEW counted AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('bind_reads') > 0 THEN 'clf' END);
+
+statement ok
+EXPLAIN SELECT * FROM predict('d', 'counted');
+
+statement ok
+EXPLAIN SELECT * FROM predict_proba('d', 'counted');
+
+statement ok
+EXPLAIN SELECT * FROM shap('d', 'counted');
+
+statement ok
+EXPLAIN SELECT * FROM feature_importances('counted');
+
+statement ok
+EXPLAIN SELECT * FROM model_features('counted');
+
+query I
+SELECT nextval('bind_reads') - 1;
+----
+5
+
 # A relation that holds still reads the same model at every step.
 query I
 SELECT count(*) FROM predict('d', 'reg', name := 'clf');

@@ -25,9 +25,8 @@ namespace {
 // forest-parameter parsing -- lives in sc_rf_common.
 using sc_rf::ApplyDefaults;
 using sc_rf::ParseForestParameter;
-using sc_rf::RequireSameSamples;
 using sc_rf::ResolveTargetColumn;
-using sc_rf::ScanTargets;
+using sc_rf::ScanTrainingInput;
 using sc_rf::ScTrainingInput;
 using sc_rf::ValidateForestParameters;
 
@@ -168,47 +167,16 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	const auto &bind = input.bind_data->Cast<ScFitData>();
 	auto conn = MakeReadOnlyHelperConnection(context);
 
-	// instantiate the builder class on the function stack, intake triplets, canoncialise them, and produce a sparse
-	// matrix.
-	miint::ScCooBuilder builder;
-	miint::ScanCooRelation(context, conn, bind.data_relation, bind.caller, builder);
-	if (builder.NumNonZeros() == 0) {
-		throw InvalidInputException("%s: data relation '%s' produced no cells", bind.caller, bind.data_relation);
-	}
-	miint::RequireNoDuplicateCells(builder, bind.caller, bind.data_relation);
-
-	// Targets are positional: element i must be the label for sample index i.
-	// The order comes from the builder's sorted dictionary, looked up through a
-	// hash -- never from a second ORDER BY, whose collation need not match
-	// std::string's byte ordering.
 	miint::OwnedArrowArray targets;
-	std::vector<std::string> data_samples;
-	auto table = std::unique_ptr<miint::ScCooTable> {};
-
+	std::unique_ptr<miint::ScCooTable> table;
 	if (bind.classification) {
-		auto labels = ScanTargets<string>(conn, bind);
-		table = builder.Finalize();
-		// sorted sample ids after Finalize()
-		data_samples = table->SampleIds();
-		RequireSameSamples(data_samples, labels, bind);
-		std::vector<std::string> ordered;
-		ordered.reserve(data_samples.size());
-		for (const auto &s : data_samples) {
-			ordered.push_back(labels.at(s));
-		}
-		miint::ExportUtf8(*targets.array(), *targets.schema(), ordered);
+		std::vector<std::string> labels;
+		table = ScanTrainingInput(context, conn, bind, labels);
+		miint::ExportUtf8(*targets.array(), *targets.schema(), labels);
 	} else {
-		auto values = ScanTargets<double>(conn, bind);
-		table = builder.Finalize();
-		// sorted sample ids after Finalize()
-		data_samples = table->SampleIds();
-		RequireSameSamples(data_samples, values, bind);
-		std::vector<double> ordered;
-		ordered.reserve(data_samples.size());
-		for (const auto &s : data_samples) {
-			ordered.push_back(values.at(s));
-		}
-		miint::ExportFloat64(*targets.array(), *targets.schema(), std::move(ordered));
+		std::vector<double> values;
+		table = ScanTrainingInput(context, conn, bind, values);
+		miint::ExportFloat64(*targets.array(), *targets.schema(), std::move(values));
 	}
 
 	// Fully resolved at bind time, so a bad parameter fails the query before any
@@ -216,7 +184,7 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	const sc_rf_params_t &params = bind.params;
 
 	miint::ScContext ctx;
-	miint::OpenScContext(bind.n_threads, bind.caller, ctx);
+	miint::OpenScContext(context, bind.n_threads, bind.caller, ctx);
 
 	// sc borrows the table and the targets for the call and frees neither; both
 	// are released here on scope exit. Fit the model and serialize it into a blob.

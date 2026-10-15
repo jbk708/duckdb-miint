@@ -23,9 +23,8 @@ namespace {
 // parsing -- lives in sc_rf_common.
 using sc_rf::ApplyDefaults;
 using sc_rf::ParseForestParameter;
-using sc_rf::RequireSameSamples;
 using sc_rf::ResolveTargetColumn;
-using sc_rf::ScanTargets;
+using sc_rf::ScanTrainingInput;
 using sc_rf::ScTrainingInput;
 using sc_rf::ValidateForestParameters;
 
@@ -168,38 +167,16 @@ unique_ptr<GlobalTableFunctionState> ScCvInitGlobal(ClientContext &, TableFuncti
 void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobalState &gstate) {
 	auto conn = MakeReadOnlyHelperConnection(context);
 
-	miint::ScCooBuilder builder;
-	miint::ScanCooRelation(context, conn, bind.data_relation, bind.caller, builder);
-	if (builder.NumNonZeros() == 0) {
-		throw InvalidInputException("%s: data relation '%s' produced no cells", bind.caller, bind.data_relation);
-	}
-	miint::RequireNoDuplicateCells(builder, bind.caller, bind.data_relation);
-
-	// Targets are positional: element i is the target of sample index i, in the
-	// builder's sorted dictionary order.
 	miint::OwnedArrowArray targets;
 	std::unique_ptr<miint::ScCooTable> table;
 	if (bind.classification) {
-		auto labels = ScanTargets<string>(conn, bind);
-		table = builder.Finalize();
-		gstate.sample_ids = table->SampleIds();
-		RequireSameSamples(gstate.sample_ids, labels, bind);
-		gstate.actual_labels.reserve(gstate.sample_ids.size());
-		for (const auto &s : gstate.sample_ids) {
-			gstate.actual_labels.push_back(labels.at(s));
-		}
+		table = ScanTrainingInput(context, conn, bind, gstate.actual_labels);
 		miint::ExportUtf8(*targets.array(), *targets.schema(), gstate.actual_labels);
 	} else {
-		auto values = ScanTargets<double>(conn, bind);
-		table = builder.Finalize();
-		gstate.sample_ids = table->SampleIds();
-		RequireSameSamples(gstate.sample_ids, values, bind);
-		gstate.actual_values.reserve(gstate.sample_ids.size());
-		for (const auto &s : gstate.sample_ids) {
-			gstate.actual_values.push_back(values.at(s));
-		}
+		table = ScanTrainingInput(context, conn, bind, gstate.actual_values);
 		miint::ExportFloat64(*targets.array(), *targets.schema(), gstate.actual_values);
 	}
+	gstate.sample_ids = table->SampleIds();
 
 	const auto n_samples = gstate.sample_ids.size();
 	// Caught here rather than in sc, where the message would name a matrix rather
@@ -210,7 +187,7 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 	}
 
 	miint::ScContext ctx;
-	miint::OpenScContext(bind.n_threads, bind.caller, ctx);
+	miint::OpenScContext(context, bind.n_threads, bind.caller, ctx);
 
 	sc_cv_result_t res {};
 	const auto st = sc_cross_validate(ctx.ptr, table->get(), targets.array(), targets.schema(), &bind.params, &res);
@@ -232,16 +209,9 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 		// the class array to the probability columns; that order is carried into
 		// every row rather than re-derived here.
 		const auto class_labels = classes.ReadUtf8("sc_cross_validate classes");
-		int64_t width = 0;
-		gstate.proba = proba.ReadFixedSizeListFloat64("sc_cross_validate proba", width);
 		gstate.n_classes = class_labels.size();
-		if (static_cast<size_t>(width) != gstate.n_classes ||
-		    gstate.proba.size() != gstate.sample_ids.size() * gstate.n_classes) {
-			throw InternalException("sc_cross_validate: %llu probabilities of width %lld for %llu samples x %llu "
-			                        "classes",
-			                        (uint64_t)gstate.proba.size(), (int64_t)width, (uint64_t)gstate.sample_ids.size(),
-			                        (uint64_t)gstate.n_classes);
-		}
+		gstate.proba =
+		    miint::ReadProbaMatrix(proba, gstate.n_classes, gstate.sample_ids.size(), "sc_cross_validate proba");
 		duckdb::vector<Value> class_values;
 		class_values.reserve(class_labels.size());
 		for (const auto &c : class_labels) {

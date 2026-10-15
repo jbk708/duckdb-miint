@@ -62,11 +62,10 @@ unique_ptr<FunctionData> ScPredictBind(ClientContext &context, TableFunctionBind
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, "predict");
-		data->classification =
-		    miint::ReadModelTask(conn, data->model_relation, data->model_name, "predict") == "classification";
-		miint::RequireModelFeatureIdType(
-		    miint::ReadModelFeatureIdType(conn, data->model_relation, data->model_name, "predict"),
-		    data->id_types.feature_id, "predict", data->model_relation, data->model_name, data->data_relation);
+		const auto header = miint::ReadModelHeader(conn, data->model_relation, data->model_name, "predict", true);
+		data->classification = header.task == "classification";
+		miint::RequireModelFeatureIdType(header.feature_id_type, data->id_types.feature_id, "predict",
+		                                 data->model_relation, data->model_name, data->data_relation);
 	}
 
 	names = {"sample_id", "prediction", "known_feature_fraction"};
@@ -90,60 +89,16 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(bind.n_threads, "predict", ctx);
+		miint::OpenScContext(context, bind.n_threads, "predict", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict",
 		                             bind.classification ? "classification" : "regression", bind.id_types.feature_id,
 		                             ctx.ptr, model);
 
-		// The vocabulary comes out of the model, in the model's column order.
-		// This is the whole reason sc_model_feature_ids exists.
-		miint::OwnedArrowArray vocab_array;
-		if (auto st = sc_model_feature_ids(model.ptr, vocab_array.array(), vocab_array.schema()); st != SC_OK) {
-			miint::ThrowSc("sc_model_feature_ids", nullptr, st);
-		}
-		auto vocab = vocab_array.ReadUtf8("sc_model_feature_ids");
-
-		miint::ScCooBuilder builder;
-		builder.SetFeatureVocabulary(std::move(vocab));
-		miint::ScanCooRelation(context, conn, bind.data_relation, "predict", builder);
-		miint::RequireNoDuplicateCells(builder, "predict", bind.data_relation);
-
-		const auto builder_dropped = builder.DroppedCells();
-		auto table = builder.Finalize();
-		if (!table) {
-			throw InvalidInputException("predict: data relation '%s' produced no samples", bind.data_relation);
-		}
+		auto table = miint::ScanForModel(context, conn, model, bind.data_relation, "predict",
+		                                 " and are predicted from an all-zero row");
 		gstate.sample_ids = table->SampleIds();
 		gstate.known_fraction = table->KnownFeatureFraction();
-
-		// Every cell dropped means the model shares no vocabulary at all with
-		// this data -- a different reference database or pipeline, not a
-		// borderline case. Predicting from an all-zero matrix would return
-		// confident nonsense.
-		if (builder_dropped > 0 && table->NumNonZeros() == 0) {
-			throw InvalidInputException(
-			    "predict: none of the %llu cells in '%s' use a feature this model was trained on; "
-			    "the data and the model do not share a feature vocabulary",
-			    (uint64_t)builder_dropped, bind.data_relation);
-		}
-		size_t empty_samples = 0;
-		for (auto c : gstate.known_fraction) {
-			if (c == 0.0) {
-				empty_samples++;
-			}
-		}
-		if (builder_dropped > 0) {
-			miint::EmitWarning(context,
-			                   "predict: dropped %llu cell(s) from '%s' whose feature the model was not "
-			                   "trained on%s. See the known_feature_fraction column.",
-			                   (uint64_t)builder_dropped, bind.data_relation.c_str(),
-			                   empty_samples > 0
-			                       ? (" -- " + std::to_string(empty_samples) +
-			                          " sample(s) retained no features at all and are predicted from an all-zero row")
-			                             .c_str()
-			                       : "");
-		}
 
 		miint::OwnedArrowArray pred;
 		if (auto st = sc_predict(ctx.ptr, model.ptr, table->get(), pred.array(), pred.schema()); st != SC_OK) {

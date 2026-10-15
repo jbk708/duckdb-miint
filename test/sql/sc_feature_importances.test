@@ -146,7 +146,7 @@ has a NULL model
 statement error
 SELECT * FROM feature_importances('no_such_relation');
 ----
-Could not read 'feature_id_type'
+feature_importances: Could not read model relation 'no_such_relation'
 
 # A blob that is not a serialized sc model.
 statement ok

@@ -179,7 +179,8 @@ ScCooTable::~ScCooTable() {
 */
 int64_t ScCooBuilder::Intern(std::unordered_map<std::string, int64_t> &index, std::vector<std::string> &ids,
                              std::string_view id) {
-	auto it = index.find(std::string(id));
+	key_.assign(id.data(), id.size());
+	auto it = index.find(key_);
 	if (it != index.end()) {
 		return it->second; // if found return the unique id int64
 	}
@@ -232,7 +233,8 @@ void ScCooBuilder::Append(std::string_view sample_id, std::string_view feature_i
 		// vocabulary happens to be sorted today (our fit sorts it), but binary
 		// search would bake that in -- a model fit through sc's C API directly,
 		// or a future RFE-reordered bundle, would then mis-resolve silently.
-		const auto it = feature_index_.find(std::string(feature_id));
+		key_.assign(feature_id.data(), feature_id.size());
+		const auto it = feature_index_.find(key_);
 		if (it == feature_index_.end()) {
 			dropped_cells_++; // drop it, its not in the model's vocabulary for prediction, and count it for reporting
 			return;

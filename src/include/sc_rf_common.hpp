@@ -179,5 +179,31 @@ void RequireSameSamples(const std::vector<std::string> &data_samples, const std:
 	throw InvalidInputException(msg);
 }
 
+//! Scan a training input: its cells into a table, and its targets into
+//! `targets` in the table's sample order, the order sc reads them in. That
+//! order comes from the table's sorted sample ids, looked up through a hash,
+//! never from a second ORDER BY, whose collation need not match std::string's
+//! byte order.
+template <class T>
+std::unique_ptr<miint::ScCooTable> ScanTrainingInput(ClientContext &context, Connection &conn,
+                                                     const ScTrainingInput &bind, std::vector<T> &targets) {
+	miint::ScCooBuilder builder;
+	miint::ScanCooRelation(context, conn, bind.data_relation, bind.caller, builder);
+	if (builder.NumNonZeros() == 0) {
+		throw InvalidInputException("%s: data relation '%s' produced no cells", bind.caller, bind.data_relation);
+	}
+	miint::RequireNoDuplicateCells(builder, bind.caller, bind.data_relation);
+
+	const auto by_sample = ScanTargets<T>(conn, bind);
+	auto table = builder.Finalize();
+	RequireSameSamples(table->SampleIds(), by_sample, bind);
+	targets.clear();
+	targets.reserve(table->SampleIds().size());
+	for (const auto &s : table->SampleIds()) {
+		targets.push_back(by_sample.at(s));
+	}
+	return table;
+}
+
 } // namespace sc_rf
 } // namespace duckdb

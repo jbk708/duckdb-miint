@@ -48,7 +48,8 @@ unique_ptr<FunctionData> ScModelFeaturesBind(ClientContext &context, TableFuncti
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->feature_id_type =
-		    miint::ReadModelFeatureIdType(conn, data->model_relation, data->model_name, "model_features");
+		    miint::ReadModelHeader(conn, data->model_relation, data->model_name, "model_features", false)
+		        .feature_id_type;
 	}
 	names = {"feature_id", "column_index"};
 	return_types = {data->feature_id_type, LogicalType::BIGINT};
@@ -70,7 +71,7 @@ void ScModelFeaturesExecute(ClientContext &context, TableFunctionInput &input, D
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(0, "model_features", ctx);
+		miint::OpenScContext(context, 0, "model_features", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "model_features", "",
 		                             bind.feature_id_type, ctx.ptr, model);

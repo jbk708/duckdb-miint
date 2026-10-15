@@ -106,21 +106,31 @@ void TakeArray(ArrowArray &src, ArrowSchema &src_schema, OwnedArrowArray &dst);
 //! could only hold an earlier, unrelated message.
 [[noreturn]] void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status);
 
-//! Open an sc context running on `n_threads` (0: rayon's global pool),
-//! throwing as `caller` on failure.
+//! Open an sc context running on `n_threads`, or on DuckDB's `threads` setting
+//! when it is 0, as the extension's other multi-threaded functions do; throws
+//! as `caller` on failure.
 //!
 //! `n_threads` is ignored under Emscripten. DuckDB-Wasm has one thread, the
 //! global pool is seeded on it at load (miint_rust_glue_init), and a dedicated
 //! pool would need threads it cannot spawn. sc's results are identical at any
 //! thread count, so only speed differs.
-void OpenScContext(int32_t n_threads, const char *caller, ScContext &out);
+void OpenScContext(duckdb::ClientContext &context, int32_t n_threads, const char *caller, ScContext &out);
 
-//! Parse `n_threads`: 0 for one thread per core, or a count. sc reads any value
-//! <= 0 as "every core", so a negative one is refused rather than passed on.
+//! Parse `n_threads`: 0 for DuckDB's `threads` setting, or a count. sc reads
+//! any value <= 0 as "every core", so a negative one is refused rather than
+//! passed on.
 int32_t ParseNThreads(const duckdb::Value &v, const char *caller);
 
-//! Read the `task` column of a model relation: "classification" or
-//! "regression".
+//! What bind reads from a model row to type its output.
+struct ScModelHeader {
+	//! "classification" or "regression"; empty when not read.
+	std::string task;
+	//! The type of the feature ids the model was fit on.
+	duckdb::LogicalType feature_id_type;
+};
+
+//! Read a model row's `feature_id_type`, and its `task` when `with_task`, in one
+//! query: every read of a view re-runs it.
 //!
 //! A table function must declare its return types at bind time, and a
 //! prediction column is VARCHAR for a classifier and DOUBLE for a regressor.
@@ -128,8 +138,8 @@ int32_t ParseNThreads(const duckdb::Value &v, const char *caller);
 //! `forest.task()` -- but sc exposes no C accessor for it, so the fit writes it
 //! into the model relation and this reads it back. Deciding the schema from the
 //! data is the same thing `read_csv` does when it sniffs a file.
-std::string ReadModelTask(duckdb::Connection &conn, const std::string &relation, const std::string &name,
-                          const char *caller);
+ScModelHeader ReadModelHeader(duckdb::Connection &conn, const std::string &relation, const std::string &name,
+                              const char *caller, bool with_task);
 
 //! Build the `WHERE name = '...'` clause for a model lookup, or an empty string
 //! when no name was given.
@@ -159,6 +169,19 @@ ScIdTypes ProbeIdTypes(duckdb::Connection &conn, const std::string &relation, co
 void ScanCooRelation(duckdb::ClientContext &context, duckdb::Connection &conn, const std::string &relation,
                      const char *caller, ScCooBuilder &builder);
 
+//! Scan a data relation against a model's feature vocabulary: the intake every
+//! function that applies a model shares, so they accept, drop and warn alike.
+//! Cells of features the model was not trained on are dropped and reported in
+//! a warning; a sample left with none is counted in it, followed by
+//! `empty_effect`, the consequence for this caller's output. Data sharing no
+//! feature with the model is refused.
+std::unique_ptr<ScCooTable> ScanForModel(duckdb::ClientContext &context, duckdb::Connection &conn, const ScModel &model,
+                                         const std::string &relation, const char *caller, const char *empty_effect);
+
+//! Read sc's class probabilities, one row of `n_classes` per sample, flat and
+//! row-major, checking the width and length before any caller indexes them.
+std::vector<double> ReadProbaMatrix(const OwnedArrowArray &proba, size_t n_classes, size_t n_samples, const char *what);
+
 //! Reject a `(sample_id, feature_id)` pair that appears more than once.
 //!
 //! sc sums duplicates, which is right for repeat measurements and wrong for a
@@ -167,11 +190,6 @@ void ScanCooRelation(duckdb::ClientContext &context, duckdb::Connection &conn, c
 //! ones point at a fanout (deduplicate), differing ones at repeat measurements
 //! (aggregate deliberately).
 void RequireNoDuplicateCells(const ScCooBuilder &builder, const char *caller, const std::string &relation);
-
-//! Read the `feature_id_type` column of a model relation: the type of the
-//! feature ids the model was fit on.
-duckdb::LogicalType ReadModelFeatureIdType(duckdb::Connection &conn, const std::string &relation,
-                                           const std::string &name, const char *caller);
 
 //! Reject data whose feature_id type differs from the model's.
 //!

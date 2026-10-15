@@ -61,8 +61,8 @@ unique_ptr<FunctionData> ScProbaBind(ClientContext &context, TableFunctionBindIn
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, "predict_proba");
-		const auto task = miint::ReadModelTask(conn, data->model_relation, data->model_name, "predict_proba");
-		if (task != "classification") {
+		const auto header = miint::ReadModelHeader(conn, data->model_relation, data->model_name, "predict_proba", true);
+		if (header.task != "classification") {
 			throw InvalidInputException("predict_proba: The model in '%s' is a regressor, which has no classes to give "
 			                            "probabilities over.\n\n"
 			                            "Remedy:\n"
@@ -70,9 +70,8 @@ unique_ptr<FunctionData> ScProbaBind(ClientContext &context, TableFunctionBindIn
 			                            "    SELECT * FROM predict('%s', '%s');",
 			                            data->model_relation, data->data_relation, data->model_relation);
 		}
-		miint::RequireModelFeatureIdType(
-		    miint::ReadModelFeatureIdType(conn, data->model_relation, data->model_name, "predict_proba"),
-		    data->id_types.feature_id, "predict_proba", data->model_relation, data->model_name, data->data_relation);
+		miint::RequireModelFeatureIdType(header.feature_id_type, data->id_types.feature_id, "predict_proba",
+		                                 data->model_relation, data->model_name, data->data_relation);
 	}
 
 	names = {"sample_id", "class", "probability", "known_feature_fraction"};
@@ -93,37 +92,13 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(bind.n_threads, "predict_proba", ctx);
+		miint::OpenScContext(context, bind.n_threads, "predict_proba", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict_proba", "classification",
 		                             bind.id_types.feature_id, ctx.ptr, model);
 
-		miint::OwnedArrowArray vocab;
-		if (auto st = sc_model_feature_ids(model.ptr, vocab.array(), vocab.schema()); st != SC_OK) {
-			miint::ThrowSc("sc_model_feature_ids", nullptr, st);
-		}
-		miint::ScCooBuilder builder;
-		builder.SetFeatureVocabulary(vocab.ReadUtf8("sc_model_feature_ids"));
-		miint::ScanCooRelation(context, conn, bind.data_relation, "predict_proba", builder);
-		miint::RequireNoDuplicateCells(builder, "predict_proba", bind.data_relation);
-
-		const auto dropped = builder.DroppedCells();
-		auto table = builder.Finalize();
-		if (!table) {
-			throw InvalidInputException("predict_proba: data relation '%s' produced no samples", bind.data_relation);
-		}
-		if (dropped > 0 && table->NumNonZeros() == 0) {
-			throw InvalidInputException(
-			    "predict_proba: none of the %llu cells in '%s' use a feature this model was trained on; "
-			    "the data and the model do not share a feature vocabulary",
-			    (uint64_t)dropped, bind.data_relation);
-		}
-		if (dropped > 0) {
-			miint::EmitWarning(context,
-			                   "predict_proba: dropped %llu cell(s) from '%s' whose feature the model was not "
-			                   "trained on. See the known_feature_fraction column.",
-			                   (uint64_t)dropped, bind.data_relation.c_str());
-		}
+		auto table = miint::ScanForModel(context, conn, model, bind.data_relation, "predict_proba",
+		                                 " and are predicted from an all-zero row");
 		gstate.sample_ids = table->SampleIds();
 		gstate.known_fraction = table->KnownFeatureFraction();
 
@@ -135,19 +110,9 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		}
 		gstate.classes = classes.ReadUtf8("sc_predict_proba classes");
 
-		int64_t width = 0;
-		gstate.proba = proba.ReadFixedSizeListFloat64("sc_predict_proba", width);
-		// The list width IS the class count -- one probability per class, in the
-		// order the classes array reports.
-		if (static_cast<size_t>(width) != gstate.classes.size()) {
-			throw InternalException("sc_predict_proba: %lld probabilities per sample but %llu classes", (int64_t)width,
-			                        (uint64_t)gstate.classes.size());
-		}
-		if (gstate.proba.size() != gstate.sample_ids.size() * gstate.classes.size()) {
-			throw InternalException("sc_predict_proba: %llu probabilities for %llu samples x %llu classes",
-			                        (uint64_t)gstate.proba.size(), (uint64_t)gstate.sample_ids.size(),
-			                        (uint64_t)gstate.classes.size());
-		}
+		// One probability per class, in the order the classes array reports.
+		gstate.proba =
+		    miint::ReadProbaMatrix(proba, gstate.classes.size(), gstate.sample_ids.size(), "sc_predict_proba");
 	}
 
 	// One row per (sample, class): index i is sample i / n_classes, class

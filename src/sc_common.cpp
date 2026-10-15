@@ -1,10 +1,12 @@
 #include "sc_common.hpp"
 
 #include "id_column_utils.hpp"
+#include "miint_log.hpp"
 
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 
 #include <cmath>
@@ -150,16 +152,19 @@ void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status) {
 int32_t ParseNThreads(const duckdb::Value &v, const char *caller) {
 	const auto n = v.GetValue<int32_t>();
 	if (n < 0) {
-		throw InvalidInputException("%s: n_threads must be >= 0 (0 = one per core), got %d", caller, n);
+		throw InvalidInputException("%s: n_threads must be >= 0 (0 = DuckDB's threads setting), got %d", caller, n);
 	}
 	return n;
 }
 
-void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
+void OpenScContext(duckdb::ClientContext &context, int32_t n_threads, const char *caller, ScContext &out) {
 	sc_config_t config {};
 #ifndef __EMSCRIPTEN__
-	config.n_threads = n_threads;
+	config.n_threads =
+	    n_threads > 0 ? n_threads
+	                  : duckdb::NumericCast<int32_t>(duckdb::TaskScheduler::GetScheduler(context).NumberOfThreads());
 #else
+	(void)context;
 	(void)n_threads;
 #endif
 	if (auto st = sc_context_new(&config, &out.ptr); st != SC_OK) {
@@ -210,29 +215,76 @@ std::string ModelNameFilter(const std::string &name) {
 	return " WHERE name = " + duckdb::KeywordHelper::WriteQuoted(name, '\'');
 }
 
-std::string ReadModelTask(duckdb::Connection &conn, const std::string &relation, const std::string &name,
-                          const char *caller) {
+namespace {
+
+//! Name the column a failed model-relation read lacked. The engine reports the
+//! first column it could not bind, which is not always the one to fix: without
+//! a `name` column the WHERE clause fails before `task` is looked at.
+[[noreturn]] void ThrowModelReadError(duckdb::Connection &conn, const std::string &relation, const std::string &name,
+                                      const char *caller, bool with_task, const std::string &error) {
 	const auto q = duckdb::KeywordHelper::WriteOptionallyQuoted(relation);
-	auto result = conn.Query("SELECT task FROM " + q + ModelNameFilter(name));
-	if (result->HasError()) {
+	auto probe = conn.Query("SELECT * FROM " + q + " LIMIT 0");
+	if (probe->HasError()) {
+		throw InvalidInputException("%s: Could not read model relation '%s'.\n  Engine error : %s", caller, relation,
+		                            probe->GetError());
+	}
+	const auto has = [&](const char *column) {
+		for (const auto &n : probe->names) {
+			if (duckdb::StringUtil::CIEquals(n, column)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	if (!name.empty() && !has("name")) {
 		throw InvalidInputException(
-		    "%s: Model relation '%s' has no 'task' column.\n"
-		    "  Engine error : %s\n\n"
+		    "%s: Model relation '%s' has no 'name' column, so name := '%s' selects nothing.\n\n"
+		    "Remedy:\n"
+		    "  Leave out name := for a relation holding one model, or store the whole row from a fit:\n"
+		    "    CREATE TABLE models AS SELECT * FROM fit_classifier('counts', 'meta', name := 'm1');",
+		    caller, relation, name);
+	}
+	if (with_task && !has("task")) {
+		throw InvalidInputException(
+		    "%s: Model relation '%s' has no 'task' column.\n\n"
 		    "A model row carries more than its bytes: 'task' says whether it predicts a label or a\n"
 		    "number, which is how the prediction column gets its type.\n\n"
 		    "Remedy:\n"
 		    "  Store the whole row from a fit, not just the blob:\n"
 		    "    CREATE TABLE models AS SELECT * FROM fit_classifier('counts', 'meta', name := 'm1');",
-		    caller, relation, result->GetError());
+		    caller, relation);
 	}
-	std::string task;
+	if (!has("feature_id_type")) {
+		throw InvalidInputException(
+		    "%s: Could not read 'feature_id_type' from model relation '%s': it has no such column.\n\n"
+		    "A model row records the feature_id type it was fit on, which data must match.\n\n"
+		    "Remedy:\n"
+		    "  Store the whole row from a fit, refitting if the model predates this column:\n"
+		    "    CREATE TABLE models AS SELECT * FROM fit_classifier('counts', 'meta', name := 'm1');",
+		    caller, relation);
+	}
+	throw InvalidInputException("%s: Could not read model relation '%s'.\n  Engine error : %s", caller, relation,
+	                            error);
+}
+
+} // namespace
+
+ScModelHeader ReadModelHeader(duckdb::Connection &conn, const std::string &relation, const std::string &name,
+                              const char *caller, bool with_task) {
+	const auto q = duckdb::KeywordHelper::WriteOptionallyQuoted(relation);
+	auto result = conn.Query(std::string("SELECT feature_id_type::VARCHAR") + (with_task ? ", task::VARCHAR" : "") +
+	                         " FROM " + q + ModelNameFilter(name));
+	if (result->HasError()) {
+		ThrowModelReadError(conn, relation, name, caller, with_task, result->GetError());
+	}
+	duckdb::Value type, task;
 	int64_t rows = 0;
 	while (auto chunk = result->Fetch()) {
 		for (duckdb::idx_t row = 0; row < chunk->size(); row++) {
 			if (rows++ == 0) {
-				auto v = chunk->data[0].GetValue(row);
-				if (!v.IsNull()) {
-					task = v.ToString();
+				type = chunk->data[0].GetValue(row);
+				if (with_task) {
+					task = chunk->data[1].GetValue(row);
 				}
 			}
 		}
@@ -240,12 +292,27 @@ std::string ReadModelTask(duckdb::Connection &conn, const std::string &relation,
 	if (rows != 1) {
 		RejectModelSelection(caller, relation, name, rows);
 	}
-	if (task != "classification" && task != "regression") {
-		throw InvalidInputException("%s: model relation '%s' has task '%s'; expected 'classification' or "
-		                            "'regression'",
-		                            caller, relation, task);
+
+	ScModelHeader header;
+	if (with_task) {
+		header.task = task.IsNull() ? "" : task.ToString();
+		if (header.task != "classification" && header.task != "regression") {
+			throw InvalidInputException("%s: model relation '%s' has task '%s'; expected 'classification' or "
+			                            "'regression'",
+			                            caller, relation, header.task);
+		}
 	}
-	return task;
+	const auto type_name = type.IsNull() ? std::string() : type.ToString();
+	for (const auto &allowed :
+	     {duckdb::LogicalType(duckdb::LogicalType::VARCHAR), duckdb::LogicalType(duckdb::LogicalType::BIGINT),
+	      duckdb::LogicalType(duckdb::LogicalType::UUID)}) {
+		if (type_name == allowed.ToString()) {
+			header.feature_id_type = allowed;
+			return header;
+		}
+	}
+	throw InvalidInputException("%s: model relation '%s' has feature_id_type '%s'; expected %s", caller, relation,
+	                            type_name, duckdb::AllowedIdTypeList());
 }
 
 namespace {
@@ -400,44 +467,58 @@ void RequireNoDuplicateCells(const ScCooBuilder &builder, const char *caller, co
 	throw InvalidInputException(msg);
 }
 
-duckdb::LogicalType ReadModelFeatureIdType(duckdb::Connection &conn, const std::string &relation,
-                                           const std::string &name, const char *caller) {
-	const auto q = duckdb::KeywordHelper::WriteOptionallyQuoted(relation);
-	auto result = conn.Query("SELECT feature_id_type FROM " + q + ModelNameFilter(name));
-	if (result->HasError()) {
-		throw InvalidInputException(
-		    "%s: Could not read 'feature_id_type' from model relation '%s'.\n"
-		    "  Engine error : %s\n\n"
-		    "A model row records the feature_id type it was fit on, which data must match.\n\n"
-		    "Remedy:\n"
-		    "  Store the whole row from a fit, refitting if the model predates this column:\n"
-		    "    CREATE TABLE models AS SELECT * FROM fit_classifier('counts', 'meta', name := 'm1');",
-		    caller, relation, result->GetError());
+std::unique_ptr<ScCooTable> ScanForModel(duckdb::ClientContext &context, duckdb::Connection &conn, const ScModel &model,
+                                         const std::string &relation, const char *caller, const char *empty_effect) {
+	// The vocabulary comes out of the model, in the model's column order.
+	OwnedArrowArray vocab;
+	if (auto st = sc_model_feature_ids(model.ptr, vocab.array(), vocab.schema()); st != SC_OK) {
+		ThrowSc("sc_model_feature_ids", nullptr, st);
 	}
-	std::string type;
-	int64_t rows = 0;
-	while (auto chunk = result->Fetch()) {
-		for (duckdb::idx_t row = 0; row < chunk->size(); row++) {
-			if (rows++ == 0) {
-				auto v = chunk->data[0].GetValue(row);
-				if (!v.IsNull()) {
-					type = v.ToString();
-				}
+	ScCooBuilder builder;
+	builder.SetFeatureVocabulary(vocab.ReadUtf8("sc_model_feature_ids"));
+	ScanCooRelation(context, conn, relation, caller, builder);
+	RequireNoDuplicateCells(builder, caller, relation);
+
+	const auto dropped = builder.DroppedCells();
+	auto table = builder.Finalize();
+	if (!table) {
+		throw InvalidInputException("%s: data relation '%s' produced no samples", caller, relation);
+	}
+	// Every cell dropped means the model shares no vocabulary at all with this
+	// data -- a different reference database or pipeline, not a borderline case.
+	// Applying the model to an all-zero matrix would return confident nonsense.
+	if (dropped > 0 && table->NumNonZeros() == 0) {
+		throw InvalidInputException("%s: none of the %llu cells in '%s' use a feature this model was trained on; "
+		                            "the data and the model do not share a feature vocabulary",
+		                            caller, (uint64_t)dropped, relation);
+	}
+	if (dropped > 0) {
+		size_t empty_samples = 0;
+		for (auto f : table->KnownFeatureFraction()) {
+			if (f == 0.0) {
+				empty_samples++;
 			}
 		}
+		const auto empty_note = empty_samples > 0 ? " -- " + std::to_string(empty_samples) +
+		                                                " sample(s) retained no features at all" + empty_effect
+		                                          : std::string();
+		EmitWarning(context,
+		            "%s: dropped %llu cell(s) from '%s' whose feature the model was not trained on%s. See the "
+		            "known_feature_fraction column.",
+		            caller, (uint64_t)dropped, relation.c_str(), empty_note.c_str());
 	}
-	if (rows != 1) {
-		RejectModelSelection(caller, relation, name, rows);
+	return table;
+}
+
+std::vector<double> ReadProbaMatrix(const OwnedArrowArray &proba, size_t n_classes, size_t n_samples,
+                                    const char *what) {
+	int64_t width = 0;
+	auto p = proba.ReadFixedSizeListFloat64(what, width);
+	if (static_cast<size_t>(width) != n_classes || p.size() != n_samples * n_classes) {
+		throw InternalException("%s: %llu probabilities of width %lld for %llu samples x %llu classes", what,
+		                        (uint64_t)p.size(), (int64_t)width, (uint64_t)n_samples, (uint64_t)n_classes);
 	}
-	for (const auto &allowed :
-	     {duckdb::LogicalType(duckdb::LogicalType::VARCHAR), duckdb::LogicalType(duckdb::LogicalType::BIGINT),
-	      duckdb::LogicalType(duckdb::LogicalType::UUID)}) {
-		if (type == allowed.ToString()) {
-			return allowed;
-		}
-	}
-	throw InvalidInputException("%s: model relation '%s' has feature_id_type '%s'; expected %s", caller, relation, type,
-	                            duckdb::AllowedIdTypeList());
+	return p;
 }
 
 void RequireModelFeatureIdType(const duckdb::LogicalType &model_type, const duckdb::LogicalType &data_type,

@@ -226,11 +226,12 @@ public:
 
 private:
 	//! Intern `id`, returning its provisional (insertion-order) index.
-	static int64_t Intern(std::unordered_map<std::string, int64_t> &index, std::vector<std::string> &ids,
-	                      std::string_view id);
+	int64_t Intern(std::unordered_map<std::string, int64_t> &index, std::vector<std::string> &ids, std::string_view id);
 
-	//! Empty unless a vocabulary was fixed.
-	std::vector<std::string> fixed_features_;
+	//! The key every lookup is made with, reused so that an id longer than the
+	//! small-string buffer costs no allocation per cell.
+	std::string key_;
+
 	bool has_fixed_features_ = false;
 	size_t dropped_cells_ = 0;
 

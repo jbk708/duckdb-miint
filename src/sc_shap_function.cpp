@@ -141,11 +141,10 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, "shap");
-		data->classification =
-		    miint::ReadModelTask(conn, data->model_relation, data->model_name, "shap") == "classification";
-		miint::RequireModelFeatureIdType(
-		    miint::ReadModelFeatureIdType(conn, data->model_relation, data->model_name, "shap"),
-		    data->id_types.feature_id, "shap", data->model_relation, data->model_name, data->data_relation);
+		const auto header = miint::ReadModelHeader(conn, data->model_relation, data->model_name, "shap", true);
+		data->classification = header.task == "classification";
+		miint::RequireModelFeatureIdType(header.feature_id_type, data->id_types.feature_id, "shap",
+		                                 data->model_relation, data->model_name, data->data_relation);
 	}
 
 	names = {"sample_id", "class", "feature_id", "shap_value", "base_value", "known_feature_fraction"};
@@ -214,51 +213,16 @@ void SelectFeatures(const double *row, size_t n_features, int64_t top_k, std::ve
 void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState &gstate) {
 	auto conn = MakeReadOnlyHelperConnection(context);
 
-	miint::OpenScContext(bind.n_threads, "shap", gstate.ctx);
+	miint::OpenScContext(context, bind.n_threads, "shap", gstate.ctx);
 	miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "shap",
 	                             bind.classification ? "classification" : "regression", bind.id_types.feature_id,
 	                             gstate.ctx.ptr, gstate.model);
 
-	miint::OwnedArrowArray vocab;
-	if (auto st = sc_model_feature_ids(gstate.model.ptr, vocab.array(), vocab.schema()); st != SC_OK) {
-		miint::ThrowSc("sc_model_feature_ids", nullptr, st);
-	}
-	gstate.feature_ids = vocab.ReadUtf8("sc_model_feature_ids");
-
-	miint::ScCooBuilder builder;
-	builder.SetFeatureVocabulary(gstate.feature_ids);
-	miint::ScanCooRelation(context, conn, bind.data_relation, "shap", builder);
-	miint::RequireNoDuplicateCells(builder, "shap", bind.data_relation);
-
-	const auto dropped = builder.DroppedCells();
-	gstate.table = builder.Finalize();
-	if (!gstate.table) {
-		throw InvalidInputException("shap: data relation '%s' produced no samples", bind.data_relation);
-	}
-	if (dropped > 0 && gstate.table->NumNonZeros() == 0) {
-		throw InvalidInputException("shap: none of the %llu cells in '%s' use a feature this model was trained on; "
-		                            "the data and the model do not share a feature vocabulary",
-		                            (uint64_t)dropped, bind.data_relation);
-	}
-	if (dropped > 0) {
-		// A sample left with no known features still gets a full, additive
-		// explanation -- of an all-zero row. Nothing in the numbers says so.
-		size_t empty_samples = 0;
-		for (auto c : gstate.table->KnownFeatureFraction()) {
-			if (c == 0.0) {
-				empty_samples++;
-			}
-		}
-		miint::EmitWarning(context,
-		                   "shap: dropped %llu cell(s) from '%s' whose feature the model was not trained on%s. "
-		                   "See the known_feature_fraction column.",
-		                   (uint64_t)dropped, bind.data_relation.c_str(),
-		                   empty_samples > 0 ? (" -- " + std::to_string(empty_samples) +
-		                                        " sample(s) retained no features at all; their attributions explain "
-		                                        "an all-zero row")
-		                                           .c_str()
-		                                     : "");
-	}
+	// A sample left with no known features still gets a full, additive
+	// explanation -- of an all-zero row. Nothing in the numbers says so.
+	gstate.table = miint::ScanForModel(context, conn, gstate.model, bind.data_relation, "shap",
+	                                   "; their attributions explain an all-zero row");
+	gstate.feature_ids = gstate.table->FeatureIds();
 	gstate.n_features = gstate.feature_ids.size();
 	const size_t n_samples = gstate.table->SampleIds().size();
 
@@ -278,8 +242,7 @@ void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState
 		}
 		gstate.classes = classes.ReadUtf8("sc_predict_proba classes");
 		gstate.n_outputs = gstate.classes.size();
-		int64_t width = 0;
-		const auto p = proba.ReadFixedSizeListFloat64("sc_predict_proba", width);
+		const auto p = miint::ReadProbaMatrix(proba, gstate.n_outputs, n_samples, "sc_predict_proba");
 		for (size_t s = 0; s < n_samples; s++) {
 			uint32_t best = 0;
 			for (size_t c = 1; c < gstate.n_outputs; c++) {
@@ -402,6 +365,9 @@ void ScShapExecute(ClientContext &context, TableFunctionInput &input, DataChunk 
 	};
 
 	idx_t n = 0;
+	// The sample whose id row n - 1 holds. A sample's rows are consecutive, so
+	// its id is converted once per chunk and copied after that.
+	size_t prev_sample = n_samples;
 	while (n < STANDARD_VECTOR_SIZE) {
 		if (!gstate.have_row) {
 			while (gstate.cur_sample < n_samples && filter_output &&
@@ -429,7 +395,12 @@ void ScShapExecute(ClientContext &context, TableFunctionInput &input, DataChunk 
 		const auto f = gstate.chosen[gstate.next_chosen++];
 		const auto base =
 		    ((gstate.cur_sample - gstate.batch_first) * gstate.n_outputs + gstate.cur_output) * gstate.n_features;
-		EmitIdCell(output.data[0], n, sample_ids[gstate.cur_sample], bind.id_types.sample_id);
+		if (n > 0 && prev_sample == gstate.cur_sample) {
+			RepeatIdCell(output.data[0], n, n - 1, bind.id_types.sample_id);
+		} else {
+			EmitIdCell(output.data[0], n, sample_ids[gstate.cur_sample], bind.id_types.sample_id);
+		}
+		prev_sample = gstate.cur_sample;
 		output.SetValue(1, n,
 		                bind.classification ? Value(gstate.classes[gstate.cur_output]) : Value(LogicalType::VARCHAR));
 		EmitIdCell(output.data[2], n, gstate.feature_ids[f], bind.id_types.feature_id);

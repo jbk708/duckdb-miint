@@ -75,7 +75,7 @@ SELECT * FROM fit_classifier('counts', 'meta', name := 'site', n_estimators := 5
 | `model` | `random_forest` | the only algorithm so far |
 | `n_estimators` | 100 | trees, at most 100,000 |
 | `random_state` | 0 | seed |
-| `n_threads` | 0 | 0 = one thread per core, otherwise a count; ignored in DuckDB-Wasm, which has one |
+| `n_threads` | 0 | 0 = DuckDB's `threads` setting, otherwise a count; ignored in DuckDB-Wasm, which has one |
 | `max_depth` | unbounded | `<= 0` is sklearn's `None` |
 | `criterion` | `gini` / `squared_error` | classifier / regressor |
 | `max_features` | `sqrt` / `all` | features each split may consider: `'sqrt'`, `'log2'`, `'all'`, a fraction in (0, 1], or an integer count |
