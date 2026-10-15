@@ -179,16 +179,17 @@ Two coupled submodules implementing the UniFrac distance + Faith's PD + PERMANOV
 
 ### Rust crates via the `miint_rust_glue` umbrella
 
-Two Rust crates — rype and sylph — are statically linked into the extension. They are bundled through a thin umbrella crate at `ext/miint-rust-glue/` that produces a single `libmiint_rust_glue.a`.
+Three Rust crates — rype, sylph and sc — are statically linked into the extension. They are bundled through a thin umbrella crate at `ext/miint-rust-glue/` that produces a single `libmiint_rust_glue.a`.
 
-**Why an umbrella, not two independent staticlibs?** Each independent Rust staticlib embeds its own copy of the Rust standard library (`rust_eh_personality`, `std::panicking::EMPTY_PANIC`, ...). Linking two of them into the same binary trips duplicate-symbol errors on every supported linker. Previous workarounds (`-Wl,--allow-multiple-definition` on GNU ld, `-Wl,-ld_classic -Wl,-multiply_defined,suppress` on Apple) lived in `extension_config.cmake` until macOS 26 / Xcode 17's ld-prime stopped honoring `-multiply_defined,suppress` even via `-ld_classic`, breaking the duckdb shell, `libduckdb.dylib`, `plan_serializer`, and `unittest` link targets. The umbrella is the canonical fix per the Rust Reference "Linkage" chapter — a single staticlib emitted from one cargo invocation has one shared std and one set of symbols. Same pattern Mozilla has used in Firefox's `rul` super-crate since 2015.
+**Why an umbrella, not independent staticlibs?** Each independent Rust staticlib embeds its own copy of the Rust standard library (`rust_eh_personality`, `std::panicking::EMPTY_PANIC`, ...). Linking two of them into the same binary trips duplicate-symbol errors on every supported linker. Previous workarounds (`-Wl,--allow-multiple-definition` on GNU ld, `-Wl,-ld_classic -Wl,-multiply_defined,suppress` on Apple) lived in `extension_config.cmake` until macOS 26 / Xcode 17's ld-prime stopped honoring `-multiply_defined,suppress` even via `-ld_classic`, breaking the duckdb shell, `libduckdb.dylib`, `plan_serializer`, and `unittest` link targets. The umbrella is the canonical fix per the Rust Reference "Linkage" chapter — a single staticlib emitted from one cargo invocation has one shared std and one set of symbols. Same pattern Mozilla has used in Firefox's `rul` super-crate since 2015.
 
-- **Location:** `ext/miint-rust-glue/` (in-tree Cargo crate; `Cargo.toml` lists `rype` and `sylph` as path dependencies)
+- **Location:** `ext/miint-rust-glue/` (in-tree Cargo crate; `Cargo.toml` lists `rype`, `sylph` and sc's `sc-capi` as path dependencies)
 - **Build:** `ExternalProject_Add(miint_rust_glue_build)` drives `cargo build --release`; produces `libmiint_rust_glue.a`
 - **Cargo features:**
   - `with-sylph` — on when `MIINT_ENABLE_SYLPH=ON` (default). Off on Emscripten and Windows/MinGW (sylph leans on POSIX APIs in its sketch indexer).
   - `rype-fastx` — enables rype's needletail-based FASTX reader. Off on Emscripten and Windows/MinGW because needletail's `cdylib` crate type triggers linker errors (standalone-linking failures on WASM; unresolved `___chkstk_ms` on MSVC).
-  - `arrow-ffi` — always on for both crates; the extension consumes both via the Arrow C Data Interface for zero-copy FFI.
+  - `arrow-ffi` — always on for rype and sylph; the extension consumes both via the Arrow C Data Interface for zero-copy FFI.
+- **sc:** `sc-capi` is always linked, WASM included, and has no feature flags. Its `build.rs` regenerates the C header with cbindgen on every glue build, writing it into the submodule at `ext/sc/include/sc.h` (gitignored there), so the header cannot drift from the linked symbols. Under Emscripten, `miint_rust_glue_init()`, called first in `LoadInternal`, builds rayon's global pool on the calling thread, which rype and sc share; rayon cannot start one there by itself.
 - **CMake exposure:** the umbrella is wired up as two `IMPORTED STATIC` targets — `rype` and `sylph` — both pointing at the same `libmiint_rust_glue.a`. Existing call sites like `target_link_libraries(... rype)` and `target_link_libraries(... sylph)` work unchanged; the linker dedupes the duplicate archive on the link line.
 - **Cross-compilation gotchas:**
   - Cargo `--target` flag selected per platform; `rustup target add` called at configure time.

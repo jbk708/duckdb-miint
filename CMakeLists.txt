@@ -2451,6 +2451,9 @@ if(MIINT_ENABLE_UNIFRAC)
 endif()
 
 add_executable(tests ${TEST_SOURCES})
+# src/sc_coo_builder.cpp includes sc.h, which the rust-glue build generates.
+# Linking `rype` orders the glue first only when sylph is on, so say it here.
+add_dependencies(tests miint_rust_glue_build)
 
 target_link_libraries(tests
   Catch2::Catch2WithMain

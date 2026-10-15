@@ -100,10 +100,6 @@
 #include <rype_extract.hpp>
 #include <rype_index_create.hpp>
 #include <rype_log_ratio.hpp>
-#ifdef MIINT_HAS_VSEARCH
-#include <uchime_ref.hpp>
-#include <uchime_denovo.hpp>
-#include <mask_dust_function.hpp>
 #include <sc_version_function.hpp>
 #include <sc_fit_function.hpp>
 #include <sc_feature_importances_function.hpp>
@@ -112,6 +108,10 @@
 #include <sc_predict_proba_function.hpp>
 #include <sc_shap_function.hpp>
 #include <sc_cross_validate_function.hpp>
+#ifdef MIINT_HAS_VSEARCH
+#include <uchime_ref.hpp>
+#include <uchime_denovo.hpp>
+#include <mask_dust_function.hpp>
 #include <merge_pairs_function.hpp>
 #include <search_sequences.hpp>
 #include <cluster_sequences.hpp>
