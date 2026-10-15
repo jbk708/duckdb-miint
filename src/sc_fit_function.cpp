@@ -102,7 +102,7 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 	// Required rather than optional. A name is not an input to the fit -- the
 	// same seed with and without one produces a byte-identical model -- but
 	// making it mandatory removes a state from the system: `name` is never NULL,
-	// so `sc_predict(..., name := ...)` always works and nobody has to reason
+	// so `predict(..., name := ...)` always works and nobody has to reason
 	// about the unnamed case. Optional names get skipped, and then a registry
 	// needs ALTER TABLE and rowid archaeology to become selectable.
 	if (data->name.empty()) {
@@ -159,13 +159,10 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	// global state to tell us if we are finished
 	auto &gstate = input.global_state->Cast<ScFitGlobalState>();
 	if (gstate.done) {
-		output.SetCardinality(0); // turn off the engine
+		output.SetCardinality(0); // an empty chunk ends the scan
 		return;
 	}
-	// write to first byte in gstate (global duck db state) so that next time we come through here we know we are done
-	// output.SetCardinality(0); is a contract for table functions to tell the engine that we are done producing output,
-	// so we don't produce any more rows
-	// executes ScFitExecute exactly once
+	// A fit returns one row, so the scan runs once.
 	gstate.done = true;
 
 	const auto &bind = input.bind_data->Cast<ScFitData>();
@@ -242,10 +239,7 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	std::unique_ptr<uint8_t, decltype(free_blob)> blob_guard(blob, free_blob);
 	duckdb::Value blob_value = Value::BLOB(blob, blob_len);
 
-	// DuckDB's table function output is a single row with the fitted model, so we set the cardinality to 1 and fill in
-	// the columns with the model's metadata and serialized blob.
-	output.SetCardinality(1); // one row returned, which is the fitted model
-	// The output columns are:
+	output.SetCardinality(1);
 	output.SetValue(0, 0, Value(bind.name));
 	output.SetValue(1, 0, Value(bind.model));
 	output.SetValue(2, 0, blob_value);

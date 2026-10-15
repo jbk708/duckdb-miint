@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! sc_cross_validate_classifier / sc_cross_validate_regressor(data, metadata[,
+//! cross_validate_classifier / cross_validate_regressor(data, metadata[,
 //!   target_column, n_folds, parameter_tuning, random_state, ... forest params])
 //!   -> (sample_id, prediction, actual, [probabilities, classes,] metric,
 //!       mean_score, std_score, fold_scores)
@@ -23,7 +23,7 @@ namespace duckdb {
 //! join back to the metadata relation.
 //!
 //! The per-fold forests are scored and discarded: this measures the RECIPE, not
-//! a model. Fit the model you will actually use with sc_fit on all the data.
+//! a model. Fit the model you will actually use with fit_* on all the data.
 //!
 //! `probabilities` is the OOF probability of each class, and `classes` names
 //! them: both are lists in the same order on every row, so `probabilities[i]` is

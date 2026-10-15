@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! sc_predict_proba(data, model[, name]) -> (sample_id, class, probability, sample_coverage)
+//! predict_proba(data, model[, name]) -> (sample_id, class, probability, sample_coverage)
 //!
 //! Class probabilities from a classifier, one row per (sample, class) rather
 //! than a wide row per sample. Long format because the class set is a property
@@ -12,7 +12,7 @@ namespace duckdb {
 //! decided at bind time from the model's classes, and every downstream join
 //! would have to know them. Long rows pivot on demand and join on `class`.
 //!
-//! Classifiers only. `sc_predict` is the regressor's answer, and a regressor
+//! Classifiers only. `predict` is the regressor's answer, and a regressor
 //! has no classes to give probabilities over.
 //!
 //! Probabilities for a sample sum to 1. A sample whose features the model does

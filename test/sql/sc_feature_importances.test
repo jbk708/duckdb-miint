@@ -4,13 +4,33 @@
 
 require miint
 
-require-env HDF5_AVAILABLE
-
 statement ok
 PRAGMA enable_verification;
 
+# The 15 cells of data/biom/test.biom, inlined so this file needs no HDF5.
 statement ok
-CREATE TABLE fi_data AS SELECT * FROM read_biom('data/biom/test.biom');
+CREATE TABLE test_biom (sample_id VARCHAR, feature_id VARCHAR, value DOUBLE);
+
+statement ok
+INSERT INTO test_biom VALUES
+  ('Sample1', 'GG_OTU_2', 5.0),
+  ('Sample1', 'GG_OTU_4', 2.0),
+  ('Sample2', 'GG_OTU_2', 1.0),
+  ('Sample2', 'GG_OTU_4', 1.0),
+  ('Sample2', 'GG_OTU_5', 1.0),
+  ('Sample3', 'GG_OTU_1', 1.0),
+  ('Sample3', 'GG_OTU_3', 1.0),
+  ('Sample3', 'GG_OTU_4', 1.0),
+  ('Sample3', 'GG_OTU_5', 1.0),
+  ('Sample4', 'GG_OTU_2', 2.0),
+  ('Sample4', 'GG_OTU_3', 4.0),
+  ('Sample5', 'GG_OTU_2', 3.0),
+  ('Sample6', 'GG_OTU_2', 1.0),
+  ('Sample6', 'GG_OTU_3', 2.0),
+  ('Sample6', 'GG_OTU_4', 1.0);
+
+statement ok
+CREATE TABLE fi_data AS SELECT * FROM test_biom;
 
 statement ok
 CREATE TABLE fi_metadata AS

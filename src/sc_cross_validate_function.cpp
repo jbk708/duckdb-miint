@@ -19,7 +19,7 @@ namespace duckdb {
 
 namespace {
 
-// Everything shared with sc_fit -- input scanning, validation, forest-parameter
+// Everything shared with fit -- input scanning, validation, forest-parameter
 // parsing -- lives in sc_rf_common.
 using sc_rf::ApplyDefaults;
 using sc_rf::ParseForestParameter;
@@ -131,7 +131,7 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 
 	// No model comes out, so there is nothing to name and nothing to store: the
 	// per-fold forests exist only to be scored. The prediction column follows the
-	// task, exactly as in sc_predict.
+	// task, exactly as in predict.
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, data->caller);

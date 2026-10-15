@@ -135,7 +135,7 @@ struct DuplicateReport {
 //! COO feature table sc expects.
 //!
 //! This is the bridge between the shape DuckDB has and the shape sc wants.
-//! `read_biom`, `woltka_ogu_per_sample`, and anything else projected to those
+//! `read_biom`, `woltka_ogu`, and anything else projected to those
 //! three columns all arrive here — sc is coupled to the triple, not to a file
 //! format.
 //!

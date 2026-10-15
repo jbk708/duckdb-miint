@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! sc_shap(data, model[, name, predicted_class_only, top_k, max_attributions, batch_size, n_threads])
+//! shap(data, model[, name, predicted_class_only, top_k, max_attributions, batch_size, n_threads])
 //!   -> (sample_id, class, feature_id, shap_value, base_value, sample_coverage)
 //!
 //! Path-dependent TreeSHAP: how much each feature pushed one sample's prediction
@@ -28,9 +28,9 @@ namespace duckdb {
 //!
 //! Features the model knows but the sample lacks are explained too: absent is
 //! zero, and a zero can push a prediction as hard as a count. Features the model
-//! never saw are dropped, exactly as in sc_predict -- no tree splits on them, so
+//! never saw are dropped, exactly as in predict -- no tree splits on them, so
 //! their attribution would be 0 anyway. `sample_coverage` is the share of the
-//! sample's features the model knows, as in sc_predict; at 0 the attributions
+//! sample's features the model knows, as in predict; at 0 the attributions
 //! still add up, but they explain an all-zero row.
 //!
 //! Rows come out in waterfall order,
@@ -43,7 +43,7 @@ namespace duckdb {
 //! SHAP is computed densely -- every class of every sample in a call, before any
 //! `top_k` filtering -- so samples are explained in batches and rows stream out
 //! one batch at a time; attribution memory is one batch however many samples
-//! there are. The input table itself is held in full, as in sc_predict.
+//! there are. The input table itself is held in full, as in predict.
 //! `max_attributions` (default 10M, ~80 MB) is how many attributions a batch may
 //! hold, and the batch size follows: max_attributions / (classes x features)
 //! samples. `batch_size := n` fixes it instead; passing both is an error. A

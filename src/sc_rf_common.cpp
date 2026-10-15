@@ -47,7 +47,7 @@ int64_t ParseNEstimators(const Value &v, const char *caller) {
 
 //! Is this value an SQL integer rather than a float?
 //!
-//! sklearn's int/float distinction is load-bearing for the tagged unions --
+//! sklearn's int/float distinction decides the tagged unions --
 //! `max_features=10` means ten features, `max_features=0.3` means thirty
 //! percent -- and SQL's literal types carry exactly that information, so the
 //! named parameters take ANY and dispatch on what the user actually wrote.

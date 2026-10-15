@@ -4,15 +4,36 @@
 
 require miint
 
-require-env HDF5_AVAILABLE
-
 statement ok
 PRAGMA enable_verification;
 
-# The whole point of coupling sc to the (sample_id, feature_id, value) triple is
-# that read_biom feeds it directly, with no format-specific code in between.
+# The 15 cells of data/biom/test.biom, inlined so this file needs no HDF5.
 statement ok
-CREATE TABLE train_data AS SELECT * FROM read_biom('data/biom/test.biom');
+CREATE TABLE test_biom (sample_id VARCHAR, feature_id VARCHAR, value DOUBLE);
+
+statement ok
+INSERT INTO test_biom VALUES
+  ('Sample1', 'GG_OTU_2', 5.0),
+  ('Sample1', 'GG_OTU_4', 2.0),
+  ('Sample2', 'GG_OTU_2', 1.0),
+  ('Sample2', 'GG_OTU_4', 1.0),
+  ('Sample2', 'GG_OTU_5', 1.0),
+  ('Sample3', 'GG_OTU_1', 1.0),
+  ('Sample3', 'GG_OTU_3', 1.0),
+  ('Sample3', 'GG_OTU_4', 1.0),
+  ('Sample3', 'GG_OTU_5', 1.0),
+  ('Sample4', 'GG_OTU_2', 2.0),
+  ('Sample4', 'GG_OTU_3', 4.0),
+  ('Sample5', 'GG_OTU_2', 3.0),
+  ('Sample6', 'GG_OTU_2', 1.0),
+  ('Sample6', 'GG_OTU_3', 2.0),
+  ('Sample6', 'GG_OTU_4', 1.0);
+
+# The whole point of coupling sc to the (sample_id, feature_id, value) triple is
+# that any reader emitting it feeds sc directly, with no format-specific code in
+# between. sc_read_biom.test checks that end to end for read_biom.
+statement ok
+CREATE TABLE train_data AS SELECT * FROM test_biom;
 
 statement ok
 CREATE TABLE train_metadata AS
@@ -80,7 +101,7 @@ statement ok
 CREATE TABLE to_train AS SELECT unnest(['Sample1','Sample2','Sample2']) AS sample_id;
 
 statement ok
-CREATE TABLE fanned AS SELECT * FROM read_biom('data/biom/test.biom') JOIN to_train USING (sample_id);
+CREATE TABLE fanned AS SELECT * FROM test_biom JOIN to_train USING (sample_id);
 
 statement ok
 CREATE TABLE two_metadata AS
@@ -99,7 +120,7 @@ CREATE TABLE dup_metadata AS
 
 statement ok
 CREATE TABLE two_samples AS
-  SELECT * FROM read_biom('data/biom/test.biom') WHERE sample_id IN ('Sample1','Sample2');
+  SELECT * FROM test_biom WHERE sample_id IN ('Sample1','Sample2');
 
 statement error
 SELECT * FROM fit_regressor('two_samples', 'dup_metadata', name := 'm10');
@@ -111,7 +132,7 @@ more than one value
 statement ok
 CREATE TABLE null_data AS
   SELECT sample_id, feature_id, CASE WHEN value = 5 THEN NULL ELSE value END AS value
-  FROM read_biom('data/biom/test.biom');
+  FROM test_biom;
 
 statement error
 SELECT * FROM fit_regressor('null_data', 'train_metadata', name := 'm11');
@@ -124,7 +145,7 @@ NULL in data relation
 statement ok
 CREATE TABLE nan_data AS
   SELECT sample_id, feature_id, CASE WHEN value = 5 THEN 'NaN'::DOUBLE ELSE value END AS value
-  FROM read_biom('data/biom/test.biom');
+  FROM test_biom;
 
 statement error
 SELECT * FROM fit_regressor('nan_data', 'train_metadata', name := 'm11n');
@@ -134,7 +155,7 @@ fit_regressor: non-finite value nan in data relation 'nan_data'
 statement ok
 CREATE TABLE neg_inf_data AS
   SELECT sample_id, feature_id, CASE WHEN value = 5 THEN '-inf'::DOUBLE ELSE value END AS value
-  FROM read_biom('data/biom/test.biom');
+  FROM test_biom;
 
 statement error
 SELECT * FROM fit_regressor('neg_inf_data', 'train_metadata', name := 'm11i');
@@ -487,7 +508,7 @@ statement ok
 CREATE TABLE gm_to_train AS SELECT unnest(['Sample1','Sample2','Sample3','Sample4']) AS sample_id;
 
 statement ok
-CREATE TABLE gm_data AS SELECT * FROM read_biom('data/biom/test.biom') JOIN gm_to_train USING (sample_id);
+CREATE TABLE gm_data AS SELECT * FROM test_biom JOIN gm_to_train USING (sample_id);
 
 statement ok
 CREATE TABLE gm_metadata AS
@@ -531,7 +552,7 @@ true
 # the 5. That is what sc_model_feature_ids exists for: re-deriving an encoding
 # from this table would produce a 3-column matrix the 5-column model rejects.
 statement ok
-CREATE TABLE gm_test_data AS SELECT * FROM read_biom('data/biom/test.biom') ANTI JOIN gm_to_train USING (sample_id);
+CREATE TABLE gm_test_data AS SELECT * FROM test_biom ANTI JOIN gm_to_train USING (sample_id);
 
 query II
 SELECT (SELECT count(DISTINCT feature_id) FROM gm_data),
@@ -625,3 +646,53 @@ query I
 SELECT count(*) FROM cross_validate_classifier('odd counts', 'odd "meta"', n_folds := 2, n_estimators := 5);
 ----
 6
+
+# --- NULL ids and NULL metadata ---
+#
+# A NULL id or label is a broken join upstream, not a sample or class of its
+# own. Each is an error naming the relation.
+
+statement ok
+CREATE TABLE null_sample AS SELECT CASE WHEN sample_id = 'Sample2' THEN NULL ELSE sample_id END AS sample_id, feature_id, value FROM train_data;
+
+statement error
+SELECT * FROM fit_regressor('null_sample', 'train_metadata', name := 'ns');
+----
+fit_regressor: NULL in data relation 'null_sample'
+
+statement ok
+CREATE TABLE null_feature AS SELECT sample_id, CASE WHEN feature_id = 'GG_OTU_3' THEN NULL ELSE feature_id END AS feature_id, value FROM train_data;
+
+statement error
+SELECT * FROM fit_regressor('null_feature', 'train_metadata', name := 'nf');
+----
+fit_regressor: NULL in data relation 'null_feature'
+
+statement ok
+CREATE TABLE null_label AS SELECT sample_id, CASE WHEN sample_id = 'Sample4' THEN NULL ELSE value END AS value FROM class_metadata;
+
+statement error
+SELECT * FROM fit_classifier('train_data', 'null_label', name := 'nl');
+----
+fit_classifier: NULL in metadata relation 'null_label'
+
+statement ok
+CREATE TABLE null_meta_sample AS SELECT CASE WHEN sample_id = 'Sample4' THEN NULL ELSE sample_id END AS sample_id, value FROM train_metadata;
+
+statement error
+SELECT * FROM fit_regressor('train_data', 'null_meta_sample', name := 'nms');
+----
+fit_regressor: NULL in metadata relation 'null_meta_sample'
+
+# --- thread count does not change the model ---
+#
+# Bootstrap draws and feature subsampling are seeded per tree, so trees grown on
+# different threads come out the same; the docs promise byte-identical models.
+
+query II
+SELECT (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 40, random_state := 5, n_threads := 1, name := 't'))
+     = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 40, random_state := 5, n_threads := 4, name := 't')),
+       (SELECT md5(model_blob) FROM fit_regressor('train_data', 'train_metadata', n_estimators := 40, random_state := 5, n_threads := 1, name := 't'))
+     = (SELECT md5(model_blob) FROM fit_regressor('train_data', 'train_metadata', n_estimators := 40, random_state := 5, n_threads := 4, name := 't'));
+----
+true	true

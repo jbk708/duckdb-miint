@@ -88,6 +88,17 @@ TEST_CASE("ScCooBuilder indices point at the sorted dictionaries", "[sc_coo]") {
 	const auto cols = ReadInt64(table->get()->cols);
 	const auto vals = ReadFloat64(table->get()->vals);
 	REQUIRE(rows.size() == BIOM_CELLS.size());
+	REQUIRE(cols.size() == BIOM_CELLS.size());
+	REQUIRE(vals.size() == BIOM_CELLS.size());
+
+	// Indices stay in range -- sc's from_coo rejects anything outside. REQUIRE,
+	// because the loop below indexes the dictionaries with them.
+	for (auto r : rows) {
+		REQUIRE((r >= 0 && r < table->NumSamples()));
+	}
+	for (auto c : cols) {
+		REQUIRE((c >= 0 && c < table->NumFeatures()));
+	}
 
 	// Every triple must still name the cell it was appended with, once decoded
 	// through the sorted dictionaries. This is the test that would fail if the
@@ -98,14 +109,6 @@ TEST_CASE("ScCooBuilder indices point at the sorted dictionaries", "[sc_coo]") {
 		CHECK(table->SampleIds()[static_cast<size_t>(rows[i])] == BIOM_CELLS[i].sample);
 		CHECK(table->FeatureIds()[static_cast<size_t>(cols[i])] == BIOM_CELLS[i].feature);
 		CHECK(vals[i] == BIOM_CELLS[i].value);
-	}
-
-	// Indices stay in range -- sc's from_coo rejects anything outside.
-	for (auto r : rows) {
-		CHECK((r >= 0 && r < table->NumSamples()));
-	}
-	for (auto c : cols) {
-		CHECK((c >= 0 && c < table->NumFeatures()));
 	}
 }
 
@@ -218,6 +221,7 @@ TEST_CASE("ScCooBuilder handles an empty-string id", "[sc_coo]") {
 	REQUIRE(table->NumFeatures() == 2);
 	CHECK(table->FeatureIds() == std::vector<std::string> {"", "zzz"});
 	const auto cols = ReadInt64(table->get()->cols);
+	REQUIRE(cols.size() == 2);
 	CHECK(cols[0] == 1); // "zzz"
 	CHECK(cols[1] == 0); // ""
 }
@@ -306,6 +310,7 @@ TEST_CASE("ScCooBuilder encodes against a fixed vocabulary", "[sc_coo]") {
 	CHECK(table->FeatureIds() == std::vector<std::string> {"zeta", "alpha", "mid"});
 
 	const auto cols = ReadInt64(table->get()->cols);
+	REQUIRE(cols.size() == 2);
 	CHECK(cols[0] == 2); // "mid" is the model's column 2, not column 1 of a sort
 	CHECK(cols[1] == 0); // "zeta" is column 0
 }
@@ -420,7 +425,10 @@ TEST_CASE("ScCooBatcher cuts consecutive samples into standalone tables", "[sc_c
 		for (size_t first = 0; first < n_samples; first += batch_size) {
 			const auto count = std::min(batch_size, n_samples - first);
 			auto batch = batcher.Batch(first, count);
-			CHECK(batch->NumSamples() == static_cast<int64_t>(count));
+			// REQUIRE: the loop below indexes count entries of each.
+			REQUIRE(batch->NumSamples() == static_cast<int64_t>(count));
+			REQUIRE(batch->SampleIds().size() == count);
+			REQUIRE(batch->SampleCoverage().size() == count);
 			CHECK(batch->NumFeatures() == full->NumFeatures());
 			CHECK(ReadUtf8(batch->get()->sample_ids) == batch->SampleIds());
 			CHECK(ReadUtf8(batch->get()->feature_ids) == full->FeatureIds());

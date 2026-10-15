@@ -30,14 +30,10 @@ struct ScModelFeaturesGlobalState : public GlobalTableFunctionState {
 
 unique_ptr<FunctionData> ScModelFeaturesBind(ClientContext &context, TableFunctionBindInput &input,
                                              vector<LogicalType> &return_types, vector<string> &names) {
-	// calls ScModelFeaturesData constructor and allocates on the heap, returning a unique_ptr to it.  The unique_ptr
-	// will automatically free the memory when it goes out of scope, so we don't have to worry about memory leaks. do
-	// make_uniq for RAII.  It makes a smart pointer. this is C++ lifecycle management for heap data
 	auto data = make_uniq<ScModelFeaturesData>();
 	data->model_relation = input.inputs[0].GetValue<string>();
 	RejectCTERelationName(input, data->model_relation);
 	if (data->model_relation.empty()) {
-		// if we didn't have a smart ptr then this path would cause a memory leak
 		throw InvalidInputException("model_features: model relation name must not be empty");
 	}
 	for (auto &kv : input.named_parameters) {
@@ -48,8 +44,7 @@ unique_ptr<FunctionData> ScModelFeaturesBind(ClientContext &context, TableFuncti
 			data->model_name = kv.second.GetValue<string>();
 		}
 	}
-	// set the output column names and types.  The first column is the feature id, which is a string.  The second column
-	// is the column index, which is an integer.
+	// feature_id has the type the model was fit on: VARCHAR, BIGINT or UUID.
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->feature_id_type =

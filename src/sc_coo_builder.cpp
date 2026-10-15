@@ -27,14 +27,11 @@ struct BufferBag {
 	const void *buffers[3] = {nullptr, nullptr, nullptr};
 };
 
-// function to release c++ memory allocated for arrow array and schema
-// called by the consumer of the arrow array and schema
+// The array's release callback: frees the BufferBag behind its buffers.
 void ReleaseArray(ArrowArray *array) {
 	if (!array->release) {
 		return;
 	}
-	// cast it back to the original type and delete it. The consumer doesn't know the type, so it can't delete it
-	// directly.
 	delete static_cast<BufferBag *>(array->private_data);
 	array->private_data = nullptr;
 	// Setting release to NULL is how a consumer detects an already-released
@@ -42,8 +39,6 @@ void ReleaseArray(ArrowArray *array) {
 	array->release = nullptr;
 }
 
-// nothing to free since this memory are strings in progmem
-// written in at compile time, so we just set the release to nullptr to avoid double free
 void ReleaseSchema(ArrowSchema *schema) {
 	if (!schema->release) {
 		return;
@@ -67,8 +62,7 @@ void InitSchema(ArrowSchema &schema, const char *format) {
 	schema.private_data = nullptr;
 }
 
-// void function fills out standard ArrowArray fields and sets the release callback to ReleaseArray
-// intakes an ArrowArray object somewhere in memory and mutates it
+// Fill `array` over `bag`'s buffers; the array owns the bag from here on.
 void InitArray(ArrowArray &array, int64_t length, int64_t n_buffers, BufferBag *bag) {
 	array.length = length;
 	array.null_count = 0;
@@ -114,13 +108,9 @@ void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::s
 	// Owned here until the array takes it, so a throw on the way (an allocation,
 	// or the size check below) frees it.
 	auto bag = std::make_unique<BufferBag>();
-	bag->offsets.reserve(values.size() + 1); // allocate raw contiguous bytes for the offsets, its always N + 1
 	size_t total = 0;
-	// &v used in a declaration, not assignment, here it refers
-	// to an alias of the string in the vector, not a copy of it. The string is still owned by the vector, so we don't
-	// need to free it. this is not getting the address of the string.
 	for (const auto &v : values) {
-		total += v.size(); // number of bytes in each string
+		total += v.size();
 	}
 	// Utf8 offsets are int32: past 2 GiB of text they would wrap and point
 	// every later id at the wrong bytes.
@@ -128,39 +118,17 @@ void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::s
 		throw std::length_error("ExportUtf8: " + std::to_string(total) +
 		                        " bytes of ids exceed the 2 GiB an Arrow Utf8 array can address");
 	}
-	// since we are reducing std:string type to raw bytes, we need to allocate a contiguous block of memory for the
-	// chars
-	// we looped through each string in the vector to get its size in bytes and sum them up to get the total size of the
-	// chars buffer we need to allocate
+	bag->offsets.reserve(values.size() + 1);
 	bag->chars.reserve(total);
-
-	int32_t cursor = 0; // int32 is agreed upon arrow type for offsets
-	// load offsets with first value 0, we always have the start of a string at byte 0
+	int32_t cursor = 0;
 	bag->offsets.push_back(cursor);
-	// loop through std::vector<std::string> &values, and for each string, we insert its string bytes into the chars
-	// buffer, and update the cursor to point to the end of the string in bytes, and push that value into the offsets
-	// buffer
 	for (const auto &v : values) {
-		// bag->chars.end() iterator (memory addr) to insert the string bytes into for chars buffer, v.begin() and
-		// v.end() are iterators  to the start and end of the string in the values vector, so we are inserting the
-		// string bytes into the chars buffer for example if string v is "apple", it goes to the address of 'a', reads
-		// all the bytes sequentially until it hits the address of v.end(), and copies those exact ASCII/UTF-8 character
-		// bytes
-		// ('a', 'p', 'p', 'l', 'e') into the contiguous bag->chars memory block.
 		bag->chars.insert(bag->chars.end(), v.begin(), v.end());
-		// increment offset by chunk size of the string in bytes, so that the next offset points to the start of the
-		// next string in the chars buffer
 		cursor += static_cast<int32_t>(v.size());
-		// push offset
 		bag->offsets.push_back(cursor);
 	}
-	// no nulls, so validity buffer is absent (NULL pointer). The offsets and chars buffers are always present in sc
-	// contract.
+	// [validity, offsets, chars]. No nulls, so no validity buffer.
 	bag->buffers[0] = nullptr;
-	// buffers is an array of pointers. offsets.data() returns a pointer to the first element of the offsets vector,
-	// which is a contiguous block of memory. We assign that pointer to buffers[1] so that the ArrowArray can access the
-	// offsets buffer. arrow contract always calls for fixed width int32 offsets buffer for Utf8 arrays, so on the
-	// consumer side they know how to read it.
 	bag->buffers[1] = bag->offsets.data();
 	// An all-empty-string column allocates nothing; a NULL data buffer with
 	// every offset at 0 is well-formed, and sc's `borrow_utf8` short-circuits
@@ -183,11 +151,7 @@ void ReleaseIfLive(ArrowArray &array, ArrowSchema &schema) {
 
 } // namespace
 
-// c++ destructor for ScCooTable, releases all the arrow arrays and schemas if they are live when ScCooTable goes out of
-// scope and is removed from memory. This is important because the arrow arrays and schemas are allocated on the heap,
-// and if they are not released, they will cause a memory leak. The destructor is called automatically when the
-// ScCooTable object goes out of scope, so we don't have to worry about manually calling it. (as opposed to C++
-// constructor function or allocating an instance in memory)
+// sc borrows these arrays and never releases them, so the table does.
 ScCooTable::~ScCooTable() {
 	ReleaseIfLive(table_.rows, table_.rows_schema);
 	ReleaseIfLive(table_.cols, table_.cols_schema);

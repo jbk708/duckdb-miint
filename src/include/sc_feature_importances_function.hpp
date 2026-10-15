@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! sc_feature_importances(model) -> (feature_id, importance)
+//! feature_importances(model) -> (feature_id, importance)
 //!
 //! Mean-decrease-in-impurity importances for a fitted model, labelled with the
 //! feature ids the model was trained on. sc returns the two as separate arrays

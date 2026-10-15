@@ -25,11 +25,10 @@ constexpr const char *kSampleIdColumn = "sample_id";
 //!
 //! Both read the same two relations -- COO triplets, and (sample_id, target) --
 //! validate them the same way and fit the same forests, so the helpers below
-//! take this instead of either function's own bind data. A table function's bind
-//! data inherits it, which is why the moved code still reads `bind.data_relation`.
+//! take this instead of either function's own bind data, which inherits it.
 //!
 //! `caller` is the SQL function's name, so an error names the function the user
-//! actually called rather than whichever one the code was first written for.
+//! actually called.
 struct ScTrainingInput {
 	string data_relation;
 	string metadata_relation;

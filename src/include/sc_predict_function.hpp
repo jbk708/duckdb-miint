@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! sc_predict(data, model) -> (sample_id, prediction, sample_coverage)
+//! predict(data, model) -> (sample_id, prediction, sample_coverage)
 //!
 //! One function for both tasks, mirroring sc's own single `sc_predict`, which
 //! dispatches on the model's recorded task. The prediction column is VARCHAR

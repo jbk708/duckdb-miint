@@ -69,22 +69,15 @@ std::vector<std::string> OwnedArrowArray::ReadUtf8(const char *what) const {
 	if (array_.length == 0) {
 		return out;
 	}
-	// offset int32_t array is the second buffer in the ArrowArray, and the char array is the third buffer.  The first
-	// buffer is the validity bitmap, which we don't use since we don't have nulls.
+	// buffers: [validity (unused, no nulls), int32 offsets, chars].
 	const int32_t *offsets = static_cast<const int32_t *>(array_.buffers[1]);
 	const char *chars = static_cast<const char *>(array_.buffers[2]);
 	out.reserve(static_cast<size_t>(array_.length));
 	for (int64_t i = 0; i < array_.length; i++) {
-		// start chunking u8 at i..i+1
 		const int32_t start = offsets[i];
 		const int32_t end = offsets[i + 1];
 		// An all-empty-string column allocates no data buffer at all, so guard
 		// the pointer rather than the length.
-		// std::string contructor bc of emplace_back used on std::vector<std::string> out. It takes two arguments, the
-		// starting memory position and the lenghth and then takes a bite out of the chars buffer to construct a
-		// std::string out of the chunk.
-		// empty string for empty chars buffer, otherwise it will segfault when trying to read from a nullptr.  The
-		// empty string is a valid string in C++ and is represented by a std::string with length 0 and no data.
 		out.emplace_back(chars ? chars + start : "", static_cast<size_t>(end - start));
 	}
 	return out;

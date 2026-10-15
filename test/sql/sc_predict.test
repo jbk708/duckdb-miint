@@ -4,10 +4,30 @@
 
 require miint
 
-require-env HDF5_AVAILABLE
-
 statement ok
 PRAGMA enable_verification;
+
+# The 15 cells of data/biom/test.biom, inlined so this file needs no HDF5.
+statement ok
+CREATE TABLE test_biom (sample_id VARCHAR, feature_id VARCHAR, value DOUBLE);
+
+statement ok
+INSERT INTO test_biom VALUES
+  ('Sample1', 'GG_OTU_2', 5.0),
+  ('Sample1', 'GG_OTU_4', 2.0),
+  ('Sample2', 'GG_OTU_2', 1.0),
+  ('Sample2', 'GG_OTU_4', 1.0),
+  ('Sample2', 'GG_OTU_5', 1.0),
+  ('Sample3', 'GG_OTU_1', 1.0),
+  ('Sample3', 'GG_OTU_3', 1.0),
+  ('Sample3', 'GG_OTU_4', 1.0),
+  ('Sample3', 'GG_OTU_5', 1.0),
+  ('Sample4', 'GG_OTU_2', 2.0),
+  ('Sample4', 'GG_OTU_3', 4.0),
+  ('Sample5', 'GG_OTU_2', 3.0),
+  ('Sample6', 'GG_OTU_2', 1.0),
+  ('Sample6', 'GG_OTU_3', 2.0),
+  ('Sample6', 'GG_OTU_4', 1.0);
 
 # The split that matters: train on four samples, predict the held-out two. The
 # two halves have DIFFERENT feature sets, which is the normal case for real
@@ -16,10 +36,10 @@ statement ok
 CREATE TABLE p_train_ids AS SELECT unnest(['Sample1','Sample2','Sample3','Sample4']) AS sample_id;
 
 statement ok
-CREATE TABLE p_train AS SELECT * FROM read_biom('data/biom/test.biom') SEMI JOIN p_train_ids USING (sample_id);
+CREATE TABLE p_train AS SELECT * FROM test_biom SEMI JOIN p_train_ids USING (sample_id);
 
 statement ok
-CREATE TABLE p_test AS SELECT * FROM read_biom('data/biom/test.biom') ANTI JOIN p_train_ids USING (sample_id);
+CREATE TABLE p_test AS SELECT * FROM test_biom ANTI JOIN p_train_ids USING (sample_id);
 
 statement ok
 CREATE TABLE p_meta AS
@@ -46,6 +66,13 @@ SELECT count(*) FROM predict('p_test', 'p_model');
 # Predictions are drawn from the model's training labels, never invented.
 query I
 SELECT bool_and(prediction IN ('gut','skin')) FROM predict('p_test', 'p_model');
+----
+true
+
+# That holds for any forest, even a broken one. This does not: on the samples it
+# was trained on, the forest gives back their labels.
+query I
+SELECT bool_and(p.prediction = m.value) FROM predict('p_train', 'p_model') p JOIN p_meta m USING (sample_id);
 ----
 true
 
@@ -81,7 +108,7 @@ CREATE TABLE p_rmeta AS
          unnest(['1','3','6','9','12','15']) AS value;
 
 statement ok
-CREATE TABLE p_full AS SELECT * FROM read_biom('data/biom/test.biom');
+CREATE TABLE p_full AS SELECT * FROM test_biom;
 
 statement ok
 CREATE TABLE p_rmodel AS
@@ -96,6 +123,16 @@ SELECT count(*) FROM predict('p_full', 'p_rmodel');
 # and cannot extrapolate past what it saw.
 query I
 SELECT bool_and(prediction BETWEEN 1.0 AND 15.0) FROM predict('p_full', 'p_rmodel');
+----
+true
+
+# Also true of any forest. On its training samples it must beat predicting the
+# mean, which a forest that learned nothing cannot: its squared error is under
+# half the mean predictor's.
+query I
+SELECT sum((p.prediction - m.value::DOUBLE) ^ 2)
+     < 0.5 * (SELECT sum((value::DOUBLE - (SELECT avg(value::DOUBLE) FROM p_rmeta)) ^ 2) FROM p_rmeta)
+FROM predict('p_full', 'p_rmodel') p JOIN p_rmeta m USING (sample_id);
 ----
 true
 
@@ -315,3 +352,21 @@ statement error
 SELECT * FROM predict('p_test', 'p_model', n_threads := -1);
 ----
 predict: n_threads must be >= 0 (0 = one per core), got -1
+
+# --- dropped cells are reported, not just counted in sample_coverage ---
+
+statement ok
+SET enable_logging = true;
+
+statement ok
+CREATE TABLE p_mixed_out AS SELECT * FROM predict('p_mixed', 'p_rmodel');
+
+statement ok
+CREATE TABLE p_partial_out AS SELECT * FROM predict('p_partial', 'p_rmodel');
+
+query II
+SELECT bool_or(message LIKE 'predict: dropped 5 cell(s) from ''p_mixed'' whose feature the model was not trained on%'),
+       bool_or(message LIKE 'predict: dropped 1 cell(s) from ''p_partial''%1 sample(s) retained no features at all%')
+FROM miint_warnings();
+----
+true	true
