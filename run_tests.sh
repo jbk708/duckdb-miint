@@ -179,11 +179,12 @@ ft_regenerate_one "data/fasttree/moderate.fa" "data/fasttree/moderate.golden.nwk
 # the goldens against that manifest and fails on a mismatch. To refresh: rerun
 # the generator under a SciPy env.
 
-# Live NCBI BLAST tests, opt-in: `MIINT_BLAST_LIVE_TEST=1 bash run_tests.sh`. A submission
-# waits in NCBI's queue for as long as NCBI takes, and that the endpoint answers says
-# nothing about the queue: on 2026-10-15 one was still queued after 28 minutes, when the
-# httpfs pass below reached its 1800 s limit. With the opt-in set, the probe still skips
-# them when BLAST does not answer.
+# Live NCBI BLAST tests, opt-in. miint's BLAST client waits up to about two hours per
+# submission (src/blast_client.cpp), and that the endpoint answers says nothing about
+# NCBI's queue (one submission was still queued after 28 minutes on 2026-10-15). That is
+# past the httpfs pass's default limit below, so raise it too:
+# `MIINT_BLAST_LIVE_TEST=1 MIINT_HTTPFS_TIMEOUT_SECONDS=10800 bash run_tests.sh`. With the
+# opt-in set, the probe still skips them when BLAST does not answer.
 if [ "${MIINT_BLAST_LIVE_TEST:-0}" = "1" ] &&
     curl -sSf --max-time 5 -o /dev/null \
         "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi" 2>/dev/null; then
@@ -257,7 +258,7 @@ if [ -z "$ENA_WEBIN_MOCK_URL" ] && python3 -c "import http.server" 2>/dev/null; 
         sleep 0.1
     done
     if [ -z "$ENA_WEBIN_MOCK_URL" ]; then
-        echo "Warning: ENA Webin mock failed to start; submission round-trip tests will skip"
+        echo "Warning: ENA Webin mock failed to start; its tests will skip, which fails the httpfs pass"
         kill $ENA_MOCK_PID 2>/dev/null || true
     else
         # Phase 8 Step 8a alias collision check: the operator sends an
@@ -685,11 +686,13 @@ fi
 echo "Running the $(echo "$HTTPFS_TESTS" | tr ',' '\n' | wc -l) test files that need httpfs (log: $HTTPFS_LOG)..."
 HTTPFS_RC=0
 HTTPFS_START=$SECONDS
-# --require fails a file whose `require httpfs` or `require miint` cannot load, where it
-# would otherwise be skipped; -w NoTests fails a file list that matches nothing.
+# on_init's LOAD fails every file when httpfs cannot load (under autoloading, `require
+# httpfs` alone passes without loading it). --require miint fails a file whose miint
+# cannot load, where it would otherwise be skipped; -w NoTests fails the run when any file
+# in the list matches no test.
 HOME="$HTTPFS_TEST_HOME" DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' \
     ${TIMEOUT_CMD:+"$TIMEOUT_CMD" --kill-after=60 "$HTTPFS_TIMEOUT_SECONDS"} \
-    ./build/release/test/unittest --require httpfs --require miint -w NoTests "$HTTPFS_TESTS" \
+    ./build/release/test/unittest --require miint -w NoTests "$HTTPFS_TESTS" \
     > "$HTTPFS_LOG" 2>&1 || HTTPFS_RC=$?
 HTTPFS_ELAPSED=$((SECONDS - HTTPFS_START))
 if [ "$HTTPFS_RC" -ne 0 ]; then
@@ -706,10 +709,9 @@ if [ "$HTTPFS_RC" -ne 0 ]; then
     exit 1
 fi
 tail -n 20 "$HTTPFS_LOG"
-# A file may skip only on a require-env guard for something a machine can lack: a live
-# service, credentials, a runtime binary or an optional library. Any other skip, such as
-# one for a mock server's URL that this script exports, means the pass covered less than
-# it should, and skips do not change unittest's exit status.
+# Which skips are allowed: docs/testing.md, "Guards and skipped tests". A skip does not
+# change unittest's exit status, so a disallowed one, such as a skip for the mock server's
+# URL that this script exports, is caught here.
 HTTPFS_ALLOWED_SKIPS='ENA_AVAILABLE|NCBI_AVAILABLE|BLAST_LIVE_AVAILABLE|MIINT_TAXDUMP_REMOTE|ENA_WEBIN_TEST_(USER|PASSWORD|AVAILABLE)|ASPERA_AVAILABLE|HDF5_AVAILABLE'
 HTTPFS_BAD_SKIPS=$(sed -n '/^Skipped tests for the following reasons:/,$p' "$HTTPFS_LOG" | tail -n +2 |
     grep -vE "^(require-env ($HTTPFS_ALLOWED_SKIPS): [0-9]+)?$" || true)
