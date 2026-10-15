@@ -1149,6 +1149,8 @@ if ! rustup toolchain list | grep -q "^${ver}"; then
     rustup toolchain install "${ver}" --profile minimal
 fi
 rustup target add --toolchain "${ver}" wasm32-unknown-emscripten
+# -Zbuild-std (wasm-native exceptions, below) rebuilds std from its source.
+rustup component add --toolchain "${ver}" rust-src
 ]=])
         set(GLUE_CONFIGURE_CMD sh ${GLUE_WASM_RUST_PIN_SH} ${MIINT_WASM_RUST_TOOLCHAIN})
         set(GLUE_RUSTUP_TOOLCHAIN ${MIINT_WASM_RUST_TOOLCHAIN})
@@ -1214,6 +1216,23 @@ if(EMSCRIPTEN)
     list(APPEND GLUE_RUSTFLAGS_LIST "-C" "link-arg=-sSIDE_MODULE=2")
 endif()
 
+# Match the C++ side's exception model. With JS exceptions, rustc routes every
+# call that can unwind through Emscripten's invoke_* helpers, which duckdb-wasm
+# generates in JS, and on that path Emscripten truncates Rust symbol names at
+# '$' and sign-extends the low word of i64 arguments: calls trap or receive
+# corrupted values, and a panic aborts the module (#315). So when the C++ uses
+# wasm-native exceptions (wasm_eh), the glue does too. Rust 1.86 offers that
+# only as an unstable flag, which needs std rebuilt from source (rust-src) and
+# RUSTC_BOOTSTRAP to accept -Z on a stable toolchain.
+set(GLUE_WASM_NATIVE_EH OFF)
+set(GLUE_CARGO_UNSTABLE_ARGS "")
+if(EMSCRIPTEN AND CMAKE_CXX_FLAGS MATCHES "-fwasm-exceptions")
+    set(GLUE_WASM_NATIVE_EH ON)
+    list(APPEND GLUE_RUSTFLAGS_LIST "-Zemscripten-wasm-eh")
+    set(GLUE_CARGO_UNSTABLE_ARGS "-Zbuild-std=std,panic_unwind")
+    message(STATUS "Rust glue: wasm-native exceptions, matching the C++ (-fwasm-exceptions)")
+endif()
+
 if(WIN32 AND MINGW)
     # rtools42's MinGW64 doesn't ship libgcc_eh.a (modern GCC folded EH into
     # libgcc), but rustc's windows-gnu linker spec still passes -lgcc_eh. Same
@@ -1237,6 +1256,9 @@ if(GLUE_RUSTUP_TOOLCHAIN)
     # Force cargo (the rustup shim) onto the pinned toolchain for this build.
     list(APPEND GLUE_ENV_ARGS "RUSTUP_TOOLCHAIN=${GLUE_RUSTUP_TOOLCHAIN}")
 endif()
+if(GLUE_WASM_NATIVE_EH)
+    list(APPEND GLUE_ENV_ARGS "RUSTC_BOOTSTRAP=1")
+endif()
 if(GLUE_ENV_ARGS)
     set(GLUE_BUILD_ENV ${CMAKE_COMMAND} -E env ${GLUE_ENV_ARGS})
 else()
@@ -1250,6 +1272,7 @@ ExternalProject_Add(
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ext/miint-rust-glue
     CONFIGURE_COMMAND "${GLUE_CONFIGURE_CMD}"
     BUILD_COMMAND ${GLUE_BUILD_ENV} ${CARGO} build --release
+        ${GLUE_CARGO_UNSTABLE_ARGS}
         ${GLUE_FEATURES_ARGS}
         --target-dir ${GLUE_TARGET_DIR}
         --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/ext/miint-rust-glue/Cargo.toml
