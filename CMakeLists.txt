@@ -1162,10 +1162,19 @@ if ! rustup toolchain list | grep -q "^${ver}"; then
     rustup toolchain install "${ver}" --profile minimal
 fi
 rustup target add --toolchain "${ver}" wasm32-unknown-emscripten
-# -Zbuild-std (wasm-native exceptions) rebuilds std from its source.
-rustup component add --toolchain "${ver}" rust-src
+# Wasm-native exceptions rebuild std from its source (-Zbuild-std).
+if [ "$2" = "rust-src" ]; then
+    rustup component add --toolchain "${ver}" rust-src
+fi
 ]=])
-        set(GLUE_CONFIGURE_CMD sh ${GLUE_WASM_RUST_PIN_SH} ${MIINT_WASM_RUST_TOOLCHAIN})
+        # rust-src goes on the command line, not only in the script, because
+        # ExternalProject re-runs this step when its command changes but not
+        # when the script's contents do.
+        set(GLUE_RUST_SRC_ARG "")
+        if(MIINT_WASM_NATIVE_EH)
+            set(GLUE_RUST_SRC_ARG "rust-src")
+        endif()
+        set(GLUE_CONFIGURE_CMD sh ${GLUE_WASM_RUST_PIN_SH} ${MIINT_WASM_RUST_TOOLCHAIN} ${GLUE_RUST_SRC_ARG})
         set(GLUE_RUSTUP_TOOLCHAIN ${MIINT_WASM_RUST_TOOLCHAIN})
         message(STATUS "Rust glue: pinning WASM build to toolchain ${MIINT_WASM_RUST_TOOLCHAIN} (emsdk 3.1.71 binaryen compat)")
     endif()
