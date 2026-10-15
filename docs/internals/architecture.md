@@ -10,6 +10,8 @@ Cross-cutting design patterns and implementation notes for duckdb-miint. This fi
 - Consuming Arrow C Data Interface streams → `docs/internals/arrow-zero-copy.md`
 - Adding `sample_id` support to a table function → `docs/internals/per-sample-pattern.md`
 
+`docs/` is published at https://the-miint.github.io/duckdb-miint/. The site (`the-miint/the-miint.github.io`) copies `docs/` at build time, except `UPDATING.md`, and serves `table_of_contents.md` as the section's index page. Its navigation is a hand-maintained `nav` in its own `mkdocs.yml`, and `mkdocs build --strict` fails when a synced page is missing from that nav or an anchor link is broken, so a new, renamed or deleted page here needs a matching change there. Downstream projects read these pages as miint's contract.
+
 ## Extension Entry Point
 
 `src/miint_extension.cpp` — `LoadInternal()` registers every table function, scalar function, aggregate, and COPY format. New functionality is registered here.
@@ -124,14 +126,14 @@ SAM alignments compute `stop_position` using HTSlib's `bam_endpos()`:
 - Critical for interval operations and coverage analysis
 
 ### Identifier-column Codec (`id_column_codec` / `id_column_utils`)
-Functions that accept user-supplied identifier columns (`read_id`, `reference`, `mate_reference`) may opt in to BIGINT in addition to VARCHAR. The pattern is split across two layers:
+Functions that accept user-supplied identifier columns (`read_id`, `reference`, `mate_reference`) may opt in to BIGINT and UUID in addition to VARCHAR; `IsAllowedIdType` in `src/include/id_column_utils.hpp` defines the accepted set. The pattern is split across two layers:
 
 - `src/include/id_column_codec.hpp` / `src/id_column_codec.cpp` — pure C++ (`miint::ParseIdAsInt64`, `miint::FormatIdFromInt64`). No DuckDB types, so the `tests` C++ binary can link it directly without pulling in DuckDB.
 - `src/include/id_column_utils.hpp` — DuckDB-aware inline header (`duckdb::IsAllowedIdType`, `ExtractIdColumnAsStrings`, `EmitIdColumnFromStrings`). Wraps the codec and handles `Vector` / `DataChunk` / `LogicalType` plumbing.
 
 In-memory carriers (e.g. `SequenceRecordBatch::read_ids`, `SAMRecordBatch::read_ids`/`references`/`mate_references`) always store `std::vector<std::string>` — BIGINT inputs are stringified at the ingress boundary and parsed back at the egress boundary. This keeps the alignment hot loop type-agnostic.
 
-Dispatch is opt-in. Schema validators take an `allow_bigint` flag (default `false`); a caller that doesn't pass `true` keeps the historical VARCHAR-only contract. The captured `LogicalType` is threaded through the bind data so the emit side knows which output type to materialise. Default-constructed `LogicalType` is `INVALID`, so any path that forgets to capture the type fails loud at the helper dispatch rather than silently producing garbage.
+Dispatch is opt-in. Schema validators take an `allow_bigint` flag (default `false`), which admits UUID as well as BIGINT; a caller that doesn't pass `true` keeps the historical VARCHAR-only contract. The captured `LogicalType` is threaded through the bind data so the emit side knows which output type to materialise. Default-constructed `LogicalType` is `INVALID`, so any path that forgets to capture the type fails loud at the helper dispatch rather than silently producing garbage.
 
 Sentinel rules (BIGINT egress): empty string and the SAM `*` sentinel both decode to NULL. The SAM `=` mate-reference sentinel has no BIGINT encoding and is the caller's responsibility to resolve to a real reference value before invoking the codec — `ParseIdAsInt64` throws on `=` to surface that contract. VARCHAR sentinels pass through unchanged.
 

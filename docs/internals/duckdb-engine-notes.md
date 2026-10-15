@@ -44,6 +44,18 @@ Zstd. FSST is the one that matters for sequence and read-ID strings; ALP for flo
 **Row groups default to 122,880 rows** (`ATTACH ... (ROW_GROUP_SIZE n)` to change). A row
 group is simultaneously the unit of parallelism, of compression, and of zonemap pruning.
 
+**Two processes must not share a `temp_directory`.** Spill files are named
+`duckdb_temp_storage_<size>-<index>.tmp`, with no process identifier, and a database's
+teardown deletes every file beginning `duckdb_temp_` in its temp directory, or the whole
+directory if it created it (`duckdb/src/storage/temporary_file_manager.cpp`). An in-memory
+database defaults `temp_directory` to `.tmp` under the working directory
+(`DBConfig::SetDefaultTempDirectory`), so two concurrent processes started in the same
+directory write the same files at the same offsets. Measured on v1.5.4 with a forced spill
+and a shared working directory: most runs segfaulted, and some reported `Invalid unicode
+(byte sequence mismatch) detected in segment statistics update`, which was another process's
+bytes rather than invalid input. A per-process `temp_directory` removed every failure. miint
+never sets `temp_directory`; a caller running concurrent processes sets one per process.
+
 ## Execution format (vectors)
 
 **Input vectors are not necessarily flat.** The storage layer emits CONSTANT vectors
@@ -67,6 +79,12 @@ union'd with 4-byte length + 12 inline bytes). Consequences for us:
   sharing an instrument/run prefix (`A00123:...`) collide on all 4 prefix bytes, so every
   comparison follows the pointer anyway. Sorting or joining on read ID is more expensive
   than the same operation on a synthetic integer key.
+
+**A NULL `string_t` slot has no defined contents.** Check validity before `GetString()` or
+`GetData<string_t>`. Observed: the slot under a NULL read back from a materialized table
+yields `""`, while an inline constant-NULL vector yields bytes that trip an unrelated error.
+A test that feeds NULL only one way can pass against the bug, so cover both a NULL stored in
+a table and a literal `NULL`.
 
 A **morsel is 122,880 rows (60 data chunks)** — the granularity a thread claims from a
 source.
@@ -139,6 +157,20 @@ stack. Tests for depth-sensitive code must pin a small stack explicitly via
 inherits the 8 MB default) — see the `[depth]`-tagged cases in
 `test/cpp/test_NewickParser.cpp`.
 
+### Progress reporting
+
+The progress bar estimates completion with an unscented Kalman filter
+(`duckdb/src/common/progress_bar/unscented_kalman_filter.cpp`). An operator that reports no
+progress for several seconds can drive the filter's innovation covariance toward zero; its
+inverse is then infinite and the process dies with SIGFPE. Observed on an INSERT operator
+whose Finalize makes several HTTPS round trips, and absent with the progress bar disabled.
+`GetSinkProgress` returning `ProgressData::SetInvalid()` keeps such an operator out of the
+estimate (`src/include/ena_object_insert_op.hpp`). A table function without a
+`table_scan_progress` callback already reports invalid progress
+(`duckdb/src/execution/operator/scan/physical_table_scan.cpp`), so a table function that
+blocks in `InitGlobal` needs nothing added. An iterative fit that stops early has no known
+total, so its iteration count is not a progress fraction.
+
 ## Optimizer
 
 **Passes run once each, in a fixed order, never to fixpoint.** v1.5 has 30+ passes with a
@@ -162,6 +194,16 @@ PRAGMA explain_output = 'optimized_only';
 build side's min/max, or an `IN` list when there are ≤ 50 distinct values, used to
 pre-filter the probe side) and `row_group_pruner` are runtime effects — only
 `EXPLAIN ANALYZE` reveals them. A plan can look worse than it actually runs.
+
+**A cast on the column side of a predicate forfeits pushdown.** `WHERE id::VARCHAR IN (…)`
+on a BIGINT column is a filter over an expression: `EXPLAIN` shows
+`(CAST(id AS VARCHAR) IN (...))` rather than a table filter on `id`, and every row is
+evaluated. Measured on a 5.2M-row table, a 1,000-id slice cost 86× the instructions of the
+native predicate. On a VARCHAR column the cast is elided, so the cost appears only once ids
+are integers. Compare in the column's type and cast the literals instead:
+`IdInPredicate` in `src/unifrac_function_common.cpp` does this for integer and UUID ids,
+whose text round trip is exact, and keeps the cast for FLOAT, DOUBLE and DECIMAL ids, whose
+text form is not.
 
 Passes worth knowing about for our workloads:
 - `late_materialization` — keeps rows narrow through the heavy operators, then joins wide

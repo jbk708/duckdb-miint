@@ -139,14 +139,20 @@ Full manual smoke test procedure: `localdocs/cli-smoke-tests.md`.
 ### Optional-dependency guards in SQL tests
 SQL tests use `require-env VAR_NAME` (after `require miint`) to skip gracefully when a dependency isn't present. If the env var isn't set, the test file is skipped, not failed.
 
-`run_tests.sh` is the authoritative source for what gets detected and exported. It covers three kinds of guards:
-- **Runtime binaries** detected via `command -v` (e.g., `BOWTIE2_AVAILABLE`, `ASPERA_AVAILABLE`, `MASSQL_PYTHON_AVAILABLE`, `GPL_BOUNDARY_AVAILABLE` for the FastTree process-isolation host, `FASTTREE_AVAILABLE` for the bioconda parity oracle binary)
+`run_tests.sh` is the authoritative source for what gets detected and exported. It covers these kinds of guards:
+- **Runtime binaries** detected via `command -v` (e.g., `ASPERA_AVAILABLE`, `MASSQL_PYTHON_AVAILABLE`, `GPL_BOUNDARY_AVAILABLE` for the FastTree process-isolation host)
 - **Compile-time features** detected by querying the built extension (e.g., `HDF5_AVAILABLE`, `VSEARCH_AVAILABLE`, `MAFFT_AVAILABLE` — each checks for a registered function or library entry)
 - **Downloaded / served test data** (e.g., `MIINT_HTTPS_TEST_URL`, `MASSQL_TEST_DATA`, `MASSQL_GNPS_DATA`, `MZXML_REAL_DATA`)
-- **SHA-pinned parity oracles** (e.g., `SORTMERNA_REAL_ORACLE`, `MIINT_FASTTREE_TINY_PARITY_OK`, `MIINT_FASTTREE_MODERATE_PARITY_OK`) — exported only when the oracle file's SHA matches the recorded sidecar. To regenerate stale oracles: `MIINT_SORTMERNA_REAL_DATA=1` or `MIINT_FASTTREE_REGENERATE=1` and rerun `run_tests.sh`.
+- **An oracle pinned to a submodule commit** (`SORTMERNA_REAL_ORACLE`) — exported only when the `ext/sortmerna` commit recorded with the committed oracle matches the submodule's HEAD; regenerate with `MIINT_SORTMERNA_REAL_DATA=1`. Every other committed golden fails its parity test when stale instead of skipping (`docs/testing.md`, "Guards and skipped tests").
 - **Process state the main pass cannot provide** (currently `MIINT_LOW_FD_TEST`, guarding `test/sql/read_fastx_fd_release.test`) — not an availability check. `make test` has no way to set `RLIMIT_NOFILE`, so the file opts out of that pass and `run_tests.sh` reruns it in a subshell with the limit lowered. Reach for this only when the test needs process state, never to work around missing data.
 
 When adding a new guard: detect in `run_tests.sh`, add `require-env` to the test file(s), and leave availability-check tests (that only verify the scalar/feature-flag query itself) unguarded so they always run.
+
+## Reviewing a branch
+
+Every PR runs the review loop on its own changes before it is opened. The `miint-review` skill (`.claude/skills/miint-review/`) owns the loop: one `/code-review` pass, then fresh `miint-reviewer` rounds until a stop rule holds; the rules live in `.claude/agents/miint-reviewer.md`. The loop ends by printing a `## Reviewer loop` block for the PR description, and the `review-loop-check` workflow fails a PR whose block is missing or names a commit that is not one of the PR's own. A PR that cannot run the loop carries the `no-agent-review` label and says why under that heading. The check shows that the block is present, not that the loop ran.
+
+When a human review turns up a pattern the reviewer missed, add it to the agent file in the PR that fixes the instance: a bullet under the rule that owns it and a Trigger-map row so it can fire, with no names, quotes or PR numbers.
 
 ## Architecture and Patterns (detailed docs)
 

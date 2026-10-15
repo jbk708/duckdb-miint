@@ -84,8 +84,7 @@ unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id
 	}
 
 	// SendQuery, not Query: the result must stream so memory stays O(batch)
-	// instead of materializing the whole corpus. A prepared statement would
-	// force-materialize even with allow_stream_result.
+	// instead of materializing the whole corpus.
 	auto query_result = conn.SendQuery("SELECT " + select_cols + " FROM " + options.relation_quoted);
 	if (query_result->HasError()) {
 		throw InvalidInputException("Failed to read sequences from '%s': %s", options.source_name,

@@ -43,6 +43,12 @@ For columns that require transformation (e.g., id→read_id lookup), direct buff
 
 Do **NOT** manually iterate Arrow List child data with element-by-element copy. Use `ColumnArrowToDuckDB`, which handles List→LIST conversion with zero-copy on the child values.
 
+## Handing a stream to a C library
+
+A callee documented as taking ownership of an input stream once it begins consuming it cannot be error-handled from one return code. A failure before consumption leaves the stream with the caller, who must release it; a failure after leaves it with the callee, and releasing it again is a double free. Testing `stream->release` afterwards does not help: if the release callback deleted the object the stream struct lives in, the read is itself a use-after-free, and arrow-rs's `from_raw` leaves an emptied struct behind either way.
+
+Keep ownership instead. The object stays in caller-owned state for the whole query (the table function's `GlobalState`), and its release callback only marks the stream released and frees the heavy resources (the streaming result, the scan state). Exactly one destruction happens whatever the callee did, and the fetch path reports end-of-stream if called after that teardown. Teardown order: the output stream, then the input stream, then the connection whose result the input stream holds. Reference: `src/include/rype_input_stream.hpp` and `src/rype_input_stream.cpp`; the reachable failure is the mismatched `negative_index` case in `test/sql/rype_max_memory.test`.
+
 ## Headers
 
 ```cpp

@@ -24,6 +24,11 @@ Outside this repo (do these after CI is green and a release tag is pushed):
 - The playground console in the umbrella site repo pins both `@duckdb/duckdb-wasm` and `EXT_VERSION`. A C++ extension only loads into a duckdb-wasm of the *same* core version, so bump both together and verify the npm build actually reports the new version before flipping.
 - `duckdb/community-extensions` `extensions/miint/description.yml` carries the `ref` that `INSTALL miint FROM community` serves; open a PR bumping it to the new tag.
 
+Two traps when verifying a bump:
+
+- `scripts/test_wasm_load.sh` reuses `build/wasm_shell/src/libduckdb_static.a` whenever it exists, so after a bump it still links the old DuckDB core. Run it with `--clean`; an old core fails with a version-lock error that looks like an incompatibility.
+- DuckDB release tags are lightweight, so `git ls-remote <url> 'refs/tags/vX.Y.Z^{}'` matches nothing; query the plain ref as well, as `scripts/check-duckdb-version.sh` does.
+
 # API changes
 DuckDB extensions built with this extension template are built against the internal C++ API of DuckDB. This API is not guaranteed to be stable.
 What this means for extension development is that when updating your extensions DuckDB target version using the above steps, you may run into the fact that your extension no longer builds properly.
