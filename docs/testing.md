@@ -175,6 +175,8 @@ bash test/shell/read_alignments_stdin.sh
 bash run_tests.sh
 ```
 
+A script that loads httpfs (`read_https.sh`, `read_ena_sequences_aspera.sh`) skips itself when the shell cannot load it, as on any machine with no httpfs under `~/.duckdb`, CI included. `run_tests.sh` runs such a script with `HOME=build/release/httpfs_test_home`, where it installed httpfs for the SQL files, and fails the run if httpfs does not load there. By hand, run one with `HOME=$PWD/build/release/httpfs_test_home` once `run_tests.sh` has set that `HOME` up.
+
 **Test file structure:**
 Shell tests use simple bash scripts with conditional logic and exit codes:
 

@@ -705,12 +705,21 @@ if grep -qE '^No tests ran|^require (httpfs|miint):' "$HTTPFS_LOG"; then
     exit 1
 fi
 
-# Run shell script tests
+# Run shell script tests. A script that loads httpfs runs with the HOME httpfs was installed
+# into above: with the default HOME it would find no httpfs and skip itself.
+if ! HOME="$HTTPFS_TEST_HOME" ./build/release/duckdb -c "LOAD httpfs" > /dev/null; then
+    echo "ERROR: httpfs in $HTTPFS_TEST_HOME does not load in the shell, so the shell tests that need it would skip" >&2
+    exit 1
+fi
 echo "Running shell script tests..."
 for test_script in test/shell/*.sh; do
     if [ -f "$test_script" ]; then
         echo "Running $test_script..."
-        if ! bash "$test_script"; then
+        script_home="$HOME"
+        if grep -q 'LOAD httpfs' "$test_script"; then
+            script_home="$HTTPFS_TEST_HOME"
+        fi
+        if ! HOME="$script_home" bash "$test_script"; then
             echo "Shell test failed: $test_script"
             exit 1
         fi
