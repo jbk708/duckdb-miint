@@ -87,7 +87,6 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 			data->target_column = v.GetValue<string>();
 		} else if (StringUtil::CIEquals(k, "n_threads")) {
 			data->n_threads = v.GetValue<int32_t>();
-			params.n_threads = data->n_threads;
 		} else if (StringUtil::CIEquals(k, "model")) {
 			const auto m = v.GetValue<string>();
 			if (!StringUtil::CIEquals(m, "random_forest")) {
@@ -245,14 +244,8 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	// scanning happens.
 	const sc_rf_params_t &params = bind.params;
 
-	// multi-threaded execution context for sc, with the number of threads specified by the user. If n_threads is 0, sc
-	// will use all available threads.
-	sc_config_t config {};
-	config.n_threads = bind.n_threads;
 	miint::ScContext ctx;
-	if (auto st = sc_context_new(&config, &ctx.ptr); st != SC_OK) {
-		miint::ThrowSc("fit", nullptr, st);
-	}
+	miint::OpenScContext(bind.n_threads, bind.caller, ctx);
 
 	// hand over the arrow data to sc, which will take ownership of the buffers and free them when done. The table is
 	// now owned by sc and must not be freed by the caller. Fit the model and serialize it into a blob

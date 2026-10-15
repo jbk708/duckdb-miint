@@ -71,10 +71,7 @@ void ScModelFeaturesExecute(ClientContext &context, TableFunctionInput &input, D
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		sc_config_t config {};
-		if (auto st = sc_context_new(&config, &ctx.ptr); st != SC_OK) {
-			miint::ThrowSc("model_features", nullptr, st);
-		}
+		miint::OpenScContext(0, "model_features", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "model_features", ctx.ptr, model);
 

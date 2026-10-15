@@ -36,3 +36,6 @@ sylph = { path = "../sylph", default-features = false, features = ["arrow-ffi"],
 # ext/sc/include/sc.h via cbindgen on every build, so the header the C++ side
 # includes can never drift from the linked symbols.
 sc-capi = { path = "../sc/crates/sc-capi" }
+# Only for miint_rust_glue_init (src/lib.rs), which seeds the global pool that
+# rype and sc share. Already in the graph through both, so no new crate.
+rayon = "1"

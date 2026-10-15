@@ -134,6 +134,19 @@ void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status) {
 	throw InvalidInputException("%s: sc error %d%s%s", what, static_cast<int>(status), msg ? ": " : "", msg ? msg : "");
 }
 
+void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
+	sc_config_t config {};
+#ifndef __EMSCRIPTEN__
+	config.n_threads = n_threads;
+#else
+	(void)n_threads;
+#endif
+	if (auto st = sc_context_new(&config, &out.ptr); st != SC_OK) {
+		// No context exists yet to carry sc's message.
+		ThrowSc(caller, nullptr, st);
+	}
+}
+
 //! One place for every "which model did you mean" failure, so the three cases
 //! read the same wherever they are raised.
 [[noreturn]] void RejectModelSelection(const char *caller, const std::string &relation, const std::string &name,

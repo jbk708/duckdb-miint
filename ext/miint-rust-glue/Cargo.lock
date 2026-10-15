@@ -1136,6 +1136,7 @@ dependencies = [
 name = "miint_rust_glue"
 version = "0.1.0"
 dependencies = [
+ "rayon",
  "rype",
  "sc-capi",
  "sylph",

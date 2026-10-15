@@ -225,11 +225,7 @@ void SelectFeatures(const double *row, size_t n_features, int64_t top_k, std::ve
 void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState &gstate) {
 	auto conn = MakeReadOnlyHelperConnection(context);
 
-	sc_config_t config {};
-	config.n_threads = bind.n_threads;
-	if (auto st = sc_context_new(&config, &gstate.ctx.ptr); st != SC_OK) {
-		miint::ThrowSc("shap", nullptr, st);
-	}
+	miint::OpenScContext(bind.n_threads, "shap", gstate.ctx);
 	miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "shap", gstate.ctx.ptr, gstate.model);
 
 	miint::OwnedArrowArray vocab;

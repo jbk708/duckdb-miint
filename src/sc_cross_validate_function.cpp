@@ -71,6 +71,15 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
                                   vector<LogicalType> &return_types, vector<string> &names, bool classification) {
 	auto data = make_uniq<ScCvData>();
 	data->caller = classification ? "cross_validate_classifier" : "cross_validate_regressor";
+#ifdef __EMSCRIPTEN__
+	// DuckDB-Wasm's Emscripten runtime mis-links one call cross-validation makes
+	// (a function-signature trap), and the obvious workaround returns wrong
+	// scores without an error. Refused here until #315 lands.
+	throw NotImplementedException("%s is not yet available in DuckDB-Wasm "
+	                              "(https://github.com/the-miint/duckdb-miint/issues/315). Run it in native DuckDB; "
+	                              "fit_*, predict, predict_proba and shap work here.",
+	                              data->caller);
+#endif
 	data->classification = classification;
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->metadata_relation = input.inputs[1].GetValue<string>();
@@ -109,7 +118,6 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 			params.parameter_tuning = v.GetValue<bool>();
 		} else if (StringUtil::CIEquals(k, "n_threads")) {
 			data->n_threads = v.GetValue<int32_t>();
-			params.n_threads = data->n_threads;
 		} else if (StringUtil::CIEquals(k, "n_estimators")) {
 			params.n_estimators = ParseNEstimators(v, data->caller);
 		} else if (StringUtil::CIEquals(k, "random_state")) {
@@ -238,12 +246,8 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 		                            bind.caller, (int64_t)bind.params.cv, bind.data_relation, (uint64_t)n_samples);
 	}
 
-	sc_config_t config {};
-	config.n_threads = bind.n_threads;
 	miint::ScContext ctx;
-	if (auto st = sc_context_new(&config, &ctx.ptr); st != SC_OK) {
-		miint::ThrowSc(bind.caller, nullptr, st);
-	}
+	miint::OpenScContext(bind.n_threads, bind.caller, ctx);
 
 	sc_cv_result_t res {};
 	const auto st = sc_cross_validate(ctx.ptr, table->get(), &targets.array, &targets.schema, &bind.params, &res);

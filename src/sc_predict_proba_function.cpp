@@ -91,12 +91,8 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		gstate.loaded = true;
 		auto conn = MakeReadOnlyHelperConnection(context);
 
-		sc_config_t config {};
-		config.n_threads = bind.n_threads;
 		miint::ScContext ctx;
-		if (auto st = sc_context_new(&config, &ctx.ptr); st != SC_OK) {
-			miint::ThrowSc("predict_proba", nullptr, st);
-		}
+		miint::OpenScContext(bind.n_threads, "predict_proba", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict_proba", ctx.ptr, model);
 

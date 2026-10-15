@@ -73,9 +73,9 @@ SELECT * FROM fit_classifier('counts', 'meta', name := 'site', n_estimators := 5
 | `name` | *required* | the model's handle |
 | `target_column` | auto | required when the metadata has more than one candidate column |
 | `model` | `random_forest` | the only algorithm so far |
-| `n_estimators` | 100 | trees |
+| `n_estimators` | 100 | trees, at most 100,000 |
 | `random_state` | 0 | seed |
-| `n_threads` | 0 | 0 = one thread per core |
+| `n_threads` | 0 | 0 = one thread per core; ignored in DuckDB-Wasm, which has one |
 | `max_depth` | unbounded | `<= 0` is sklearn's `None` |
 | `criterion` | `gini` / `squared_error` | classifier / regressor |
 | `max_features` | `sqrt` / `all` | features each split may consider: `'sqrt'`, `'log2'`, `'all'`, a fraction in (0, 1], or an integer count |
@@ -197,7 +197,7 @@ CREATE VIEW common AS
 
 - **Fitting** spends most of its time loading the table into sc, so the cell count matters more than `n_estimators`. Memory grows with threads; `n_threads := 1` trades time for memory.
 - **`shap`** memory is capped by `max_attributions`, whatever the sample count; fewer features is the way to go further.
-- **wasm** shares one 4 GiB memory with DuckDB and runs single-threaded, so expect a much lower ceiling than native.
+- **wasm** shares one 4 GiB memory with DuckDB and runs single-threaded, so expect a much lower ceiling than native. `n_threads` has no effect there; results are the same as native. `cross_validate_*` is not yet available there ([#315](https://github.com/the-miint/duckdb-miint/issues/315)).
 
 ### Citations
 

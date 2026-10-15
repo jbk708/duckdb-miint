@@ -64,10 +64,7 @@ void ScImportancesExecute(ClientContext &context, TableFunctionInput &input, Dat
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		sc_config_t config {};
-		if (auto st = sc_context_new(&config, &ctx.ptr); st != SC_OK) {
-			miint::ThrowSc("feature_importances", nullptr, st);
-		}
+		miint::OpenScContext(0, "feature_importances", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "feature_importances", ctx.ptr, model);
 

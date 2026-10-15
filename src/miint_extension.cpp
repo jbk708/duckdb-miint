@@ -149,6 +149,9 @@
 
 namespace fs = std::filesystem;
 
+// ext/miint-rust-glue/src/lib.rs: seeds rayon's global pool under Emscripten.
+extern "C" void miint_rust_glue_init();
+
 namespace duckdb {
 
 void SetDependencyLogging() {
@@ -272,6 +275,10 @@ static void MiintVersionsExecute(ClientContext &context, TableFunctionInput &dat
 static void LoadInternal(ExtensionLoader &loader) {
 	// TODO: use [[nodiscard]] throughout in headers
 	// TODO: //! comment on headers
+
+	// Before anything can reach rype or sc: on DuckDB-Wasm this gives rayon a
+	// pool it can actually run (the calling thread); elsewhere it does nothing.
+	miint_rust_glue_init();
 
 	miint::RegisterMiintLogType(loader.GetDatabaseInstance());
 	miint::RegisterENASecretType(loader);

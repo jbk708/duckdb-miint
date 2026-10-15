@@ -88,12 +88,8 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		gstate.loaded = true;
 		auto conn = MakeReadOnlyHelperConnection(context);
 
-		sc_config_t config {};
-		config.n_threads = bind.n_threads;
 		miint::ScContext ctx;
-		if (auto st = sc_context_new(&config, &ctx.ptr); st != SC_OK) {
-			miint::ThrowSc("predict", nullptr, st);
-		}
+		miint::OpenScContext(bind.n_threads, "predict", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict", ctx.ptr, model);
 

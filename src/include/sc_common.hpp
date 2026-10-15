@@ -98,6 +98,15 @@ private:
 //! message from the context's last-error slot.
 [[noreturn]] void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status);
 
+//! Open an sc context running on `n_threads` (0: rayon's global pool),
+//! throwing as `caller` on failure.
+//!
+//! `n_threads` is ignored under Emscripten. DuckDB-Wasm has one thread, the
+//! global pool is seeded on it at load (miint_rust_glue_init), and a dedicated
+//! pool would need threads it cannot spawn. sc's results are identical at any
+//! thread count, so only speed differs.
+void OpenScContext(int32_t n_threads, const char *caller, ScContext &out);
+
 //! Read the `task` column of a model relation: "classification" or
 //! "regression".
 //!
