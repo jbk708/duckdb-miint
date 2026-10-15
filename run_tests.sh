@@ -26,10 +26,8 @@ fi
 export MIINT_SIMD="${MIINT_SIMD:-baseline}"
 echo "MIINT_SIMD=$MIINT_SIMD (mmvec kernel; expected values are carved against 'baseline')"
 
-# DuckDB's unittest skips any test whose error contains "HTTP" or "Unable to connect"
-# unless its config names other messages (duckdb/test/helpers/test_config.cpp). That
-# turned failures of the HTTP-reading tests into skips, so every unittest run below uses a
-# config under which every error fails the test.
+# Under this config every error fails its test; by default unittest skips some
+# (docs/testing.md, "Guards and skipped tests").
 export DUCKDB_TEST_CONFIG="${DUCKDB_TEST_CONFIG:-$PWD/test/configs/no_skipped_errors.json}"
 
 # Start local HTTP server for HTTPS reader tests (unless already set externally)
@@ -181,11 +179,11 @@ ft_regenerate_one "data/fasttree/moderate.fa" "data/fasttree/moderate.golden.nwk
 # the goldens against that manifest and fails on a mismatch. To refresh: rerun
 # the generator under a SciPy env.
 
-# Live NCBI BLAST tests (opt-in). Each submission waits in NCBI's queue for as long as
-# NCBI takes, which has passed 27 minutes and so the httpfs pass's timeout below; that
-# the endpoint answers says nothing about the queue. Run with
-# `MIINT_BLAST_LIVE_TEST=1 bash run_tests.sh` to include them; the probe then skips them
-# in offline CI.
+# Live NCBI BLAST tests, opt-in: `MIINT_BLAST_LIVE_TEST=1 bash run_tests.sh`. A submission
+# waits in NCBI's queue for as long as NCBI takes, and that the endpoint answers says
+# nothing about the queue: on 2026-10-15 one was still queued after 28 minutes, when the
+# httpfs pass below reached its 1800 s limit. With the opt-in set, the probe still skips
+# them when BLAST does not answer.
 if [ "${MIINT_BLAST_LIVE_TEST:-0}" = "1" ] &&
     curl -sSf --max-time 5 -o /dev/null \
         "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi" 2>/dev/null; then
@@ -664,18 +662,10 @@ echo "Running $FD_RELEASE_TEST with RLIMIT_NOFILE<=$FD_RELEASE_LIMIT..."
     MIINT_LOW_FD_TEST=1 ./build/release/test/unittest "$FD_RELEASE_TEST"
 ) || exit 1
 
-# Every test that needs httpfs: the HTTP-reader tests against the local server, the ENA
-# mock-server tests, and the live ENA and NCBI tests. httpfs is not linked into unittest on
-# this DuckDB version (extension_config.cmake), so `require httpfs` skips all of them in
-# `make test` above. Rerun them with autoloading on and a throwaway HOME, so httpfs installs
-# there rather than into the user's ~/.duckdb. Their require-env guards still decide whether
-# each file runs: a live test runs only when its service answered the probe above.
-#
-# Autoloading runs miint from the copy installed in that HOME, not the linked one, and an
-# installed copy is reused, so this build is installed over it on every run. The install
-# records the build's version, which loading checks: a file copied over an earlier install
-# does not load. A file whose `require httpfs` or `require miint` cannot load is skipped,
-# not failed, so the skip summary is checked too.
+# The httpfs pass: every SQL file that needs httpfs, all of which `make test` above skips.
+# docs/testing.md ("Guards and skipped tests") says why, and how this pass loads httpfs and
+# this build's miint. The files' require-env guards still decide whether each runs: a live
+# test runs only when its service answered the probe above.
 HTTPFS_TESTS=$(grep -rl --include='*.test' '^require httpfs' test/sql | paste -sd, -)
 HTTPFS_TEST_HOME="$PWD/build/release/httpfs_test_home"
 mkdir -p "$HTTPFS_TEST_HOME"
@@ -695,9 +685,12 @@ fi
 echo "Running the $(echo "$HTTPFS_TESTS" | tr ',' '\n' | wc -l) test files that need httpfs (log: $HTTPFS_LOG)..."
 HTTPFS_RC=0
 HTTPFS_START=$SECONDS
+# --require fails a file whose `require httpfs` or `require miint` cannot load, where it
+# would otherwise be skipped; -w NoTests fails a file list that matches nothing.
 HOME="$HTTPFS_TEST_HOME" DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' \
     ${TIMEOUT_CMD:+"$TIMEOUT_CMD" --kill-after=60 "$HTTPFS_TIMEOUT_SECONDS"} \
-    ./build/release/test/unittest "$HTTPFS_TESTS" > "$HTTPFS_LOG" 2>&1 || HTTPFS_RC=$?
+    ./build/release/test/unittest --require httpfs --require miint -w NoTests "$HTTPFS_TESTS" \
+    > "$HTTPFS_LOG" 2>&1 || HTTPFS_RC=$?
 HTTPFS_ELAPSED=$((SECONDS - HTTPFS_START))
 if [ "$HTTPFS_RC" -ne 0 ]; then
     # In full: CI keeps the console output, not the log file.
@@ -713,14 +706,21 @@ if [ "$HTTPFS_RC" -ne 0 ]; then
     exit 1
 fi
 tail -n 20 "$HTTPFS_LOG"
-if grep -qE '^No tests ran|^require (httpfs|miint):' "$HTTPFS_LOG"; then
-    echo "ERROR: httpfs or miint did not load, so the tests that need httpfs were skipped; see $HTTPFS_LOG" >&2
+# A file may skip only on a require-env guard for something a machine can lack: a live
+# service, credentials, a runtime binary or an optional library. Any other skip, such as
+# one for a mock server's URL that this script exports, means the pass covered less than
+# it should, and skips do not change unittest's exit status.
+HTTPFS_ALLOWED_SKIPS='ENA_AVAILABLE|NCBI_AVAILABLE|BLAST_LIVE_AVAILABLE|MIINT_TAXDUMP_REMOTE|ENA_WEBIN_TEST_(USER|PASSWORD|AVAILABLE)|ASPERA_AVAILABLE|HDF5_AVAILABLE'
+HTTPFS_BAD_SKIPS=$(sed -n '/^Skipped tests for the following reasons:/,$p' "$HTTPFS_LOG" | tail -n +2 |
+    grep -vE "^(require-env ($HTTPFS_ALLOWED_SKIPS): [0-9]+)?$" || true)
+if [ -n "$HTTPFS_BAD_SKIPS" ]; then
+    echo "ERROR: the httpfs pass skipped files for reasons this run should have provided:" >&2
+    echo "$HTTPFS_BAD_SKIPS" >&2
     exit 1
 fi
 
-# Run shell script tests. A script that loads httpfs runs with the HOME httpfs was installed
-# into above, where the shell loaded it: with the default HOME it would find no httpfs and
-# skip itself.
+# Run shell script tests. A script that loads httpfs runs with the httpfs pass's HOME
+# (docs/testing.md, "Shell Script Tests").
 echo "Running shell script tests..."
 for test_script in test/shell/*.sh; do
     if [ -f "$test_script" ]; then

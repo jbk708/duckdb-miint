@@ -2,9 +2,9 @@
 # description: Live integration tests for blast table function (requires network)
 # group: [sql]
 
-# These tests make real HTTP requests to NCBI BLAST. Each submission waits in
-# NCBI's queue for as long as NCBI takes, which has passed 27 minutes, so
-# run_tests.sh runs this file only with MIINT_BLAST_LIVE_TEST=1. Tables are persistent (not TEMP) because
+# These tests make real HTTP requests to NCBI BLAST, whose queue has no time
+# limit, so run_tests.sh runs this file only with MIINT_BLAST_LIVE_TEST=1 (the
+# opt-in there says why). Tables are persistent (not TEMP) because
 # LoadSingleEndSequences uses a separate connection that cannot see TEMP objects.
 
 require httpfs

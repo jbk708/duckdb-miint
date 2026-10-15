@@ -80,6 +80,3 @@ physical_plan	<REGEX>:(?i).*INOUT.FUNCTION.*
 
 statement ok
 RESET explain_output;
-
-# That a LATERAL call cannot take named parameters is asserted in
-# read_ena_sequences_lateral_params.test, which needs no network.
