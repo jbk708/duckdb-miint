@@ -115,6 +115,39 @@ const std::string READ_GFF = // NOLINT
     "        ELSE TRUE "
     "      END; ";
 
+// read_gfa_segments(path) / read_gfa_links(path)
+//
+// Typed views of the two GFA record types every assembly graph has, over read_gfa's raw
+// rows. '*' -- GFA's "not stored" -- becomes NULL so it cannot be read as a one-base
+// sequence or a CIGAR.
+const std::string READ_GFA_SEGMENTS = // NOLINT
+    "CREATE OR REPLACE MACRO read_gfa_segments(path) AS TABLE "
+    "SELECT fields[1] AS segment_id, "
+    "       CASE WHEN fields[2] = '*' THEN NULL ELSE fields[2] END AS sequence, "
+    "       tags "
+    "FROM read_gfa(path) "
+    "WHERE record_type = 'S'; ";
+
+const std::string READ_GFA_LINKS = // NOLINT
+    "CREATE OR REPLACE MACRO read_gfa_links(path) AS TABLE "
+    "SELECT fields[1] AS from_segment, "
+    "       fields[2] AS from_orientation, "
+    "       fields[3] AS to_segment, "
+    "       fields[4] AS to_orientation, "
+    "       CASE WHEN fields[5] = '*' THEN NULL ELSE fields[5] END AS overlap, "
+    "       tags "
+    "FROM read_gfa(path) "
+    // One CASE rather than `record_type = 'L' AND <check>`: DuckDB may evaluate AND terms
+    // in any order, and an S record's second field is a sequence, not an orientation. In
+    // the WHERE clause, not a projection, so pruning the orientation columns cannot skip it.
+    "WHERE CASE "
+    "        WHEN record_type <> 'L' THEN FALSE "
+    "        WHEN fields[2] NOT IN ('+', '-') OR fields[4] NOT IN ('+', '-') "
+    "        THEN error(printf('read_gfa_links: line %d: orientation must be + or -, found ''%s'' and ''%s''', "
+    "                          line_number, fields[2], fields[4])) "
+    "        ELSE TRUE "
+    "      END; ";
+
 // read_jplace(path)
 //
 // Read jplace phylogenetic placement file(s) and return the best placement
@@ -2278,6 +2311,8 @@ public:
 
 		register_macro(PARSE_GFF_ATTRIBUTES, "parse_gff_attributes");
 		register_macro(READ_GFF, "read_gff");
+		register_macro(READ_GFA_SEGMENTS, "read_gfa_segments");
+		register_macro(READ_GFA_LINKS, "read_gfa_links");
 		register_macro(GENOME_COVERAGE, "genome_coverage");
 		register_macro(GENOME_COVERAGE_PER_SAMPLE, "genome_coverage_per_sample");
 		// _miint_bin_index must be registered before bin_of and interval_bins (they

@@ -42,6 +42,18 @@ TEST_CASE("Typed tags of every SAM/GFA type parse to key and value", "[sam_style
 	      Pairs {{"ba", "i,1,-2,3"}, {"bf", "f,0.5,1.25"}, {"bc", "c"}});
 }
 
+TEST_CASE("Typed tags may have names longer than two characters", "[sam_style_tags]") {
+	// The SAM and GFA specifications fix tag names at two characters, but myloasm's GFA
+	// writes DP2:f:30.0 and MEDIAN_DP1:f:33.0. The type letter is still required and the
+	// value still validated; reading DP2:f:30.0 as an untyped key with value "f:30.0"
+	// would be wrong in either mode.
+	const std::vector<std::string_view> myloasm = {"LN:i:196466", "DP2:f:30.0", "MEDIAN_DP1:f:33.0"};
+	const Pairs expected = {{"LN", "196466"}, {"DP2", "30.0"}, {"MEDIAN_DP1", "33.0"}};
+	CHECK(Parse(myloasm) == expected);
+	CHECK(Parse(myloasm, TagSyntax::TypedOrUntyped) == expected);
+	CHECK_THROWS_WITH(Parse({"MEDIAN_DP1:f:abc"}), ContainsSubstring("MEDIAN_DP1:f:abc"));
+}
+
 TEST_CASE("Tags keep field order and start at the requested field", "[sam_style_tags]") {
 	CHECK(Parse({"mandatory", "also mandatory", "b2:i:2", "a1:i:1"}, TagSyntax::Typed, 2) ==
 	      Pairs {{"b2", "2"}, {"a1", "1"}});

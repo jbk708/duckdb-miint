@@ -1,6 +1,6 @@
 # Reading files
 
-MIINT supports reading FASTA, FASTQ, SAM, BAM, PAF, SFF, BIOM, mzML, mzXML, GFF, jplace and Newick.  
+MIINT supports reading FASTA, FASTQ, SAM, BAM, PAF, GFA, SFF, BIOM, mzML, mzXML, GFF, jplace and Newick.  
 
 ## Table of contents
 
@@ -8,6 +8,9 @@ MIINT supports reading FASTA, FASTQ, SAM, BAM, PAF, SFF, BIOM, mzML, mzXML, GFF,
 - [SAM / BAM](#sam-and-bam) - SAM and BAM alignment files.
   - [`read_alignment_header(path)`](#read_alignment_headerpath) - A header's `@SQ` lines as `(tid, reference, length)`.
 - [PAF](#paf) - PAF pairwise alignment files, as written by minimap2 and other long-read tools.
+- [GFA](#gfa) - GFA 1 assembly graphs.
+  - [`read_gfa_segments(filename)`](#read_gfa_segmentsfilename) - A graph's segments as typed columns.
+  - [`read_gfa_links(filename)`](#read_gfa_linksfilename) - A graph's links as typed columns.
 - [SFF](#sff) - SFF sequence files.
 - [mzML / mzXML](#mzml-and-mzxml) - mzML and mzXML files.
 - [BIOM](#biom) - BIOM-Format v2.1 files.
@@ -332,6 +335,90 @@ GROUP BY read_id, query_length;
 
 -- Unaligned reads
 SELECT read_id FROM read_paf('reads.paf') WHERE reference = '*';
+```
+
+### GFA
+
+Read GFA 1 assembly graphs (GFA 1.0–1.2), the format most assemblers use for their contig graphs. `read_gfa` returns every record as it is written; `read_gfa_segments` and `read_gfa_links` give typed views of the two record types every graph has.
+
+**Basic example:**
+
+```sql
+SELECT * FROM read_gfa('assembly_graph.gfa');
+```
+
+#### `read_gfa(filename)`
+
+**Parameters:**
+- `filename` (VARCHAR or VARCHAR[]): Path to GFA file(s), or a glob pattern (e.g., `'graphs/*.gfa'`)
+  - **Glob patterns**: When a single VARCHAR contains glob characters (`*`, `?`, `[`), files are expanded and sorted alphabetically
+  - **Arrays**: VARCHAR[] elements are treated as literal paths (no glob expansion)
+- `include_filepath` (BOOLEAN, optional, default false): Add a `filepath` column to the output
+
+**Output schema:**
+- `line_number` (BIGINT): 1-based line of the record in its file. Comment lines are counted, so this matches what an editor shows; it is also the record order, which matters for records such as myloasm's read placements
+- `record_type` (VARCHAR): The first field: `H`, `S`, `L`, `C`, `P`, `W`, or any other value as written
+- `fields` (VARCHAR[]): The record type's mandatory positional fields, verbatim (table below). For a record type GFA 1 does not define, every field after the type
+- `tags` (MAP(VARCHAR, VARCHAR), nullable): Optional `TAG:TYPE:VALUE` fields as `tag → value`. Empty for a known record with no tags; NULL for an unknown record type, whose fields are never split into positional fields and tags
+- `filepath` (VARCHAR, optional): File path when `include_filepath=true`
+
+| Record type | Positional fields |
+|---|---|
+| `H` header | none |
+| `S` segment | name, sequence (`*` when not stored) |
+| `L` link | from, from orientation, to, to orientation, overlap (CIGAR or `*`) |
+| `C` containment | container, container orientation, contained, contained orientation, position, overlap |
+| `P` path | path name, segment names, overlaps |
+| `W` walk | sample, haplotype index, sequence name, start, end, walk |
+
+**Behavior:**
+- Lines starting with `#` are comments and produce no row.
+- `fields` are the file's own text. No coordinate conversion is applied: a `W` walk's start and end, and a `C` containment's position, stay 0-based as GFA writes them. See [Coordinate conventions](#coordinate-conventions).
+- Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped, so cast values when you need numbers: `tags['LN']::BIGINT`. Tag names longer than the specification's two characters are accepted, because myloasm writes `DP2:f:30.0` and `MEDIAN_DP1:f:33.0`.
+- GFA 2 (`H VN:Z:2.0`) is rejected rather than read as GFA 1, whose record types it redefines.
+- gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths are read through DuckDB's file system.
+- One thread reads each file; several files are read in parallel.
+- An empty file returns no rows. stdin is not supported.
+
+**Malformed records fail the scan.** The error names the file, the line and the defect: a blank line, an empty record type, a known record type with fewer positional fields than it needs, a malformed or untyped tag, or a tag that appears twice on one line.
+
+#### `read_gfa_segments(filename)`
+
+The `S` records of a GFA file.
+
+- `segment_id` (VARCHAR): Segment name
+- `sequence` (VARCHAR, nullable): Segment sequence; NULL when the file stores `*`
+- `tags` (MAP(VARCHAR, VARCHAR)): The segment's tags, e.g. `LN` (length) and depth tags
+
+#### `read_gfa_links(filename)`
+
+The `L` records of a GFA file.
+
+- `from_segment` (VARCHAR), `from_orientation` (VARCHAR): The link's source segment and its orientation, `+` or `-`
+- `to_segment` (VARCHAR), `to_orientation` (VARCHAR): The link's target segment and its orientation
+- `overlap` (VARCHAR, nullable): The overlap CIGAR; NULL when the file stores `*`
+- `tags` (MAP(VARCHAR, VARCHAR)): The link's tags
+
+An orientation other than `+` or `-` fails the scan. Both views accept the same paths as `read_gfa` (a path, a glob, or a list); for a `filepath` column, query `read_gfa` directly.
+
+**Examples:**
+```sql
+-- Segment lengths, from the sequence when it is stored and from the LN tag otherwise
+SELECT segment_id, coalesce(length(sequence), tags['LN']::BIGINT) AS length
+FROM read_gfa_segments('assembly_graph.gfa');
+
+-- Every segment linked to one segment, in either direction
+SELECT DISTINCT CASE WHEN from_segment = 'contig_1' THEN to_segment ELSE from_segment END AS neighbour
+FROM read_gfa_links('assembly_graph.gfa')
+WHERE 'contig_1' IN (from_segment, to_segment);
+
+-- Which record types a graph contains
+SELECT record_type, count(*) AS n FROM read_gfa('assembly_graph.gfa') GROUP BY ALL;
+
+-- Paths as lists of oriented segments
+SELECT fields[1] AS path_name, string_split(fields[2], ',') AS steps
+FROM read_gfa('assembly_graph.gfa')
+WHERE record_type = 'P';
 ```
 
 ### SFF

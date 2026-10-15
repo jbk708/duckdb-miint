@@ -117,6 +117,11 @@ run_test "read_paf: PAF via HTTP" "7" \
 run_test "read_paf: gzipped PAF via HTTP" "7" \
     "SELECT COUNT(*) FROM read_paf('$BASE/paf/k12_minimap2.paf.gz');"
 
+# --- read_gfa ---
+
+run_test "read_gfa: GFA via HTTP" "10" \
+    "SELECT COUNT(*) FROM read_gfa('$BASE/gfa/spec_example.gfa');"
+
 # --- read_mzml ---
 
 run_test "read_mzml: mzML via HTTP" "3" \

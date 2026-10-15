@@ -16,8 +16,10 @@ struct SamStyleTag {
 };
 
 enum class TagSyntax {
-	// Every field must be TAG:TYPE:VALUE as the SAM and GFA specifications define it:
-	// a two-character tag, a type in A/i/f/Z/J/H/B, and a value valid for that type.
+	// Every field must be TAG:TYPE:VALUE as the SAM and GFA specifications define it: a
+	// type in A/i/f/Z/J/H/B and a value valid for that type. The tag name may be longer
+	// than the specifications' two characters ([A-Za-z_][A-Za-z0-9_]*), because myloasm
+	// writes names such as MEDIAN_DP1.
 	Typed,
 	// Additionally accept an untyped key:value field, which some PAF writers emit
 	// (myloasm writes `shared_mini:284`). A field that has the typed shape is still

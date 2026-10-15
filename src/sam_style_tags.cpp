@@ -167,14 +167,10 @@ bool IsValidValue(char type, std::string_view value) {
 	}
 }
 
-// TAG:TYPE:VALUE with a [A-Za-z][A-Za-z0-9] tag and a known type letter.
-bool HasTypedShape(std::string_view field) {
-	return field.size() >= 5 && IsAlpha(field[0]) && (IsAlpha(field[1]) || IsDigit(field[1])) && field[2] == ':' &&
-	       std::string_view("AifZJHB").find(field[3]) != std::string_view::npos && field[4] == ':';
-}
-
-// [A-Za-z_][A-Za-z0-9_]*
-bool IsUntypedKey(std::string_view key) {
+// [A-Za-z_][A-Za-z0-9_]*. The specifications define tag names as exactly two characters,
+// [A-Za-z][A-Za-z0-9], but myloasm's GFA writes longer typed names (DP2:f:30.0,
+// MEDIAN_DP1:f:33.0), so a typed field accepts any name of this form, as an untyped one does.
+bool IsTagName(std::string_view key) {
 	if (key.empty() || !(IsAlpha(key[0]) || key[0] == '_')) {
 		return false;
 	}
@@ -197,24 +193,25 @@ void ParseSamStyleTags(const std::vector<std::string_view> &fields, size_t first
 	out.clear();
 	for (size_t i = first; i < fields.size(); ++i) {
 		std::string_view field = fields[i];
-		std::string_view key;
+		const size_t colon = field.find(':');
+		const bool named = colon != std::string_view::npos && IsTagName(field.substr(0, colon));
+		// NAME:TYPE:VALUE: a known type letter between the first two colons.
+		const bool typed = named && colon + 2 < field.size() &&
+		                   std::string_view("AifZJHB").find(field[colon + 1]) != std::string_view::npos &&
+		                   field[colon + 2] == ':';
+		const std::string_view key = named ? field.substr(0, colon) : std::string_view();
 		std::string_view value;
-		if (HasTypedShape(field)) {
-			key = field.substr(0, 2);
-			value = field.substr(5);
-			if (!IsValidValue(field[3], value)) {
+		if (typed) {
+			value = field.substr(colon + 3);
+			if (!IsValidValue(field[colon + 1], value)) {
 				throw std::runtime_error(Quoted(field) + " has a value that is not valid for type '" +
-				                         std::string(1, field[3]) + "'");
+				                         std::string(1, field[colon + 1]) + "'");
 			}
 		} else {
-			size_t colon = field.find(':');
-			bool untyped_ok = syntax == TagSyntax::TypedOrUntyped && colon != std::string_view::npos &&
-			                  IsUntypedKey(field.substr(0, colon)) && AllPrintableOrSpace(field.substr(colon + 1));
-			if (!untyped_ok) {
+			if (syntax != TagSyntax::TypedOrUntyped || !named || !AllPrintableOrSpace(field.substr(colon + 1))) {
 				throw std::runtime_error(Quoted(field) + " is not a tag (expected TAG:TYPE:VALUE" +
 				                         std::string(syntax == TagSyntax::TypedOrUntyped ? " or key:value" : "") + ")");
 			}
-			key = field.substr(0, colon);
 			value = field.substr(colon + 1);
 		}
 		for (const auto &existing : out) {
