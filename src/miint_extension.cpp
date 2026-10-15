@@ -226,6 +226,7 @@ static unique_ptr<FunctionData> MiintVersionsBind(ClientContext &context, TableF
 	data->versions.emplace_back("libcurl", miint::GetCurlVersion());
 #endif
 	data->versions.emplace_back("rype", RYPE_GIT_VERSION);
+	data->versions.emplace_back("sc", SC_GIT_VERSION);
 #ifdef MIINT_HAS_VSEARCH
 	data->versions.emplace_back("vsearch", VSEARCH_GIT_VERSION);
 #endif

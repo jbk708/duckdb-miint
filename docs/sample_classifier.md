@@ -2,7 +2,7 @@
 
 Predict a sample's metadata from its feature table: which body site a sample came from, how old the infant was, whether a treatment took. A random forest is trained on a `(sample_id, feature_id, value)` count table plus one label per sample, stored in a DuckDB table, and then used to predict, to score itself by cross-validation, and to explain individual predictions.
 
-These functions are powered by [sc](https://github.com/the-miint/sc), a dependency-free Rust reimplementation of the random forest, TreeSHAP and nested-CV parts of [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier). Defaults match scikit-learn's `RandomForestClassifier` / `RandomForestRegressor`, and results are checked against scikit-learn 1.4.2 fixtures.
+These functions are powered by [sc](https://github.com/the-miint/sc), a Rust reimplementation of the random forest and nested cross-validation in [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier), plus path-dependent TreeSHAP to explain predictions. Defaults match scikit-learn's `RandomForestClassifier` / `RandomForestRegressor`, except that `random_state` defaults to 0 rather than unseeded, so a fit is reproducible. Results are checked against scikit-learn 1.4.2 fixtures.
 
 ## Get started
 
@@ -29,7 +29,7 @@ SELECT * FROM predict('new_counts', 'models', name := 'site');
 - [Explaining a prediction](#explaining-a-prediction) - `shap`
 - [Feature importances](#feature-importances) - `feature_importances`, `model_features`
 - [Unknown and absent features](#unknown-and-absent-features) - what `sample_coverage` means
-- [Reproducibility](#reproducibility)
+- [Reproducibility](#reproducibility) - `sc_version`
 - [Scale and memory](#scale-and-memory)
 - [Citations](#citations)
 
@@ -37,7 +37,7 @@ SELECT * FROM predict('new_counts', 'models', name := 'site');
 
 The **count table** is the long-form `(sample_id, feature_id, value)` relation that [`read_biom`](reading.md#biom) and [`woltka_ogu`](profiling.md) produce. Absent cells are zero. NULLs are an error rather than a zero, because a NULL means a broken join upstream. Duplicate `(sample_id, feature_id)` cells are also an error rather than a silent sum; the message shows their values, since identical values suggest a join fanout and differing ones repeat measurements.
 
-`sample_id` and `feature_id` may be VARCHAR, BIGINT or UUID; any other type is an error naming the cast to write. Ids come back as the type they went in as, so results join to typed tables without a cast.
+`sample_id` and `feature_id` may be VARCHAR, BIGINT or UUID; any other type is an error naming the cast to write. Ids come back as the type they went in as, so results join to typed tables without a cast. They are ordered by their text, not their value: a BIGINT `10` sorts before `2`, and rows come back in that order. An outer `ORDER BY` restores numeric order.
 
 The **metadata table** has one row per sample: `sample_id` plus the target. With one non-`sample_id` column it is used automatically; with more, name it with `target_column :=`. Both tables must describe exactly the same samples, and a mismatch is an error listing the offenders.
 
@@ -99,7 +99,7 @@ SELECT * FROM predict_proba('new_counts', 'models', name := 'site');
 -- sample_id, class, probability, sample_coverage   (one row per sample and class)
 ```
 
-`prediction` is VARCHAR for a classifier and DOUBLE for a regressor, read from the model's `task` when the query is planned. A wrong model name, or `predict_proba` on a regressor, therefore fails before any data is read. A forest's probabilities are vote fractions, not calibrated posteriors.
+`prediction` is VARCHAR for a classifier and DOUBLE for a regressor, read from the model's `task` when the query is planned. A wrong model name, or `predict_proba` on a regressor, therefore fails before any data is read. A forest's probability is the mean of its trees' leaf class proportions, not a calibrated posterior.
 
 ### Cross-validation
 
@@ -124,7 +124,7 @@ SELECT DISTINCT metric, mean_score, std_score, fold_scores FROM cv;
 - **The per-fold forests are discarded.** This measures the recipe, not a model; fit the model you will use with `fit_classifier` or `fit_regressor` on all the data.
 - **The four summary columns repeat on every row**, because a table function returns one relation and a separate summary function would have to rerun every fold. `SELECT DISTINCT` recovers the single summary row.
 - **`n_folds` is also accepted as `cv`**, q2's and sklearn's name for it; passing both is an error.
-- **`parameter_tuning := true`** runs a randomized search inside each training fold, so the held-out fold stays unseen. It costs about `n_folds × 20` extra fits, and the chosen parameters are not yet reported.
+- **`parameter_tuning := true`** runs a randomized search inside each training fold, so the held-out fold stays unseen. Each training fold scores 20 candidate settings with an inner `n_folds`-fold cross-validation, so it costs about 20 × `n_folds`² extra fits (500 at five folds). The chosen parameters are not yet reported.
 
 ```sql
 -- Confusion matrix, no join required.
@@ -135,7 +135,7 @@ SELECT sample_id, prediction, actual, list_max(probabilities) AS confidence FROM
 
 ### Explaining a prediction
 
-TreeSHAP attributes one prediction to individual features: how far each pushed this sample from the model's baseline. It is additive: `base_value + sum(shap_value)` over a sample's features equals the predicted value (the continuous target for regression, or the class vote fraction for classification).
+TreeSHAP attributes one prediction to individual features: how far each pushed this sample from the model's baseline. It is additive: `base_value + sum(shap_value)` over a sample's features equals the predicted value (the continuous target for regression, or the class probability for classification).
 
 ```sql
 SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
@@ -149,11 +149,11 @@ SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
 | `max_attributions` | 10,000,000 | attributions one batch may hold (samples × classes × features, 8 bytes each, so ~80 MB) |
 | `batch_size` | derived | samples per batch, overriding `max_attributions`; passing both is an error |
 
-- **`base_value`** is the model's average output over the training data, the same on every row.
+- **`base_value`** is the model's average output over the training data for the row's class (a regressor has one), so it repeats on every row of that class.
 - **Absent features get attributions too.** A feature the model knows but the sample lacks is a zero, and a zero can push a prediction as hard as a large count; the absence of adult taxa is evidence of an infant.
 - **`top_k` shrinks the output, not the computation**, since every attribution is computed before the strongest are picked.
-- **Rows come out in waterfall order**: `sample_id`, `class`, then `shap_value` descending.
-- **Memory is bounded by the batch**, so explaining 20,000 samples costs no more memory than 2,000.
+- **Rows come out in waterfall order**: `sample_id` (as text; see [Input tables](#input-tables)), `class`, then `shap_value` descending.
+- **Attributions are computed one batch at a time**, so 20,000 samples need no more attribution memory than 2,000. The input table is held in full, as at prediction.
 
 ### Feature importances
 
@@ -184,6 +184,8 @@ CREATE TABLE b AS SELECT * FROM fit_regressor('counts', 'meta', name := 'b', ran
 SELECT (SELECT md5(model_blob) FROM a) = (SELECT md5(model_blob) FROM b) AS identical;
 ```
 
+Reproducing a fit also needs the same sc. `SELECT version FROM miint_versions() WHERE library = 'sc'` reports the sc commit this build embeds. `sc_version()` returns sc's crate version, which names a release rather than a commit, so two builds can share it and still differ.
+
 ### Scale and memory
 
 Cost scales with the feature count, and microbiome tables are long-tailed, so a prevalence filter is the biggest lever:
@@ -196,7 +198,7 @@ CREATE VIEW common AS
 ```
 
 - **Fitting** spends most of its time loading the table into sc, so the cell count matters more than `n_estimators`. Memory grows with threads; `n_threads := 1` trades time for memory.
-- **`shap`** memory is capped by `max_attributions`, whatever the sample count; fewer features is the way to go further.
+- **`shap`** holds the input table, as prediction does, plus one batch of attributions capped by `max_attributions`; fewer features is the way to go further.
 - **wasm** shares one 4 GiB memory with DuckDB and runs single-threaded, so expect a much lower ceiling than native. `n_threads` has no effect there; results are the same as native. `cross_validate_*` is not yet available there ([#315](https://github.com/the-miint/duckdb-miint/issues/315)).
 
 ### Citations

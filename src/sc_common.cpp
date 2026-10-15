@@ -266,7 +266,7 @@ ScIdTypes ProbeIdTypes(duckdb::Connection &conn, const std::string &relation, co
 			                            view_select, relation);
 		}
 	};
-	// Integers widen to BIGINT and keep sorting numerically; anything else
+	// Integers widen to BIGINT, which results return as BIGINT; anything else
 	// becomes text.
 	const auto cast_to = [](const duckdb::LogicalType &type) {
 		return std::string(type.IsIntegral() ? "BIGINT" : "VARCHAR");

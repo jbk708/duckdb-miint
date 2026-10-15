@@ -48,8 +48,9 @@ namespace duckdb {
 //!
 //! `parameter_tuning := true` searches the built-in hyperparameter grid inside
 //! each training fold and refits with the winner (q2's `parameter_tuning`). The
-//! search never sees the held-out fold, which is what keeps the score honest;
-//! it is also cv x grid times the work.
+//! search never sees the held-out fold, which is what keeps the score honest.
+//! Each training fold scores 20 candidates by an inner cv-fold CV, so tuning
+//! adds about 20 x cv^2 fits.
 class ScCrossValidateFunction {
 public:
 	static void Register(ExtensionLoader &loader);

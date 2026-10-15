@@ -35,13 +35,15 @@ namespace duckdb {
 //!
 //! Rows come out in waterfall order,
 //!   ORDER BY sample_id, class, shap_value DESC
-//! with ties in model column order. That is the order rows are produced in, not
+//! with sample_id compared as text (a BIGINT 10 before 2) and ties in model
+//! column order. That is the order rows are produced in, not
 //! a property DuckDB tracks: a plain SELECT or CREATE TABLE AS keeps it, joins
 //! and aggregates may not, and an outer ORDER BY simply re-sorts.
 //!
 //! SHAP is computed densely -- every class of every sample in a call, before any
 //! `top_k` filtering -- so samples are explained in batches and rows stream out
-//! one batch at a time; memory is one batch however many samples there are.
+//! one batch at a time; attribution memory is one batch however many samples
+//! there are. The input table itself is held in full, as in sc_predict.
 //! `max_attributions` (default 10M, ~80 MB) is how many attributions a batch may
 //! hold, and the batch size follows: max_attributions / (classes x features)
 //! samples. `batch_size := n` fixes it instead; passing both is an error. A

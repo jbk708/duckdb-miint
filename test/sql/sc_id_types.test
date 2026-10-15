@@ -58,6 +58,14 @@ SELECT DISTINCT typeof(sample_id), count(*) OVER () FROM predict('b_counts', 'mo
 ----
 BIGINT	20
 
+# Ids are ordered by their text, not their value, so a BIGINT 10 sorts before
+# 2. Rows come back in that order, as docs/sample_classifier.md says; an outer
+# ORDER BY restores numeric order.
+query I
+SELECT list(sample_id)[1:4] FROM predict('b_counts', 'models', name := 'b');
+----
+[1, 10, 11, 12]
+
 query I
 SELECT DISTINCT typeof(sample_id) FROM predict_proba('b_counts', 'models', name := 'b');
 ----
