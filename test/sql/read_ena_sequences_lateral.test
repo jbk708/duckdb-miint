@@ -78,25 +78,8 @@ FROM runs AS r,
 ----
 physical_plan	<REGEX>:(?i).*INOUT.FUNCTION.*
 
-# ---- Named parameters cannot be set in lateral mode ----
-# DuckDB does not extract named parameters for an in-out table function called
-# with a column argument, so in a LATERAL call no syntax sets max_sequences or
-# any other parameter. Bound each run with LIMIT inside the subquery instead,
-# as above.
-
 statement ok
 RESET explain_output;
 
-statement error
-SELECT COUNT(*)
-FROM (VALUES ('ERR1074767')) AS r(run_accession),
-     LATERAL (SELECT 1 FROM read_ena_sequences(r.run_accession, max_sequences => 5)) seq;
-----
-No function matches the given name and argument types 'read_ena_sequences(VARCHAR, INTEGER)'
-
-statement error
-SELECT COUNT(*)
-FROM (VALUES ('ERR1074767')) AS r(run_accession),
-     LATERAL (SELECT 1 FROM read_ena_sequences(r.run_accession, max_sequences = 5)) seq;
-----
-Referenced column "max_sequences" not found in FROM clause
+# That a LATERAL call cannot take named parameters is asserted in
+# read_ena_sequences_lateral_params.test, which needs no network.

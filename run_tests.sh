@@ -181,9 +181,13 @@ ft_regenerate_one "data/fasttree/moderate.fa" "data/fasttree/moderate.golden.nwk
 # the goldens against that manifest and fails on a mismatch. To refresh: rerun
 # the generator under a SciPy env.
 
-# NCBI BLAST network reachability. Probes the BLAST CGI endpoint so
-# live blast tests can skip gracefully in offline CI.
-if curl -sSf --max-time 5 -o /dev/null \
+# Live NCBI BLAST tests (opt-in). Each submission waits in NCBI's queue for as long as
+# NCBI takes, which has passed 27 minutes and so the httpfs pass's timeout below; that
+# the endpoint answers says nothing about the queue. Run with
+# `MIINT_BLAST_LIVE_TEST=1 bash run_tests.sh` to include them; the probe then skips them
+# in offline CI.
+if [ "${MIINT_BLAST_LIVE_TEST:-0}" = "1" ] &&
+    curl -sSf --max-time 5 -o /dev/null \
         "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi" 2>/dev/null; then
     export BLAST_LIVE_AVAILABLE=1
 fi
@@ -195,6 +199,13 @@ if curl -sSf --max-time 3 -o /dev/null \
         "https://www.ebi.ac.uk/ena/portal/api/search?result=read_run&query=run_accession%3D%22ERR1074767%22&fields=run_accession&limit=1&format=tsv" \
         2>/dev/null; then
     export ENA_AVAILABLE=1
+fi
+
+# NCBI network reachability, for the live read_ncbi* tests: they use both E-utilities and
+# the Datasets API, so both must answer.
+if curl -sSf --max-time 5 -o /dev/null "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/einfo.fcgi" 2>/dev/null &&
+    curl -sSf --max-time 5 -o /dev/null "https://api.ncbi.nlm.nih.gov/datasets/v2/version" 2>/dev/null; then
+    export NCBI_AVAILABLE=1
 fi
 
 # NCBI taxonomy dump reachability (opt-in integration test; the test downloads
@@ -660,63 +671,62 @@ echo "Running $FD_RELEASE_TEST with RLIMIT_NOFILE<=$FD_RELEASE_LIMIT..."
 # there rather than into the user's ~/.duckdb. Their require-env guards still decide whether
 # each file runs: a live test runs only when its service answered the probe above.
 #
-# Autoloading runs miint from the copy installed in that HOME, not the linked one: it
-# installs that copy once, from build/release/repository, and reuses it on later runs. Both
-# copies are refreshed from the build so that no run tests stale code. A file whose
-# `require httpfs` or `require miint` cannot load is skipped, not failed, so the skip
-# summary is checked too.
-HTTPFS_TESTS=$(grep -l '^require httpfs' test/sql/*.test | paste -sd, -)
-DUCKDB_VERSION=$(./build/release/duckdb -noheader -list -c "SELECT version()")
-DUCKDB_PLATFORM=$(./build/release/duckdb -noheader -list -c "SELECT platform FROM pragma_platform()")
+# Autoloading runs miint from the copy installed in that HOME, not the linked one, and an
+# installed copy is reused, so this build is installed over it on every run. The install
+# records the build's version, which loading checks: a file copied over an earlier install
+# does not load. A file whose `require httpfs` or `require miint` cannot load is skipped,
+# not failed, so the skip summary is checked too.
+HTTPFS_TESTS=$(grep -rl --include='*.test' '^require httpfs' test/sql | paste -sd, -)
 HTTPFS_TEST_HOME="$PWD/build/release/httpfs_test_home"
-HTTPFS_EXT_DIR="$HTTPFS_TEST_HOME/.duckdb/extensions/$DUCKDB_VERSION/$DUCKDB_PLATFORM"
-if [ ! -f "$HTTPFS_EXT_DIR/httpfs.duckdb_extension" ]; then
-    mkdir -p "$HTTPFS_TEST_HOME"
-    if ! HOME="$HTTPFS_TEST_HOME" ./build/release/duckdb -c "INSTALL httpfs"; then
-        echo "ERROR: could not install httpfs into $HTTPFS_TEST_HOME; the tests that need it cannot run" >&2
-        exit 1
-    fi
-fi
-cp build/release/extension/miint/miint.duckdb_extension \
-    "build/release/repository/$DUCKDB_VERSION/$DUCKDB_PLATFORM/miint.duckdb_extension"
-if [ -f "$HTTPFS_EXT_DIR/miint.duckdb_extension" ]; then
-    cp build/release/extension/miint/miint.duckdb_extension "$HTTPFS_EXT_DIR/miint.duckdb_extension"
+mkdir -p "$HTTPFS_TEST_HOME"
+# INSTALL httpfs downloads it on the first run only. -unsigned because this build is unsigned.
+if ! HOME="$HTTPFS_TEST_HOME" ./build/release/duckdb -unsigned -c "INSTALL httpfs; LOAD httpfs;
+        FORCE INSTALL '$PWD/build/release/extension/miint/miint.duckdb_extension';" > /dev/null; then
+    echo "ERROR: could not install httpfs and this build's miint into $HTTPFS_TEST_HOME; the tests that need httpfs cannot run" >&2
+    exit 1
 fi
 HTTPFS_LOG="$PWD/build/release/httpfs_tests.log"
 # A stalled remote transfer would otherwise hang the run instead of failing it.
 HTTPFS_TIMEOUT_SECONDS="${MIINT_HTTPFS_TIMEOUT_SECONDS:-1800}"
 TIMEOUT_CMD=$(command -v timeout || command -v gtimeout || true)
+if [ -z "$TIMEOUT_CMD" ]; then
+    echo "WARNING: no timeout or gtimeout command, so a stalled transfer hangs this run instead of failing it" >&2
+fi
 echo "Running the $(echo "$HTTPFS_TESTS" | tr ',' '\n' | wc -l) test files that need httpfs (log: $HTTPFS_LOG)..."
 HTTPFS_RC=0
+HTTPFS_START=$SECONDS
 HOME="$HTTPFS_TEST_HOME" DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' \
     ${TIMEOUT_CMD:+"$TIMEOUT_CMD" --kill-after=60 "$HTTPFS_TIMEOUT_SECONDS"} \
     ./build/release/test/unittest "$HTTPFS_TESTS" > "$HTTPFS_LOG" 2>&1 || HTTPFS_RC=$?
-tail -n 20 "$HTTPFS_LOG"
-if [ "$HTTPFS_RC" -eq 124 ] || [ "$HTTPFS_RC" -eq 137 ]; then
-    echo "ERROR: tests that need httpfs did not finish within ${HTTPFS_TIMEOUT_SECONDS}s; see $HTTPFS_LOG" >&2
-    exit 1
-fi
+HTTPFS_ELAPSED=$((SECONDS - HTTPFS_START))
 if [ "$HTTPFS_RC" -ne 0 ]; then
-    echo "ERROR: tests that need httpfs failed; see $HTTPFS_LOG" >&2
+    # In full: CI keeps the console output, not the log file.
+    cat "$HTTPFS_LOG"
+    # timeout exits 124, or 137 when it has to kill; 137 is also any other SIGKILL, such as
+    # the out-of-memory killer's, so only a run that lasted the limit counts as timed out.
+    if { [ "$HTTPFS_RC" -eq 124 ] || [ "$HTTPFS_RC" -eq 137 ]; } &&
+        [ "$HTTPFS_ELAPSED" -ge "$HTTPFS_TIMEOUT_SECONDS" ]; then
+        echo "ERROR: tests that need httpfs did not finish within ${HTTPFS_TIMEOUT_SECONDS}s" >&2
+    else
+        echo "ERROR: tests that need httpfs failed (exit $HTTPFS_RC after ${HTTPFS_ELAPSED}s)" >&2
+    fi
     exit 1
 fi
+tail -n 20 "$HTTPFS_LOG"
 if grep -qE '^No tests ran|^require (httpfs|miint):' "$HTTPFS_LOG"; then
     echo "ERROR: httpfs or miint did not load, so the tests that need httpfs were skipped; see $HTTPFS_LOG" >&2
     exit 1
 fi
 
 # Run shell script tests. A script that loads httpfs runs with the HOME httpfs was installed
-# into above: with the default HOME it would find no httpfs and skip itself.
-if ! HOME="$HTTPFS_TEST_HOME" ./build/release/duckdb -c "LOAD httpfs" > /dev/null; then
-    echo "ERROR: httpfs in $HTTPFS_TEST_HOME does not load in the shell, so the shell tests that need it would skip" >&2
-    exit 1
-fi
+# into above, where the shell loaded it: with the default HOME it would find no httpfs and
+# skip itself.
 echo "Running shell script tests..."
 for test_script in test/shell/*.sh; do
     if [ -f "$test_script" ]; then
         echo "Running $test_script..."
         script_home="$HOME"
-        if grep -q 'LOAD httpfs' "$test_script"; then
+        if grep -qi 'load httpfs' "$test_script"; then
             script_home="$HTTPFS_TEST_HOME"
         fi
         if ! HOME="$script_home" bash "$test_script"; then
