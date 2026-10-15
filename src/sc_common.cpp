@@ -43,6 +43,15 @@ OwnedArrowArray::~OwnedArrowArray() {
 
 namespace {
 
+//! The readers below take buffers at face value: no slice offset, no nulls.
+//! sc's exports never use either; anything else is refused, not misread.
+void RequirePlain(const ArrowArray &array, const char *what, bool allow_offset = false) {
+	if ((!allow_offset && array.offset != 0) || array.null_count != 0) {
+		throw InternalException("%s: Arrow array has offset %lld and %lld nulls; expected neither", what,
+		                        (int64_t)array.offset, (int64_t)array.null_count);
+	}
+}
+
 void RequireFormat(const ArrowSchema &schema, const char *expected, const char *what) {
 	if (!schema.format || std::strcmp(schema.format, expected) != 0) {
 		throw InvalidInputException("%s: expected Arrow format '%s', got '%s'", what, expected,
@@ -55,6 +64,7 @@ void RequireFormat(const ArrowSchema &schema, const char *expected, const char *
 // Read Arrow utf8 arrays (format "u")
 std::vector<std::string> OwnedArrowArray::ReadUtf8(const char *what) const {
 	RequireFormat(schema_, "u", what);
+	RequirePlain(array_, what);
 	std::vector<std::string> out;
 	if (array_.length == 0) {
 		return out;
@@ -82,6 +92,7 @@ std::vector<std::string> OwnedArrowArray::ReadUtf8(const char *what) const {
 
 std::vector<double> OwnedArrowArray::ReadFloat64(const char *what) const {
 	RequireFormat(schema_, "g", what);
+	RequirePlain(array_, what);
 	if (array_.length == 0) {
 		return {};
 	}
@@ -107,7 +118,9 @@ const double *OwnedArrowArray::FixedSizeListFloat64Data(const char *what, int64_
 	// The values are the child's, not the parent's: a fixed size list stores no
 	// offsets, so the outer array has only a validity buffer and the child holds
 	// length * width doubles back to back.
+	RequirePlain(array_, what);
 	const ArrowArray &child = *array_.children[0];
+	RequirePlain(child, what, true);
 	const auto total = static_cast<size_t>(array_.length * width);
 	if (static_cast<size_t>(child.length) < total) {
 		throw InternalException("%s: fixed size list child holds %lld values, expected %llu", what,
@@ -449,9 +462,11 @@ void RequireModelFeatureIdType(const duckdb::LogicalType &model_type, const duck
 }
 
 void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation, const std::string &name,
-                           const char *caller, sc_context_t *ctx, ScModel &out) {
+                           const char *caller, const std::string &task, const duckdb::LogicalType &feature_id_type,
+                           sc_context_t *ctx, ScModel &out) {
 	const auto q = duckdb::KeywordHelper::WriteOptionallyQuoted(relation);
-	auto result = conn.Query("SELECT model_blob FROM " + q + ModelNameFilter(name));
+	auto result = conn.Query("SELECT model_blob, feature_id_type::VARCHAR" +
+	                         std::string(task.empty() ? "" : ", task::VARCHAR") + " FROM " + q + ModelNameFilter(name));
 	if (result->HasError()) {
 		throw InvalidInputException("%s: model relation '%s' must expose a 'model_blob' column: %s", caller, relation,
 		                            result->GetError());
@@ -463,12 +478,16 @@ void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation
 		                            relation, result->types[0].ToString());
 	}
 
-	duckdb::Value blob;
+	duckdb::Value blob, read_type, read_task;
 	int64_t rows = 0;
 	while (auto chunk = result->Fetch()) {
 		for (duckdb::idx_t row = 0; row < chunk->size(); row++) {
 			if (rows++ == 0) {
 				blob = chunk->data[0].GetValue(row);
+				read_type = chunk->data[1].GetValue(row);
+				if (!task.empty()) {
+					read_task = chunk->data[2].GetValue(row);
+				}
 			}
 		}
 	}
@@ -480,6 +499,17 @@ void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation
 	}
 	if (blob.IsNull()) {
 		throw InvalidInputException("%s: model relation '%s' has a NULL model", caller, relation);
+	}
+	const auto changed = [&](const char *column, const std::string &was, const duckdb::Value &now) {
+		throw InvalidInputException("%s: model relation '%s' changed between planning and execution: its %s was %s, "
+		                            "now %s",
+		                            caller, relation, column, was, now.IsNull() ? "NULL" : now.ToString());
+	};
+	if (!task.empty() && (read_task.IsNull() || read_task.ToString() != task)) {
+		changed("task", task, read_task);
+	}
+	if (read_type.IsNull() || read_type.ToString() != feature_id_type.ToString()) {
+		changed("feature_id_type", feature_id_type.ToString(), read_type);
 	}
 
 	const auto bytes = blob.GetValueUnsafe<duckdb::string_t>();

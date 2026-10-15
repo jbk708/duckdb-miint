@@ -215,7 +215,9 @@ void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState
 	auto conn = MakeReadOnlyHelperConnection(context);
 
 	miint::OpenScContext(bind.n_threads, "shap", gstate.ctx);
-	miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "shap", gstate.ctx.ptr, gstate.model);
+	miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "shap",
+	                             bind.classification ? "classification" : "regression", bind.id_types.feature_id,
+	                             gstate.ctx.ptr, gstate.model);
 
 	miint::OwnedArrowArray vocab;
 	if (auto st = sc_model_feature_ids(gstate.model.ptr, vocab.array(), vocab.schema()); st != SC_OK) {

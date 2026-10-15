@@ -70,7 +70,8 @@ void ScImportancesExecute(ClientContext &context, TableFunctionInput &input, Dat
 		miint::ScContext ctx;
 		miint::OpenScContext(0, "feature_importances", ctx);
 		miint::ScModel model;
-		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "feature_importances", ctx.ptr, model);
+		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "feature_importances", "",
+		                             bind.feature_id_type, ctx.ptr, model);
 
 		// Two exports, both owned by us from here. The RAII wrapper releases
 		// them even if the second call throws.

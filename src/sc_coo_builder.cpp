@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 
@@ -82,11 +84,12 @@ void InitArray(ArrowArray &array, int64_t length, int64_t n_buffers, BufferBag *
 
 //! Export `values` as an Arrow `Int64` array (format "l"): [validity, data].
 void ExportInt64(ArrowArray &array, ArrowSchema &schema, std::vector<int64_t> values) {
-	auto *bag = new BufferBag();
+	auto bag = std::make_unique<BufferBag>();
 	bag->i64 = std::move(values);
 	bag->buffers[0] = nullptr;
 	bag->buffers[1] = bag->i64.data();
-	InitArray(array, static_cast<int64_t>(bag->i64.size()), 2, bag);
+	const auto length = static_cast<int64_t>(bag->i64.size());
+	InitArray(array, length, 2, bag.release());
 	InitSchema(schema, "l");
 }
 
@@ -94,11 +97,12 @@ void ExportInt64(ArrowArray &array, ArrowSchema &schema, std::vector<int64_t> va
 
 //! Export `values` as an Arrow `Float64` array (format "g"): [validity, data].
 void ExportFloat64(ArrowArray &array, ArrowSchema &schema, std::vector<double> values) {
-	auto *bag = new BufferBag();
+	auto bag = std::make_unique<BufferBag>();
 	bag->f64 = std::move(values);
 	bag->buffers[0] = nullptr;
 	bag->buffers[1] = bag->f64.data();
-	InitArray(array, static_cast<int64_t>(bag->f64.size()), 2, bag);
+	const auto length = static_cast<int64_t>(bag->f64.size());
+	InitArray(array, length, 2, bag.release());
 	InitSchema(schema, "g");
 }
 
@@ -107,9 +111,9 @@ void ExportFloat64(ArrowArray &array, ArrowSchema &schema, std::vector<double> v
 //! Offsets hold `n + 1` entries and count BYTES, not characters; row `i` is
 //! `chars[offsets[i] .. offsets[i + 1]]`.
 void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::string> &values) {
-	// one level of indirection to bag sitting on the heap, so that the consumer of the arrow array can free it when
-	// done
-	auto *bag = new BufferBag();
+	// Owned here until the array takes it, so a throw on the way (an allocation,
+	// or the size check below) frees it.
+	auto bag = std::make_unique<BufferBag>();
 	bag->offsets.reserve(values.size() + 1); // allocate raw contiguous bytes for the offsets, its always N + 1
 	size_t total = 0;
 	// &v used in a declaration, not assignment, here it refers
@@ -117,6 +121,12 @@ void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::s
 	// need to free it. this is not getting the address of the string.
 	for (const auto &v : values) {
 		total += v.size(); // number of bytes in each string
+	}
+	// Utf8 offsets are int32: past 2 GiB of text they would wrap and point
+	// every later id at the wrong bytes.
+	if (total > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+		throw std::length_error("ExportUtf8: " + std::to_string(total) +
+		                        " bytes of ids exceed the 2 GiB an Arrow Utf8 array can address");
 	}
 	// since we are reducing std:string type to raw bytes, we need to allocate a contiguous block of memory for the
 	// chars
@@ -156,7 +166,7 @@ void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::s
 	// every offset at 0 is well-formed, and sc's `borrow_utf8` short-circuits
 	// on length 0 before it reads any pointer.
 	bag->buffers[2] = bag->chars.empty() ? nullptr : bag->chars.data();
-	InitArray(array, static_cast<int64_t>(values.size()), 3, bag);
+	InitArray(array, static_cast<int64_t>(values.size()), 3, bag.release());
 	InitSchema(schema, "u");
 }
 

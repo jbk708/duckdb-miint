@@ -189,7 +189,13 @@ void RequireModelFeatureIdType(const duckdb::LogicalType &model_type, const duck
 //! rows are filtered to that name first -- so one table can be a registry of
 //! many models and a call still names exactly one, without the caller having to
 //! create a view to narrow it.
+//!
+//! Bind already read the model's `task` and `feature_id_type`, and typed the
+//! output from them. They are read again here, in the same query as the blob,
+//! and a change is an error: the relation returned a different model at
+//! execution than at planning. `task` is empty for a caller that bound none.
 void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation, const std::string &name,
-                           const char *caller, sc_context_t *ctx, ScModel &out);
+                           const char *caller, const std::string &task, const duckdb::LogicalType &feature_id_type,
+                           sc_context_t *ctx, ScModel &out);
 
 } // namespace miint

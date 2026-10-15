@@ -95,7 +95,8 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		miint::ScContext ctx;
 		miint::OpenScContext(bind.n_threads, "predict_proba", ctx);
 		miint::ScModel model;
-		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict_proba", ctx.ptr, model);
+		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict_proba", "classification",
+		                             bind.id_types.feature_id, ctx.ptr, model);
 
 		miint::OwnedArrowArray vocab;
 		if (auto st = sc_model_feature_ids(model.ptr, vocab.array(), vocab.schema()); st != SC_OK) {

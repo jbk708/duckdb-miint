@@ -231,15 +231,16 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 
 	uint8_t *blob = nullptr;
 	size_t blob_len = 0;
-	// hand over **blob, one more level of indirection, to copy over the value of the memory addr mapped to the variable
-	// blob and capture that inside the scope of the C function so it can dereference it and write to it.
 	if (auto st = sc_model_serialize(model.ptr, &blob, &blob_len); st != SC_OK) {
 		miint::ThrowSc("sc_model_serialize", nullptr, st);
 	}
-	// sc owns this buffer until sc_buffer_free; copy it into DuckDB's heap first. Then free it from sc's heap. This is
-	// a one-time copy, so the model blob is now owned by DuckDB.
+	// sc owns the buffer until sc_buffer_free, which the guard calls however this
+	// scope exits -- including when the copy into DuckDB's heap throws.
+	const auto free_blob = [blob_len](uint8_t *p) {
+		sc_buffer_free(p, blob_len);
+	};
+	std::unique_ptr<uint8_t, decltype(free_blob)> blob_guard(blob, free_blob);
 	duckdb::Value blob_value = Value::BLOB(blob, blob_len);
-	sc_buffer_free(blob, blob_len);
 
 	// DuckDB's table function output is a single row with the fitted model, so we set the cardinality to 1 and fill in
 	// the columns with the model's metadata and serialized blob.

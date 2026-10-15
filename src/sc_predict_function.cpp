@@ -92,7 +92,9 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		miint::ScContext ctx;
 		miint::OpenScContext(bind.n_threads, "predict", ctx);
 		miint::ScModel model;
-		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict", ctx.ptr, model);
+		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict",
+		                             bind.classification ? "classification" : "regression", bind.id_types.feature_id,
+		                             ctx.ptr, model);
 
 		// The vocabulary comes out of the model, in the model's column order.
 		// This is the whole reason sc_model_feature_ids exists.

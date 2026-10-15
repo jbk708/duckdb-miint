@@ -77,7 +77,8 @@ void ScModelFeaturesExecute(ClientContext &context, TableFunctionInput &input, D
 		miint::ScContext ctx;
 		miint::OpenScContext(0, "model_features", ctx);
 		miint::ScModel model;
-		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "model_features", ctx.ptr, model);
+		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "model_features", "",
+		                             bind.feature_id_type, ctx.ptr, model);
 
 		miint::OwnedArrowArray ids;
 		if (auto st = sc_model_feature_ids(model.ptr, ids.array(), ids.schema()); st != SC_OK) {

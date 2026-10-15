@@ -1,0 +1,104 @@
+# name: test/sql/sc_model_relation_reads.test
+# description: a model relation that changes between planning and execution is an error
+# group: [sql]
+
+require miint
+
+# Bind reads a model's task and feature_id_type, which type the output columns;
+# execution reads its blob. A relation can return different rows each time:
+# a view over a registry another connection is writing, or a volatile view.
+# Execution re-reads the two columns with the blob and refuses a change, rather
+# than explaining a regressor's output as a classifier's or emitting one id type
+# into a column typed for another.
+#
+# No PRAGMA enable_verification: it reruns each statement, which would advance
+# the sequences below and change which model each read sees.
+
+statement ok
+CREATE TABLE d AS
+  SELECT 's' || i AS sample_id, 'f' || j AS feature_id, ((i * 7 + j * 3) % 11 + 1)::DOUBLE AS value
+  FROM range(1, 13) t(i), range(1, 6) u(j);
+
+statement ok
+CREATE TABLE d_big AS SELECT sample_id, substr(feature_id, 2)::BIGINT AS feature_id, value FROM d;
+
+statement ok
+CREATE TABLE labels AS SELECT 's' || i AS sample_id, CASE WHEN i % 2 = 0 THEN 'a' ELSE 'b' END AS label FROM range(1, 13) t(i);
+
+statement ok
+CREATE TABLE months AS SELECT 's' || i AS sample_id, i * 1.5 AS month FROM range(1, 13) t(i);
+
+statement ok
+CREATE TABLE reg AS
+  SELECT * FROM fit_classifier('d', 'labels', n_estimators := 5, name := 'clf')
+  UNION ALL SELECT * FROM fit_regressor('d', 'months', n_estimators := 5, name := 'rgr')
+  UNION ALL SELECT * FROM fit_regressor('d_big', 'months', n_estimators := 5, name := 'rgr_big');
+
+# Each view's scalar subquery runs once per read: its first read sees the first
+# model, every later read the second.
+statement ok
+CREATE SEQUENCE s1;
+
+statement ok
+CREATE VIEW clf_then_rgr AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s1') = 1 THEN 'clf' ELSE 'rgr' END);
+
+statement error
+SELECT * FROM predict('d', 'clf_then_rgr');
+----
+predict: model relation 'clf_then_rgr' changed between planning and execution: its task was classification, now regression
+
+statement ok
+CREATE SEQUENCE s2;
+
+statement ok
+CREATE VIEW clf_then_rgr_2 AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s2') = 1 THEN 'clf' ELSE 'rgr' END);
+
+statement error
+SELECT * FROM predict_proba('d', 'clf_then_rgr_2');
+----
+predict_proba: model relation 'clf_then_rgr_2' changed between planning and execution: its task was classification, now regression
+
+statement ok
+CREATE SEQUENCE s3;
+
+statement ok
+CREATE VIEW rgr_then_clf AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s3') = 1 THEN 'rgr' ELSE 'clf' END);
+
+statement error
+SELECT * FROM shap('d', 'rgr_then_clf');
+----
+shap: model relation 'rgr_then_clf' changed between planning and execution: its task was regression, now classification
+
+# feature_importances and model_features type feature_id from the model alone.
+statement ok
+CREATE SEQUENCE s4;
+
+statement ok
+CREATE VIEW big_then_text AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s4') = 1 THEN 'rgr_big' ELSE 'rgr' END);
+
+statement error
+SELECT * FROM feature_importances('big_then_text');
+----
+feature_importances: model relation 'big_then_text' changed between planning and execution: its feature_id_type was BIGINT, now VARCHAR
+
+statement ok
+CREATE SEQUENCE s5;
+
+statement ok
+CREATE VIEW text_then_big AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s5') = 1 THEN 'rgr' ELSE 'rgr_big' END);
+
+statement error
+SELECT * FROM model_features('text_then_big');
+----
+model_features: model relation 'text_then_big' changed between planning and execution: its feature_id_type was VARCHAR, now BIGINT
+
+# A relation that holds still reads the same model at every step.
+query I
+SELECT count(*) FROM predict('d', 'reg', name := 'clf');
+----
+12

@@ -187,6 +187,8 @@ before trusting it. `test/sql/rype_single_read.test` documents both forms.
 | `rype_classify`, `rype_log_ratio`, `rype_extract_*` | once | fixed, remedy (1) — guarded by `test/sql/rype_single_read.test` |
 | `per_sample_table_function` (`DiscoverSamples` + per-sample re-read) | once per sample | **exposed** — shared by `woltka_ogu`, `sylph_profile`, `detect_chimera_uchime`, `align_abpoa`, `consensus_abpoa`, `align_mafft`, `uchime_denovo`, `deblur`, `massql` |
 | `ena_upload_reads` | plan scan + per-sample scan | **exposed** |
+| sc: `fit_*`, `cross_validate_*`, `predict`, `predict_proba`, `shap` | data and metadata once each, after a `LIMIT 0` probe at bind | fixed, remedy (1) |
+| sc: model relation (`predict`, `predict_proba`, `shap`, `feature_importances`, `model_features`) | twice: `task` and `feature_id_type` at bind, which type the output; the blob with both again at execution | remedy (3) — a change between the reads fails loud, guarded by `test/sql/sc_model_relation_reads.test` |
 | everything else taking a relation by name | unaudited | unknown |
 
 The per-sample family is the highest-value remaining target precisely because the
