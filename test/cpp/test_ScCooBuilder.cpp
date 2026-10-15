@@ -348,10 +348,10 @@ TEST_CASE("ScCooBuilder keeps a sample whose features are all unknown", "[sc_coo
 	CHECK(table->NumNonZeros() == 1);
 }
 
-TEST_CASE("ScCooBuilder reports per-sample coverage", "[sc_coo]") {
+TEST_CASE("ScCooBuilder reports per-sample known feature fraction", "[sc_coo]") {
 	// matched / observed, per sample. The denominator is the sample's own
-	// features: coverage against the model's vocabulary is always tiny in
-	// sparse data and would flag everything.
+	// features: a fraction of the model's vocabulary is always tiny in sparse
+	// data and would flag everything.
 	ScCooBuilder builder;
 	builder.SetFeatureVocabulary({"a", "b", "c"});
 	builder.Append("full", "a", 1.0);
@@ -367,14 +367,14 @@ TEST_CASE("ScCooBuilder reports per-sample coverage", "[sc_coo]") {
 
 	// SampleIds() is sorted: full, half, none.
 	REQUIRE(table->SampleIds() == std::vector<std::string> {"full", "half", "none"});
-	const auto cov = table->SampleCoverage();
+	const auto cov = table->KnownFeatureFraction();
 	REQUIRE(cov.size() == 3);
 	CHECK(cov[0] == 1.0);
 	CHECK(cov[1] == 0.5);
 	CHECK(cov[2] == 0.0);
 }
 
-TEST_CASE("ScCooBuilder coverage is 1.0 without a fixed vocabulary", "[sc_coo]") {
+TEST_CASE("ScCooBuilder known feature fraction is 1.0 without a fixed vocabulary", "[sc_coo]") {
 	// At fit time every feature is known by construction, so there is nothing
 	// to be uncovered by.
 	ScCooBuilder builder;
@@ -384,7 +384,7 @@ TEST_CASE("ScCooBuilder coverage is 1.0 without a fixed vocabulary", "[sc_coo]")
 	auto table = builder.Finalize();
 	REQUIRE(table);
 	CHECK(builder.DroppedCells() == 0);
-	for (auto c : table->SampleCoverage()) {
+	for (auto c : table->KnownFeatureFraction()) {
 		CHECK(c == 1.0);
 	}
 }
@@ -428,7 +428,7 @@ TEST_CASE("ScCooBatcher cuts consecutive samples into standalone tables", "[sc_c
 			// REQUIRE: the loop below indexes count entries of each.
 			REQUIRE(batch->NumSamples() == static_cast<int64_t>(count));
 			REQUIRE(batch->SampleIds().size() == count);
-			REQUIRE(batch->SampleCoverage().size() == count);
+			REQUIRE(batch->KnownFeatureFraction().size() == count);
 			CHECK(batch->NumFeatures() == full->NumFeatures());
 			CHECK(ReadUtf8(batch->get()->sample_ids) == batch->SampleIds());
 			CHECK(ReadUtf8(batch->get()->feature_ids) == full->FeatureIds());
@@ -438,7 +438,7 @@ TEST_CASE("ScCooBatcher cuts consecutive samples into standalone tables", "[sc_c
 			}
 			for (size_t s = 0; s < count; s++) {
 				CHECK(batch->SampleIds()[s] == full->SampleIds()[first + s]);
-				CHECK(batch->SampleCoverage()[s] == full->SampleCoverage()[first + s]);
+				CHECK(batch->KnownFeatureFraction()[s] == full->KnownFeatureFraction()[first + s]);
 			}
 			const auto part = cells_of(*batch);
 			seen.insert(seen.end(), part.begin(), part.end());
@@ -467,5 +467,5 @@ TEST_CASE("ScCooBatcher gives a sample with no cells an empty batch", "[sc_coo]"
 	CHECK(lost->NumSamples() == 1);
 	CHECK(lost->NumNonZeros() == 0);
 	CHECK(lost->SampleIds() == std::vector<std::string> {"lost"});
-	CHECK(lost->SampleCoverage() == std::vector<double> {0.0});
+	CHECK(lost->KnownFeatureFraction() == std::vector<double> {0.0});
 }

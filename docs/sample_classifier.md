@@ -28,7 +28,7 @@ SELECT * FROM predict('new_counts', 'models', name := 'site');
 - [Cross-validation](#cross-validation) - `cross_validate_classifier` / `cross_validate_regressor`
 - [Explaining a prediction](#explaining-a-prediction) - `shap`
 - [Feature importances](#feature-importances) - `feature_importances`, `model_features`
-- [Unknown and absent features](#unknown-and-absent-features) - what `sample_coverage` means
+- [Unknown and absent features](#unknown-and-absent-features) - what `known_feature_fraction` means
 - [Reproducibility](#reproducibility) - `sc_version`
 - [Scale and memory](#scale-and-memory)
 - [Citations](#citations)
@@ -55,7 +55,7 @@ INSERT INTO models SELECT * FROM fit_regressor('counts', 'meta', target_column :
 | `name` | required at fit; how every later function selects the model |
 | `model` | the algorithm, currently always `random_forest` |
 | `model_blob` | the serialized forest |
-| `n_samples`, `n_features`, `n_trees` | what it was trained on |
+| `n_samples`, `n_features`, `n_estimators` | what it was trained on |
 | `task` | `classification` or `regression`; decides the type of the prediction column |
 | `random_state` | the seed, so a fit can be reproduced |
 | `feature_id_type` | `VARCHAR`, `BIGINT` or `UUID`: the `feature_id` type data must have to use this model |
@@ -93,10 +93,10 @@ As in sklearn, integer versus float matters: `max_features := 10` means ten feat
 
 ```sql
 SELECT * FROM predict('new_counts', 'models', name := 'site');
--- sample_id, prediction, sample_coverage
+-- sample_id, prediction, known_feature_fraction
 
 SELECT * FROM predict_proba('new_counts', 'models', name := 'site');
--- sample_id, class, probability, sample_coverage   (one row per sample and class)
+-- sample_id, class, probability, known_feature_fraction   (one row per sample and class)
 ```
 
 `prediction` is VARCHAR for a classifier and DOUBLE for a regressor, read from the model's `task` when the query is planned. A wrong model name, or `predict_proba` on a regressor, therefore fails before any data is read. A forest's probability is the mean of its trees' leaf class proportions, not a calibrated posterior.
@@ -139,7 +139,7 @@ TreeSHAP attributes one prediction to individual features: how far each pushed t
 
 ```sql
 SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
--- sample_id, class, feature_id, shap_value, base_value, sample_coverage
+-- sample_id, class, feature_id, shap_value, base_value, known_feature_fraction
 ```
 
 | parameter | default | |
@@ -171,7 +171,7 @@ SELECT * FROM model_features('models', name := 'site');
 - **A feature the model never saw is dropped**, with a warning; no tree splits on it.
 - **A feature the model knows but the sample lacks is zero**, which is what absence means in a sparse table.
 
-`sample_coverage` is the share of a sample's observed cells whose feature the model knows. A low value means the model is being applied to different data (another reference database, pipeline or 16S region). A 0.0 means the sample is predicted from an all-zero row: a well-formed but uninformed prediction.
+`known_feature_fraction` is the share of a sample's observed cells whose feature the model knows. A low value means the model is being applied to different data (another reference database, pipeline or 16S region). A 0.0 means the sample is predicted from an all-zero row: a well-formed but uninformed prediction.
 
 ### Reproducibility
 

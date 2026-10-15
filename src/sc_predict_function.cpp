@@ -32,7 +32,7 @@ struct ScPredictGlobalState : public GlobalTableFunctionState {
 	std::vector<std::string> sample_ids;
 	std::vector<std::string> labels; // classification
 	std::vector<double> values;      // regression
-	std::vector<double> coverage;
+	std::vector<double> known_fraction;
 	idx_t emitted = 0;
 	bool loaded = false;
 };
@@ -69,9 +69,9 @@ unique_ptr<FunctionData> ScPredictBind(ClientContext &context, TableFunctionBind
 		    data->id_types.feature_id, "predict", data->model_relation, data->model_name, data->data_relation);
 	}
 
-	names = {"sample_id", "prediction", "sample_coverage"};
+	names = {"sample_id", "prediction", "known_feature_fraction"};
 	// A classifier predicts one of its training labels; a regressor a number.
-	// sample_coverage is matched/observed for that sample -- see ScCooTable.
+	// known_feature_fraction is matched/observed for that sample -- see ScCooTable.
 	return_types = {data->id_types.sample_id, data->classification ? LogicalType::VARCHAR : LogicalType::DOUBLE,
 	                LogicalType::DOUBLE};
 	return std::move(data);
@@ -115,7 +115,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 			throw InvalidInputException("predict: data relation '%s' produced no samples", bind.data_relation);
 		}
 		gstate.sample_ids = table->SampleIds();
-		gstate.coverage = table->SampleCoverage();
+		gstate.known_fraction = table->KnownFeatureFraction();
 
 		// Every cell dropped means the model shares no vocabulary at all with
 		// this data -- a different reference database or pipeline, not a
@@ -128,7 +128,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 			    (uint64_t)builder_dropped, bind.data_relation);
 		}
 		size_t empty_samples = 0;
-		for (auto c : gstate.coverage) {
+		for (auto c : gstate.known_fraction) {
 			if (c == 0.0) {
 				empty_samples++;
 			}
@@ -136,7 +136,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		if (builder_dropped > 0) {
 			miint::EmitWarning(context,
 			                   "predict: dropped %llu cell(s) from '%s' whose feature the model was not "
-			                   "trained on%s. See the sample_coverage column.",
+			                   "trained on%s. See the known_feature_fraction column.",
 			                   (uint64_t)builder_dropped, bind.data_relation.c_str(),
 			                   empty_samples > 0
 			                       ? (" -- " + std::to_string(empty_samples) +
@@ -190,7 +190,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		} else {
 			output.SetValue(1, i, Value::DOUBLE(gstate.values[at]));
 		}
-		output.SetValue(2, i, Value::DOUBLE(gstate.coverage[at]));
+		output.SetValue(2, i, Value::DOUBLE(gstate.known_fraction[at]));
 	}
 	gstate.emitted += n;
 }

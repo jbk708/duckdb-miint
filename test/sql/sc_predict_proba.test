@@ -102,7 +102,7 @@ SELECT count(*), count(DISTINCT class) FROM predict_proba('pp_data', 'pp_binary'
 ----
 12	2
 
-# --- coverage, same semantics as predict ---
+# --- known_feature_fraction, same semantics as predict ---
 
 statement ok
 CREATE TABLE pp_mixed AS
@@ -110,9 +110,9 @@ CREATE TABLE pp_mixed AS
   UNION ALL
   SELECT sample_id, 'ALIEN_' || feature_id, value FROM pp_data WHERE sample_id IN ('Sample1','Sample2');
 
-# Coverage is per sample and repeats across that sample's class rows.
+# known_feature_fraction is per sample and repeats across that sample's class rows.
 query I
-SELECT list_sort(list(DISTINCT sample_coverage)) FROM predict_proba('pp_mixed', 'pp_models', name := 'site');
+SELECT list_sort(list(DISTINCT known_feature_fraction)) FROM predict_proba('pp_mixed', 'pp_models', name := 'site');
 ----
 [0.5]
 

@@ -112,7 +112,7 @@ true	true
 # Every held-out sample is predicted, and all of them share the model's
 # vocabulary because both splits came from one table.
 query II
-SELECT count(*), bool_and(sample_coverage = 1.0) FROM predict('te', 'split_model');
+SELECT count(*), bool_and(known_feature_fraction = 1.0) FROM predict('te', 'split_model');
 ----
 32	true
 

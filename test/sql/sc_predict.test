@@ -136,16 +136,16 @@ FROM predict('p_full', 'p_rmodel') p JOIN p_rmeta m USING (sample_id);
 ----
 true
 
-# --- sample_coverage ---
+# --- known_feature_fraction ---
 
 # Every feature known to the model.
 query I
-SELECT bool_and(sample_coverage = 1.0) FROM predict('p_full', 'p_rmodel');
+SELECT bool_and(known_feature_fraction = 1.0) FROM predict('p_full', 'p_rmodel');
 ----
 true
 
-# Half the cells use features the model never saw: coverage is matched/observed
-# for that sample, so exactly 0.5.
+# Half the cells use features the model never saw: known_feature_fraction is
+# matched/observed for that sample, so exactly 0.5.
 statement ok
 CREATE TABLE p_mixed AS
   SELECT sample_id, feature_id, value FROM p_full WHERE sample_id IN ('Sample1','Sample2')
@@ -153,20 +153,20 @@ CREATE TABLE p_mixed AS
   SELECT sample_id, 'ALIEN_' || feature_id, value FROM p_full WHERE sample_id IN ('Sample1','Sample2');
 
 query I
-SELECT list(round(sample_coverage, 3) ORDER BY sample_id) FROM predict('p_mixed', 'p_rmodel');
+SELECT list(round(known_feature_fraction, 3) ORDER BY sample_id) FROM predict('p_mixed', 'p_rmodel');
 ----
 [0.5, 0.5]
 
 # A sample sharing nothing with the model still gets a row, predicted from an
-# all-zero matrix, with coverage 0.0 saying so. Dropping it would silently
-# shorten the output.
+# all-zero matrix, with known_feature_fraction 0.0 saying so. Dropping it would
+# silently shorten the output.
 statement ok
 CREATE TABLE p_partial AS
   SELECT sample_id, feature_id, value FROM p_full WHERE sample_id = 'Sample1'
   UNION ALL SELECT 'Stranger', 'NEVER_SEEN', 42.0;
 
 query II
-SELECT sample_id, sample_coverage FROM predict('p_partial', 'p_rmodel') ORDER BY sample_id;
+SELECT sample_id, known_feature_fraction FROM predict('p_partial', 'p_rmodel') ORDER BY sample_id;
 ----
 Sample1	1.0
 Stranger	0.0
@@ -212,7 +212,7 @@ has no 'task' column
 # error, which invalidates the whole database, not just the query.
 statement ok
 CREATE TABLE p_int_blob AS
-  SELECT name, model, 42 AS model_blob, n_samples, n_features, n_trees, task, random_state, feature_id_type
+  SELECT name, model, 42 AS model_blob, n_samples, n_features, n_estimators, task, random_state, feature_id_type
   FROM p_rmodel;
 
 statement error
@@ -353,7 +353,7 @@ SELECT * FROM predict('p_test', 'p_model', n_threads := -1);
 ----
 predict: n_threads must be >= 0 (0 = one per core), got -1
 
-# --- dropped cells are reported, not just counted in sample_coverage ---
+# --- dropped cells are reported, not just counted in known_feature_fraction ---
 
 statement ok
 SET enable_logging = true;

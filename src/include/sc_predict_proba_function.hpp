@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! predict_proba(data, model[, name]) -> (sample_id, class, probability, sample_coverage)
+//! predict_proba(data, model[, name]) -> (sample_id, class, probability, known_feature_fraction)
 //!
 //! Class probabilities from a classifier, one row per (sample, class) rather
 //! than a wide row per sample. Long format because the class set is a property
@@ -17,7 +17,7 @@ namespace duckdb {
 //!
 //! Probabilities for a sample sum to 1. A sample whose features the model does
 //! not recognise still gets a full set of rows -- predicted from an all-zero
-//! matrix -- with `sample_coverage` reporting how much of its data was usable.
+//! matrix -- with `known_feature_fraction` reporting how much of its data was usable.
 class ScPredictProbaFunction {
 public:
 	static void Register(ExtensionLoader &loader);

@@ -450,18 +450,18 @@ std::unique_ptr<ScCooTable> ScCooBuilder::Finalize() {
 	// exception safety, atomic creation and wrapping / automatic destruction of the ScCooTable object even though its
 	// on the heap.  If any of the Export* functions throw an exception, the partially constructed ScCooTable will be
 	// destroyed and its destructor will release any allocated memory.
-	// Coverage rides along the same remap as the dictionary, so it stays aligned
+	// The known fraction rides along the same remap as the dictionary, so it stays aligned
 	// with SampleIds().
-	std::vector<double> coverage(sample_ids_.size(), 1.0);
+	std::vector<double> known_fraction(sample_ids_.size(), 1.0);
 	for (size_t old_pos = 0; old_pos < sample_cells_.size(); old_pos++) {
 		const auto seen = sample_cells_[old_pos];
 		const auto matched = sample_matched_[old_pos];
 		const auto at = static_cast<size_t>(sample_remap[old_pos]);
-		coverage[at] = seen > 0 ? static_cast<double>(matched) / static_cast<double>(seen) : 0.0;
+		known_fraction[at] = seen > 0 ? static_cast<double>(matched) / static_cast<double>(seen) : 0.0;
 	}
 
 	auto out = std::make_unique<ScCooTable>();
-	out->sample_coverage_ = std::move(coverage);
+	out->known_feature_fraction_ = std::move(known_fraction);
 	// n_something is always some kind of boundary in cpp or a length
 	out->table_.n_samples = static_cast<int64_t>(sample_ids_.size());
 	out->table_.n_features = static_cast<int64_t>(feature_ids_.size());
@@ -538,7 +538,8 @@ std::unique_ptr<ScCooTable> ScCooBatcher::Batch(size_t first, size_t count) cons
 	const auto lo = static_cast<std::ptrdiff_t>(first);
 	const auto hi = static_cast<std::ptrdiff_t>(first + count);
 	out->sample_ids_.assign(table_.sample_ids_.begin() + lo, table_.sample_ids_.begin() + hi);
-	out->sample_coverage_.assign(table_.sample_coverage_.begin() + lo, table_.sample_coverage_.begin() + hi);
+	out->known_feature_fraction_.assign(table_.known_feature_fraction_.begin() + lo,
+	                                    table_.known_feature_fraction_.begin() + hi);
 	out->feature_ids_ = table_.feature_ids_;
 	out->table_.n_samples = static_cast<int64_t>(count);
 	out->table_.n_features = src.n_features;

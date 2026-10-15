@@ -42,7 +42,7 @@ CREATE TABLE train_metadata AS
 
 # Regression: 6 samples x 5 features, model comes back as a non-empty BLOB.
 query IIII
-SELECT n_samples, n_features, n_trees, task
+SELECT n_samples, n_features, n_estimators, task
 FROM fit_regressor('train_data', 'train_metadata', n_estimators := 10, random_state := 42, name := 'm1');
 ----
 6	5	10	regression
@@ -302,9 +302,9 @@ SELECT (SELECT model_blob FROM fit_classifier('train_data','class_metadata', ran
 ----
 false
 
-# n_trees reports what sc was actually given, not the default.
+# n_estimators reports what sc was actually given, not the default.
 query I
-SELECT n_trees FROM fit_classifier('train_data','class_metadata', n_estimators := 33, name := 'm23');
+SELECT n_estimators FROM fit_classifier('train_data','class_metadata', n_estimators := 33, name := 'm23');
 ----
 33
 
@@ -340,7 +340,7 @@ SELECT * FROM fit_classifier('train_data', 'class_metadata', n_estimators := 100
 n_estimators must be <= 100000 (got 100001)
 
 query I
-SELECT n_trees FROM fit_classifier('train_data', 'class_metadata', n_estimators := 100000, max_depth := 1,
+SELECT n_estimators FROM fit_classifier('train_data', 'class_metadata', n_estimators := 100000, max_depth := 1,
                                    name := 'm27c');
 ----
 100000
@@ -374,7 +374,7 @@ CREATE TABLE seeded AS
   SELECT * FROM fit_regressor('train_data','train_metadata', n_estimators := 30, random_state := 20260907, name := 'm31');
 
 query II
-SELECT random_state, n_trees FROM seeded;
+SELECT random_state, n_estimators FROM seeded;
 ----
 20260907	30
 
@@ -425,7 +425,7 @@ INSERT INTO named_models
   FROM fit_regressor('train_data','train_metadata', n_estimators := 60, random_state := 99, name := 'm38');
 
 query III
-SELECT name, n_trees, random_state FROM named_models ORDER BY name;
+SELECT name, n_estimators, random_state FROM named_models ORDER BY name;
 ----
 depth_rf	15	99
 depth_rf_big	60	99
@@ -435,7 +435,7 @@ statement ok
 CREATE VIEW picked AS SELECT * FROM named_models WHERE name = 'depth_rf_big';
 
 query I
-SELECT n_trees FROM picked;
+SELECT n_estimators FROM picked;
 ----
 60
 
@@ -475,7 +475,7 @@ INSERT INTO reg
   SELECT * FROM fit_regressor('train_data','train_metadata', n_estimators := 10, name := 'big');
 
 query II
-SELECT name, n_trees FROM reg ORDER BY n_trees;
+SELECT name, n_estimators FROM reg ORDER BY n_estimators;
 ----
 small	5
 big	10
@@ -530,7 +530,7 @@ SELECT count(*) FROM month_model;
 1
 
 query IIII
-SELECT n_samples, n_features, n_trees, task FROM month_model;
+SELECT n_samples, n_features, n_estimators, task FROM month_model;
 ----
 4	5	25	regression
 
@@ -593,7 +593,7 @@ fit_classifier: min_impurity_decrease must be finite and >= 0 (got nan)
 
 # The edges are allowed.
 query I
-SELECT n_trees FROM fit_regressor('train_data', 'train_metadata', n_estimators := 3, min_weight_fraction_leaf := 0.5,
+SELECT n_estimators FROM fit_regressor('train_data', 'train_metadata', n_estimators := 3, min_weight_fraction_leaf := 0.5,
                                   min_impurity_decrease := 0.0, n_threads := 0, name := 'edges');
 ----
 3

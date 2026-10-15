@@ -265,7 +265,7 @@ SELECT count(*) FILTER (WHERE rowid <> want), count(*) FROM (
 ----
 0	80
 
-# --- sample_coverage ---
+# --- known_feature_fraction ---
 
 # One cell of a feature the model never saw on sample_000 (23 known features),
 # and a sample whose only feature is unseen.
@@ -281,10 +281,10 @@ SELECT count(*) FROM shap('shp_cov', 'shp_models', name := 'reg') WHERE feature_
 ----
 0
 
-# Coverage is known features / the sample's features, the same number predict
+# known_feature_fraction is known features / the sample's features, the same number predict
 # reports.
 query II
-SELECT sample_id, round(any_value(sample_coverage), 4)
+SELECT sample_id, round(any_value(known_feature_fraction), 4)
 FROM shap('shp_cov', 'shp_models', name := 'reg')
 WHERE sample_id IN ('only_D', 'sample_000', 'sample_001')
 GROUP BY ALL ORDER BY ALL;
@@ -296,12 +296,12 @@ sample_001	1.0
 # Constant within a sample, equal to predict's for all nine, and the dropped
 # cells change nothing about additivity -- the prediction ignored them too.
 # only_D is the case the column exists for: its explanation adds up exactly, yet
-# it explains an all-zero row, and only coverage says so.
+# it explains an all-zero row, and only known_feature_fraction says so.
 query II
-WITH s AS (SELECT sample_id, count(DISTINCT sample_coverage) AS k, any_value(sample_coverage) AS c,
+WITH s AS (SELECT sample_id, count(DISTINCT known_feature_fraction) AS k, any_value(known_feature_fraction) AS c,
                   sum(shap_value) + any_value(base_value) AS recon
            FROM shap('shp_cov', 'shp_models', name := 'reg') GROUP BY sample_id)
-SELECT count(*), bool_and(s.k = 1 AND s.c = p.sample_coverage AND abs(s.recon - p.prediction) < 1e-9)
+SELECT count(*), bool_and(s.k = 1 AND s.c = p.known_feature_fraction AND abs(s.recon - p.prediction) < 1e-9)
 FROM s JOIN predict('shp_cov', 'shp_models', name := 'reg') p USING (sample_id);
 ----
 9	true
@@ -309,10 +309,10 @@ FROM s JOIN predict('shp_cov', 'shp_models', name := 'reg') p USING (sample_id);
 # One sample per batch puts only_D (first in sample order) in a batch with no
 # cells at all: still a valid table, and still the same numbers.
 query II
-WITH s AS (SELECT sample_id, count(DISTINCT sample_coverage) AS k, any_value(sample_coverage) AS c,
+WITH s AS (SELECT sample_id, count(DISTINCT known_feature_fraction) AS k, any_value(known_feature_fraction) AS c,
                   sum(shap_value) + any_value(base_value) AS recon
            FROM shap('shp_cov', 'shp_models', name := 'reg', batch_size := 1) GROUP BY sample_id)
-SELECT count(*), bool_and(s.k = 1 AND s.c = p.sample_coverage AND abs(s.recon - p.prediction) < 1e-9)
+SELECT count(*), bool_and(s.k = 1 AND s.c = p.known_feature_fraction AND abs(s.recon - p.prediction) < 1e-9)
 FROM s JOIN predict('shp_cov', 'shp_models', name := 'reg') p USING (sample_id);
 ----
 9	true
@@ -334,7 +334,7 @@ CREATE TABLE shp_b1 AS
 query II
 SELECT count(*), count(*) FILTER (WHERE a.sample_id <> b.sample_id OR a.class IS DISTINCT FROM b.class
                                      OR a.feature_id <> b.feature_id OR a.shap_value <> b.shap_value
-                                     OR a.base_value <> b.base_value OR a.sample_coverage <> b.sample_coverage)
+                                     OR a.base_value <> b.base_value OR a.known_feature_fraction <> b.known_feature_fraction)
 FROM shp_order a JOIN shp_b1 b ON a.rowid = b.rowid;
 ----
 3600	0
@@ -347,7 +347,7 @@ CREATE TABLE shp_b3 AS
 query II
 SELECT count(*), count(*) FILTER (WHERE a.sample_id <> b.sample_id OR a.class IS DISTINCT FROM b.class
                                      OR a.feature_id <> b.feature_id OR a.shap_value <> b.shap_value
-                                     OR a.base_value <> b.base_value OR a.sample_coverage <> b.sample_coverage)
+                                     OR a.base_value <> b.base_value OR a.known_feature_fraction <> b.known_feature_fraction)
 FROM shp_order a JOIN shp_b3 b ON a.rowid = b.rowid;
 ----
 3600	0
@@ -365,7 +365,7 @@ query II
 SELECT count(*) > 0 AND count(*) = (SELECT count(*) FROM shp_bin_top) AND count(*) = (SELECT count(*) FROM shp_bin_top_b3),
        count(*) FILTER (WHERE a.sample_id <> b.sample_id OR a.class IS DISTINCT FROM b.class
                            OR a.feature_id <> b.feature_id OR a.shap_value <> b.shap_value
-                           OR a.base_value <> b.base_value OR a.sample_coverage <> b.sample_coverage)
+                           OR a.base_value <> b.base_value OR a.known_feature_fraction <> b.known_feature_fraction)
 FROM shp_bin_top a JOIN shp_bin_top_b3 b ON a.rowid = b.rowid;
 ----
 true	0
@@ -378,7 +378,7 @@ CREATE TABLE shp_reg_budget AS SELECT * FROM shap('shp_few', 'shp_models', name 
 query II
 SELECT count(*), count(*) FILTER (WHERE a.sample_id <> b.sample_id OR a.class IS DISTINCT FROM b.class
                                      OR a.feature_id <> b.feature_id OR a.shap_value <> b.shap_value
-                                     OR a.base_value <> b.base_value OR a.sample_coverage <> b.sample_coverage)
+                                     OR a.base_value <> b.base_value OR a.known_feature_fraction <> b.known_feature_fraction)
 FROM shp_full a JOIN shp_reg_budget b ON a.rowid = b.rowid;
 ----
 1200	0
@@ -394,7 +394,7 @@ CREATE TABLE shp_reg_over AS SELECT * FROM shap('shp_few', 'shp_models', name :=
 query II
 SELECT count(*), count(*) FILTER (WHERE a.sample_id <> b.sample_id OR a.class IS DISTINCT FROM b.class
                                      OR a.feature_id <> b.feature_id OR a.shap_value <> b.shap_value
-                                     OR a.base_value <> b.base_value OR a.sample_coverage <> b.sample_coverage)
+                                     OR a.base_value <> b.base_value OR a.known_feature_fraction <> b.known_feature_fraction)
 FROM shp_full a JOIN shp_reg_over b ON a.rowid = b.rowid;
 ----
 1200	0

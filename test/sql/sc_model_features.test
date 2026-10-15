@@ -86,7 +86,7 @@ GG_OTU_4	1
 
 # --- the diagnostic this exists for ---
 #
-# When sample_coverage is low the cause is usually a naming mismatch, not
+# When known_feature_fraction is low the cause is usually a naming mismatch, not
 # missing biology. Diffing both directions says which.
 
 statement ok

@@ -8,7 +8,7 @@ namespace duckdb {
 //!
 //! The vocabulary a model was trained on, in its own column order. This is what
 //! `predict` encodes incoming data against, so it is the reference for
-//! answering "why is sample_coverage low" -- the usual cause is a naming
+//! answering "why is known_feature_fraction low" -- the usual cause is a naming
 //! mismatch (case, prefix, a different reference database) rather than missing
 //! biology.
 //!

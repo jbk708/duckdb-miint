@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! predict(data, model) -> (sample_id, prediction, sample_coverage)
+//! predict(data, model) -> (sample_id, prediction, known_feature_fraction)
 //!
 //! One function for both tasks, mirroring sc's own single `sc_predict`, which
 //! dispatches on the model's recorded task. The prediction column is VARCHAR
@@ -20,7 +20,7 @@ namespace duckdb {
 //! Features are encoded against the model's vocabulary, never re-derived from
 //! the prediction data: two datasets differing by one feature in each direction
 //! have the same width, and sc validates only the width, so re-deriving would
-//! return confident nonsense with no error anywhere. `sample_coverage` reports
+//! return confident nonsense with no error anywhere. `known_feature_fraction` reports
 //! matched/observed per sample so a caller can see how much of their data the
 //! model could actually use.
 class ScPredictFunction {

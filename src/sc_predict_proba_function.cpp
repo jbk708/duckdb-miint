@@ -27,7 +27,7 @@ struct ScProbaData : public TableFunctionData {
 struct ScProbaGlobalState : public GlobalTableFunctionState {
 	std::vector<std::string> sample_ids;
 	std::vector<std::string> classes;
-	std::vector<double> coverage;
+	std::vector<double> known_fraction;
 	//! Row-major, n_samples * n_classes.
 	std::vector<double> proba;
 	//! One output row per (sample, class) pair.
@@ -75,7 +75,7 @@ unique_ptr<FunctionData> ScProbaBind(ClientContext &context, TableFunctionBindIn
 		    data->id_types.feature_id, "predict_proba", data->model_relation, data->model_name, data->data_relation);
 	}
 
-	names = {"sample_id", "class", "probability", "sample_coverage"};
+	names = {"sample_id", "class", "probability", "known_feature_fraction"};
 	return_types = {data->id_types.sample_id, LogicalType::VARCHAR, LogicalType::DOUBLE, LogicalType::DOUBLE};
 	return std::move(data);
 }
@@ -121,11 +121,11 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		if (dropped > 0) {
 			miint::EmitWarning(context,
 			                   "predict_proba: dropped %llu cell(s) from '%s' whose feature the model was not "
-			                   "trained on. See the sample_coverage column.",
+			                   "trained on. See the known_feature_fraction column.",
 			                   (uint64_t)dropped, bind.data_relation.c_str());
 		}
 		gstate.sample_ids = table->SampleIds();
-		gstate.coverage = table->SampleCoverage();
+		gstate.known_fraction = table->KnownFeatureFraction();
 
 		miint::OwnedArrowArray proba, classes;
 		if (auto st = sc_predict_proba(ctx.ptr, model.ptr, table->get(), proba.array(), proba.schema(), classes.array(),
@@ -164,7 +164,7 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		EmitIdCell(output.data[0], i, gstate.sample_ids[sample], bind.id_types.sample_id);
 		output.SetValue(1, i, Value(gstate.classes[klass]));
 		output.SetValue(2, i, Value::DOUBLE(gstate.proba[at]));
-		output.SetValue(3, i, Value::DOUBLE(gstate.coverage[sample]));
+		output.SetValue(3, i, Value::DOUBLE(gstate.known_fraction[sample]));
 	}
 	gstate.emitted += n;
 }

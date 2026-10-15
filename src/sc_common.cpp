@@ -176,7 +176,7 @@ void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 		throw InvalidInputException("%s: No model named '%s' in relation '%s'.\n\n"
 		                            "Remedy:\n"
 		                            "  List what the relation holds, then use one of those names:\n"
-		                            "    SELECT name, task, n_trees FROM %s;",
+		                            "    SELECT name, task, n_estimators FROM %s;",
 		                            caller, name, relation, relation);
 	}
 	if (!name.empty()) {
@@ -184,7 +184,7 @@ void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 		    "%s: Relation '%s' holds %lld models named '%s'; a name has to identify exactly one.\n\n"
 		    "Remedy:\n"
 		    "  Inspect the duplicates and drop or rename all but one:\n"
-		    "    SELECT name, task, n_trees, random_state FROM %s WHERE name = '%s';",
+		    "    SELECT name, task, n_estimators, random_state FROM %s WHERE name = '%s';",
 		    caller, relation, (int64_t)rows, name, relation, name);
 	}
 	if (rows == 0) {
@@ -198,7 +198,7 @@ void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 	throw InvalidInputException("%s: Relation '%s' holds %lld models, so this call is ambiguous.\n\n"
 	                            "Remedy:\n"
 	                            "  Say which one, by the name it was fit with:\n"
-	                            "    SELECT name, task, n_trees FROM %s;              -- see what is there\n"
+	                            "    SELECT name, task, n_estimators FROM %s;         -- see what is there\n"
 	                            "    ... FROM %s(..., '%s', name := 'my_model');      -- then pick one",
 	                            caller, relation, (int64_t)rows, relation, caller, relation);
 }

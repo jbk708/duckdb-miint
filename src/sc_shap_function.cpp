@@ -56,7 +56,7 @@ struct ScShapGlobalState : public GlobalTableFunctionState {
 	// batcher is destroyed before the table it indexes.
 	miint::ScContext ctx;
 	miint::ScModel model;
-	//! Every sample; sample ids and coverage are read from here.
+	//! Every sample; sample ids and known fractions are read from here.
 	std::unique_ptr<miint::ScCooTable> table;
 	std::unique_ptr<miint::ScCooBatcher> batcher;
 	std::vector<std::string> feature_ids;
@@ -148,7 +148,7 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 		    data->id_types.feature_id, "shap", data->model_relation, data->model_name, data->data_relation);
 	}
 
-	names = {"sample_id", "class", "feature_id", "shap_value", "base_value", "sample_coverage"};
+	names = {"sample_id", "class", "feature_id", "shap_value", "base_value", "known_feature_fraction"};
 	return_types = {data->id_types.sample_id, LogicalType::VARCHAR, data->id_types.feature_id,
 	                LogicalType::DOUBLE,      LogicalType::DOUBLE,  LogicalType::DOUBLE};
 	return std::move(data);
@@ -244,14 +244,14 @@ void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState
 		// A sample left with no known features still gets a full, additive
 		// explanation -- of an all-zero row. Nothing in the numbers says so.
 		size_t empty_samples = 0;
-		for (auto c : gstate.table->SampleCoverage()) {
+		for (auto c : gstate.table->KnownFeatureFraction()) {
 			if (c == 0.0) {
 				empty_samples++;
 			}
 		}
 		miint::EmitWarning(context,
 		                   "shap: dropped %llu cell(s) from '%s' whose feature the model was not trained on%s. "
-		                   "See the sample_coverage column.",
+		                   "See the known_feature_fraction column.",
 		                   (uint64_t)dropped, bind.data_relation.c_str(),
 		                   empty_samples > 0 ? (" -- " + std::to_string(empty_samples) +
 		                                        " sample(s) retained no features at all; their attributions explain "
@@ -390,7 +390,7 @@ void ScShapExecute(ClientContext &context, TableFunctionInput &input, DataChunk 
 	}
 
 	const auto &sample_ids = gstate.table->SampleIds();
-	const auto &coverage = gstate.table->SampleCoverage();
+	const auto &known_fraction = gstate.table->KnownFeatureFraction();
 	const size_t n_samples = sample_ids.size();
 	const bool filter_output = bind.classification && bind.predicted_class_only;
 	auto advance = [&gstate]() {
@@ -435,7 +435,7 @@ void ScShapExecute(ClientContext &context, TableFunctionInput &input, DataChunk 
 		EmitIdCell(output.data[2], n, gstate.feature_ids[f], bind.id_types.feature_id);
 		output.SetValue(3, n, Value::DOUBLE(gstate.values[base + f]));
 		output.SetValue(4, n, Value::DOUBLE(gstate.base_values[gstate.cur_output]));
-		output.SetValue(5, n, Value::DOUBLE(coverage[gstate.cur_sample]));
+		output.SetValue(5, n, Value::DOUBLE(known_fraction[gstate.cur_sample]));
 		n++;
 	}
 	output.SetCardinality(n);

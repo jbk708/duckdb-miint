@@ -48,8 +48,8 @@ public:
 	//! Per sample, the fraction of its observed cells whose feature the model
 	//! knows: `matched / observed`, in `SampleIds()` order.
 	//!
-	//! The denominator is the *sample's* features, not the model's. Coverage
-	//! against the model's vocabulary is always tiny in sparse data -- a sample
+	//! The denominator is the *sample's* features, not the model's. A fraction
+	//! of the model's vocabulary is always tiny in sparse data -- a sample
 	//! legitimately carries a handful of 200k features -- so it would flag
 	//! everything. This ratio instead answers "how much of what I observed here
 	//! can the model actually use", where a low value means the model is being
@@ -58,8 +58,8 @@ public:
 	//!
 	//! Always 1.0 without a fixed vocabulary, where every feature is known by
 	//! construction.
-	const std::vector<double> &SampleCoverage() const {
-		return sample_coverage_;
+	const std::vector<double> &KnownFeatureFraction() const {
+		return known_feature_fraction_;
 	}
 
 	//! Dictionaries, in the sorted order the `cols` / `rows` indices refer to.
@@ -74,7 +74,7 @@ private:
 	friend class ScCooBuilder;
 	friend class ScCooBatcher;
 	sc_coo_table_t table_ {};
-	std::vector<double> sample_coverage_;
+	std::vector<double> known_feature_fraction_;
 	std::vector<std::string> sample_ids_;
 	std::vector<std::string> feature_ids_;
 };
@@ -93,7 +93,7 @@ public:
 	explicit ScCooBatcher(const ScCooTable &table);
 
 	//! Samples `[first, first + count)` as their own table: rows renumbered from
-	//! 0, the same feature columns and vocabulary, coverage carried along. A
+	//! 0, the same feature columns and vocabulary, known fractions carried along. A
 	//! batch whose samples have no cells is valid -- all-zero rows.
 	std::unique_ptr<ScCooTable> Batch(size_t first, size_t count) const;
 

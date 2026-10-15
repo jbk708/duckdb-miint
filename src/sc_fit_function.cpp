@@ -134,8 +134,8 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, data->caller);
 	}
-	names = {"name",    "model", "model_blob",   "n_samples",      "n_features",
-	         "n_trees", "task",  "random_state", "feature_id_type"};
+	names = {"name",         "model", "model_blob",   "n_samples",      "n_features",
+	         "n_estimators", "task",  "random_state", "feature_id_type"};
 	return_types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BLOB,
 	                LogicalType::BIGINT,  LogicalType::BIGINT,  LogicalType::BIGINT,
 	                LogicalType::VARCHAR, LogicalType::BIGINT,  LogicalType::VARCHAR};

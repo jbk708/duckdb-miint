@@ -5,7 +5,7 @@
 namespace duckdb {
 
 //! shap(data, model[, name, predicted_class_only, top_k, max_attributions, batch_size, n_threads])
-//!   -> (sample_id, class, feature_id, shap_value, base_value, sample_coverage)
+//!   -> (sample_id, class, feature_id, shap_value, base_value, known_feature_fraction)
 //!
 //! Path-dependent TreeSHAP: how much each feature pushed one sample's prediction
 //! away from the model's baseline. Additive by construction --
@@ -29,7 +29,7 @@ namespace duckdb {
 //! Features the model knows but the sample lacks are explained too: absent is
 //! zero, and a zero can push a prediction as hard as a count. Features the model
 //! never saw are dropped, exactly as in predict -- no tree splits on them, so
-//! their attribution would be 0 anyway. `sample_coverage` is the share of the
+//! their attribution would be 0 anyway. `known_feature_fraction` is the share of the
 //! sample's features the model knows, as in predict; at 0 the attributions
 //! still add up, but they explain an all-zero row.
 //!
