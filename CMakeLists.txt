@@ -2025,6 +2025,7 @@ if(MIINT_ENABLE_GPL_BOUNDARY)
     src/gpl_boundary/session.cpp
     src/gpl_boundary/shm.cpp
     src/gpl_boundary/arrow_ipc.cpp
+    src/skb_arrow/client.cpp
     src/install_gpl_boundary.cpp
     src/phylogeny_fasttree.cpp
     src/align_bowtie2_daemon_common.cpp
@@ -2619,10 +2620,12 @@ if(MIINT_ENABLE_GPL_BOUNDARY)
     src/gpl_boundary/session.cpp
     src/gpl_boundary/shm.cpp
     src/gpl_boundary/arrow_ipc.cpp
+    src/skb_arrow/client.cpp
     test/cpp/test_gpl_boundary_process.cpp
     test/cpp/test_gpl_boundary_session.cpp
     test/cpp/test_gpl_boundary_shm.cpp
-    test/cpp/test_gpl_boundary_arrow_ipc.cpp)
+    test/cpp/test_gpl_boundary_arrow_ipc.cpp
+    test/cpp/test_skb_arrow_client.cpp)
 endif()
 if(MIINT_ENABLE_UNIFRAC)
   # NewickTree.cpp already in TEST_SOURCES (line 1265) for the existing

@@ -615,21 +615,28 @@ bool LineReader::ReadLine(std::string &out) {
 			return false;
 		}
 		// Need more bytes.
-		char chunk[4096];
-		ssize_t n;
-		do {
-			n = ::read(fd_, chunk, sizeof(chunk));
-		} while (n == -1 && errno == EINTR);
-		if (n < 0) {
-			throw std::runtime_error("gpl_boundary: LineReader::ReadLine read() failed: " +
-			                         std::string(::strerror(errno)));
-		}
-		if (n == 0) {
-			eof_ = true;
-			continue;
-		}
-		buffer_.append(chunk, static_cast<size_t>(n));
+		FillOnce();
 	}
+}
+
+bool LineReader::HasLine() const {
+	return eof_ || buffer_.find('\n') != std::string::npos;
+}
+
+void LineReader::FillOnce() {
+	char chunk[4096];
+	ssize_t n;
+	do {
+		n = ::read(fd_, chunk, sizeof(chunk));
+	} while (n == -1 && errno == EINTR);
+	if (n < 0) {
+		throw std::runtime_error("gpl_boundary: LineReader read() failed: " + std::string(::strerror(errno)));
+	}
+	if (n == 0) {
+		eof_ = true;
+		return;
+	}
+	buffer_.append(chunk, static_cast<size_t>(n));
 }
 
 // =============================================================================

@@ -723,3 +723,42 @@ TEST_CASE("By default a child dies with the thread that spawned it", "[gpl-bound
 	REQUIRE_THAT(child->ReapAndDescribe(2000), Catch::Matchers::ContainsSubstring("signal 15"));
 }
 #endif
+
+// =============================================================================
+// Cycle 1.5 — LineReader for a caller that polls between reads
+// =============================================================================
+//
+// skb-arrow calls can run for minutes. The caller polls the host's stdout so
+// it can check for a cancelled query between waits, and must never block in
+// ReadLine on half a line.
+
+namespace {
+// FillOnce until a line (or EOF) is buffered, at most `max_reads` times.
+bool FillUntilLine(LineReader &reader, int max_reads) {
+	for (int i = 0; i < max_reads && !reader.HasLine(); ++i) {
+		reader.FillOnce();
+	}
+	return reader.HasLine();
+}
+} // namespace
+
+TEST_CASE("LineReader::FillOnce buffers part of a line without blocking for the rest", "[gpl-boundary][process]") {
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	ChildProcess child({bash_path, "-c", "printf 'par'; sleep 0.3; printf 'tial\\n'; printf 'next\\n'"});
+	LineReader reader(child.stdout_fd());
+	REQUIRE_FALSE(reader.HasLine());
+	reader.FillOnce(); // "par": returns without waiting for the newline
+	REQUIRE_FALSE(reader.HasLine());
+	REQUIRE(FillUntilLine(reader, 100));
+	std::string line;
+	REQUIRE(reader.ReadLine(line));
+	REQUIRE(line == "partial");
+	REQUIRE(FillUntilLine(reader, 100));
+	REQUIRE(reader.ReadLine(line));
+	REQUIRE(line == "next");
+	// At EOF, HasLine is true so the caller's ReadLine reports EOF at once.
+	REQUIRE(FillUntilLine(reader, 100));
+	REQUIRE_FALSE(reader.ReadLine(line));
+	child.Wait();
+}

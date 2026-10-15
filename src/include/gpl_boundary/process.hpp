@@ -136,6 +136,12 @@ public:
 	/// only zombies remain) counts as killed. Reap with `Wait()` afterwards.
 	void KillGroup();
 
+	/// True once the child is reaped (by `Wait`, `ReapAndDescribe`, or a
+	/// failed spawn), so `Wait()` returns without blocking.
+	bool reaped() const {
+		return waited_;
+	}
+
 private:
 	pid_t pid_ = -1;
 	int stdin_fd_ = -1;
@@ -183,6 +189,15 @@ public:
 	/// Returns true and writes the next line into `out` (excluding the `\n`).
 	/// Returns false on EOF (with `out` cleared). Throws on read errors.
 	bool ReadLine(std::string &out);
+
+	/// True when `ReadLine` would return without reading: a whole line is
+	/// buffered, or the fd has reached EOF.
+	bool HasLine() const;
+
+	/// One read() into the buffer: for a caller that polls the fd (to stay
+	/// interruptible) and calls `ReadLine` only once `HasLine()`. Blocks only
+	/// if the fd has nothing to read. Throws on read errors.
+	void FillOnce();
 
 private:
 	int fd_;
