@@ -147,6 +147,15 @@ if $VERIFY; then
 
         echo "--- Checking $t: $WASM_FILE ---"
 
+        # A build whose C++ uses wasm-native exceptions builds the Rust glue the
+        # same way (CMakeLists.txt, "Rust glue"), so it must not import
+        # Emscripten's JS exception helpers: duckdb-wasm generates them, and on
+        # that path Rust symbol names are truncated and i64 arguments corrupted (#315).
+        NATIVE_EH=false
+        if grep -q '^CMAKE_CXX_FLAGS:.*-fwasm-exceptions' "build/$t/CMakeCache.txt" 2>/dev/null; then
+            NATIVE_EH=true
+        fi
+
         # Use Node.js to compile the WASM module and inspect imports/exports.
         #
         # In PIC WASM side modules, library symbols appear as both:
@@ -188,10 +197,18 @@ if $VERIFY; then
                 // Check 3: Extension init function must be exported
                 const hasInit = exportNames.has('miint_duckdb_cpp_init');
 
+                // Check 4: no JS exception-handling helpers in a wasm-native EH build
+                const jsEh = $NATIVE_EH ? imports.filter(i => i.module === 'env' &&
+                    /^(invoke_|__cxa_find_matching_catch|__resumeException$)/.test(i.name)) : [];
+
                 const problems = [];
                 if (!hasInit) problems.push('Missing miint_duckdb_cpp_init export');
                 badDirect.forEach(i => problems.push('Unlinked: env.' + i.name));
                 badGot.forEach(i => problems.push('GOT without export: ' + i.module + '.' + i.name));
+                if (jsEh.length > 0) {
+                    problems.push(jsEh.length + ' JS exception-handling imports in a wasm-native EH build, e.g. ' +
+                        jsEh.slice(0, 5).map(i => i.name).join(', '));
+                }
 
                 if (problems.length > 0) {
                     console.log('FAIL');
@@ -201,6 +218,7 @@ if $VERIFY; then
                     console.log('OK');
                     console.log('  Imports: ' + imports.length + ' total, ' + gotImports.length + ' library GOT (all self-resolved)');
                     console.log('  Exports: ' + exports.length + ' total, miint_duckdb_cpp_init present');
+                    if ($NATIVE_EH) console.log('  Exceptions: wasm-native, no JS exception-handling imports');
                 }
             }).catch(err => {
                 console.log('COMPILE_ERROR ' + err.message);
