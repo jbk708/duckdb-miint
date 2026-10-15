@@ -168,7 +168,9 @@ It boots duckdb-wasm in headless Chrome the way the playground does
 `allowUnsignedExtensions`), serves the extension with no cross-origin isolation
 headers, like GitHub Pages, `LOAD`s it, and runs
 `scripts/wasm_browser/steps.json`. Each step with an `expect` must return that
-value. It exits nonzero on any mismatch or error.
+value. The run passes only when every step ran and passed; a mismatch, an
+error, a step left unrun because the database died, or duckdb-wasm picking a
+bundle other than eh fails it.
 
 **This is the check for Rust code paths, not Level 3.** The load test links its
 own main module and JS glue from the `duckdb/` submodule, while the browser check
@@ -180,8 +182,8 @@ including ones that work in the playground.
 
 ### Adding steps
 
-A step is `{"name", "sql", "expect"}`; steps run in order on one connection, and a
-step without `expect` (setup) only has to succeed. Make a checked step return one
+A step is `{"name", "sql", "expect"}` with a unique name; steps run in order on
+one connection, and a step without `expect` (setup) only has to succeed. Make a checked step return one
 VARCHAR cell (an `md5` over an ordered `string_agg` for anything bigger), so both
 runtimes print it the same way. Take `expect` from a native build:
 

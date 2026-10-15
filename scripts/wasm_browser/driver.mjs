@@ -10,10 +10,11 @@
 // --native runs the same steps in a native shell, which is how the expected
 // values are produced and kept honest.
 //
-// A step is {name, sql, expect?}. Steps run in order on one connection. A step
-// with `expect` must return it as the first cell of its first row; cast the
-// result to VARCHAR in the SQL so both runtimes print it the same way. A step
-// without `expect` (setup) must only succeed.
+// A step is {name, sql, expect?}, and names are unique. Steps run in order on
+// one connection. A step with `expect` must return it as the first cell of its
+// first row; cast the result to VARCHAR in the SQL so both runtimes print it the
+// same way. A step without `expect` (setup) must only succeed. The run passes
+// only when every step ran and passed.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -25,15 +26,34 @@ const steps = JSON.parse(fs.readFileSync(path.join(here, 'steps.json'), 'utf8'))
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, a, i, all) =>
   (a.startsWith('--') ? [...acc, [a.slice(2), all[i + 1]]] : acc), []));
 
-let failures = 0;
+const names = new Set();
+for (const s of steps) {
+  if (typeof s.name !== 'string' || typeof s.sql !== 'string') {
+    console.error(`steps.json: every step needs a string name and sql: ${JSON.stringify(s).slice(0, 120)}`);
+    process.exit(2);
+  }
+  if (names.has(s.name)) {
+    console.error(`steps.json: duplicate step name '${s.name}'`);
+    process.exit(2);
+  }
+  names.add(s.name);
+}
+
+// Each step is reported once, as passed or failed; whatever is left was not run.
+// `aborted` is a failure outside any step (the shell or the page), which fails the
+// run even if no step did.
+let passed = 0;
+let failed = 0;
+let aborted = null;
 function report(step, r) {
   if (!r.ok) {
-    failures++;
+    failed++;
     console.log(`FAIL ${step.name}: ${r.error}`);
   } else if (step.expect !== undefined && r.value !== step.expect) {
-    failures++;
+    failed++;
     console.log(`FAIL ${step.name}:\n  expected ${step.expect}\n  got      ${r.value}`);
   } else {
+    passed++;
     console.log(`ok   ${step.name}`);
   }
 }
@@ -43,18 +63,28 @@ function runNative(duckdb) {
   const script = steps.map(s => `.print @@step ${s.name}\n${s.sql.trim().replace(/;?$/, ';')}`).join('\n')
     + '\n.print @@end\n';
   const r = spawnSync(duckdb, ['-noheader', '-list', '-bail', ':memory:'], { input: script, encoding: 'utf8' });
-  const out = {};
+  if (r.error) {
+    aborted = `could not run ${duckdb}: ${r.error.message}`;
+    return;
+  }
+  const out = new Map();
   let cur = null;
+  let ended = false;
   for (const line of r.stdout.split('\n')) {
     const m = line.match(/^@@step (.*)$/);
-    if (m) { cur = m[1]; out[cur] = []; } else if (line === '@@end') { cur = null; } else if (cur) out[cur].push(line);
+    if (m) { cur = m[1]; out.set(cur, []); } else if (line === '@@end') { ended = true; cur = null; } else if (cur) out.get(cur).push(line);
   }
-  const ended = r.stdout.includes('\n@@end');
+  const clean = ended && r.status === 0;
+  const last = [...out.keys()].at(-1);
   for (const s of steps) {
-    if (!(s.name in out)) break;
-    const failed = !ended && s.name === Object.keys(out).at(-1);
-    report(s, failed ? { ok: false, error: r.stderr.trim() } : { ok: true, value: out[s.name][0] ?? null });
+    if (!out.has(s.name)) break;
+    // With -bail the shell stops at the first error, so a failure belongs to the
+    // last step it started.
+    report(s, !clean && s.name === last
+      ? { ok: false, error: `shell exited ${r.status}: ${r.stderr.trim() || '(no message)'}` }
+      : { ok: true, value: out.get(s.name)[0] ?? null });
   }
+  if (!clean && out.size === 0) aborted = `shell exited ${r.status} before the first step: ${r.stderr.trim() || '(no message)'}`;
 }
 
 async function runWasm(wasmFile, chrome) {
@@ -80,11 +110,14 @@ async function runWasm(wasmFile, chrome) {
     await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.__ready === true, { timeout: 120_000 });
     const boot = await page.evaluate(() => window.__boot());
+    if (!boot.ok) {
+      aborted = `boot: ${boot.error}`;
+      return;
+    }
     console.log(`duckdb-wasm ${boot.version}, bundle ${boot.mainModule}`);
     const load = await page.evaluate(u => window.__load(u), `${base}/miint.duckdb_extension.wasm`);
     if (!load.ok) {
-      failures++;
-      console.log(`FAIL LOAD: ${load.error}`);
+      aborted = `LOAD: ${load.error}`;
       return;
     }
     console.log(`miint ${load.version}`);
@@ -96,8 +129,7 @@ async function runWasm(wasmFile, chrome) {
         const worker = log.slice(before).filter(l => l.trim());
         if (worker.length) console.log(worker.slice(0, 12).map(l => `  [worker] ${l}`).join('\n'));
         if (!r.alive) {
-          console.log('  the database no longer answers; the remaining steps were not run');
-          failures++;
+          console.log('  the database no longer answers');
           break;
         }
       }
@@ -114,5 +146,11 @@ else {
   console.error('usage: driver.mjs --wasm <file> --chrome <binary> | --native <duckdb>');
   process.exit(2);
 }
-console.log(failures ? `${failures} step(s) failed` : `all ${steps.length} steps passed`);
-process.exit(failures ? 1 : 0);
+const notRun = steps.length - passed - failed;
+if (aborted) console.log(`FAIL ${aborted}`);
+if (!aborted && failed === 0 && notRun === 0) {
+  console.log(`all ${steps.length} steps passed`);
+  process.exit(0);
+}
+console.log(`${passed} passed, ${failed} failed, ${notRun} not run, of ${steps.length} steps`);
+process.exit(1);

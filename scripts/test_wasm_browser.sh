@@ -36,7 +36,10 @@ if [ "${1:-}" = "--native" ]; then
     exec node "$DRIVER_DIR/driver.mjs" --native "$DUCKDB"
 fi
 
-WASM_FILE="${1:-$(find "$REPO_DIR/build/wasm_eh" -name "miint.duckdb_extension.wasm" 2>/dev/null | head -1)}"
+WASM_FILE="${1:-}"
+if [ -z "$WASM_FILE" ] && [ -d "$REPO_DIR/build/wasm_eh" ]; then
+    WASM_FILE="$(find "$REPO_DIR/build/wasm_eh" -name "miint.duckdb_extension.wasm" | head -1)"
+fi
 if [ -z "$WASM_FILE" ] || [ ! -f "$WASM_FILE" ]; then
     echo "ERROR: no extension .wasm found. Build it with: ./scripts/build_wasm.sh"
     exit 1

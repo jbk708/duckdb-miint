@@ -14,8 +14,11 @@ const withTimeout = (p, ms, what) => Promise.race([
 
 const fmt = v => (v === null || v === undefined ? 'NULL' : String(v));
 
-window.__boot = async () => {
+// The extension is built for the eh bundle (wasm_eh), which the playground gets
+// on a page without cross-origin isolation; any other bundle is a different test.
+async function boot() {
   const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+  if (!/\/duckdb-eh\.wasm$/.test(bundle.mainModule)) throw new Error(`expected eh bundle, got ${bundle.mainModule}`);
   const workerUrl = URL.createObjectURL(
     new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(workerUrl));
@@ -24,7 +27,15 @@ window.__boot = async () => {
   await db.open({ allowUnsignedExtensions: true });
   conn = await db.connect();
   const v = (await conn.query('SELECT library_version, source_id FROM pragma_version()')).toArray()[0];
-  return { mainModule: bundle.mainModule, version: `${v.library_version} @ ${v.source_id}` };
+  return { ok: true, mainModule: bundle.mainModule, version: `${v.library_version} @ ${v.source_id}` };
+}
+
+window.__boot = async () => {
+  try {
+    return await withTimeout(boot(), 120000, 'boot');
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
 };
 
 window.__load = async url => {
