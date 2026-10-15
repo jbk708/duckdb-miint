@@ -118,6 +118,64 @@ SELECT * FROM fit_regressor('null_data', 'train_metadata', name := 'm11');
 ----
 NULL in data relation
 
+# A NaN or infinite count is a broken upstream computation (0/0, log(0)), not a
+# measurement. sc's splitter assumes finite values and panics on them, so they
+# are rejected at the intake with the cell named.
+statement ok
+CREATE TABLE nan_data AS
+  SELECT sample_id, feature_id, CASE WHEN value = 5 THEN 'NaN'::DOUBLE ELSE value END AS value
+  FROM read_biom('data/biom/test.biom');
+
+statement error
+SELECT * FROM fit_regressor('nan_data', 'train_metadata', name := 'm11n');
+----
+fit: non-finite value nan in data relation 'nan_data'
+
+statement ok
+CREATE TABLE neg_inf_data AS
+  SELECT sample_id, feature_id, CASE WHEN value = 5 THEN '-inf'::DOUBLE ELSE value END AS value
+  FROM read_biom('data/biom/test.biom');
+
+statement error
+SELECT * FROM fit_regressor('neg_inf_data', 'train_metadata', name := 'm11i');
+----
+fit: non-finite value -inf in data relation 'neg_inf_data'
+
+# The data relation is streamed. A value that cannot become a DOUBLE, placed well
+# past the first chunk, must fail the fit -- not train a model on the rows that
+# happened to precede it. A stream reports such an error in one of two ways, and
+# each case below takes one: on one thread Fetch ends with no chunk and the error
+# recorded, which looks exactly like the end of the relation (unchecked, this fit
+# succeeds on n_samples = 10 of the truncated data); with chunks already buffered
+# by other threads the next Fetch throws instead.
+statement ok
+CREATE TABLE late_bad AS
+  SELECT 's' || (i % 10) AS sample_id, 'f' || (i % 50) || '_' || i AS feature_id,
+         CASE WHEN i = 99999 THEN 'n/a' ELSE '1' END AS value
+  FROM range(100000) r(i);
+
+statement ok
+CREATE TABLE late_bad_meta AS SELECT 's' || i AS sample_id, i::DOUBLE AS value FROM range(10) r(i);
+
+statement ok
+SET threads = 1;
+
+statement error
+SELECT * FROM fit_regressor('late_bad', 'late_bad_meta', name := 'm11b');
+----
+fit: reading data relation 'late_bad' failed
+
+statement ok
+SET threads = 4;
+
+statement error
+SELECT * FROM fit_regressor('late_bad', 'late_bad_meta', name := 'm11c');
+----
+fit: reading data relation 'late_bad' failed
+
+statement ok
+RESET threads;
+
 # A non-numeric target cannot be a regression label.
 statement error
 SELECT * FROM fit_regressor('train_data', 'class_metadata', name := 'm12');
@@ -244,6 +302,21 @@ statement error
 SELECT * FROM fit_classifier('train_data', 'class_metadata', min_samples_split := 1, name := 'm27');
 ----
 min_samples_split count must be >= 2
+
+# n_estimators is capped, unlike sklearn. sc reserves the whole forest before it
+# grows a tree, and a count the allocator grants lazily (1e9 trees reserves 232 GB
+# on macOS) then grows trees until the machine runs out of memory, with no error
+# to show for it. The cap itself is accepted; one past it is not.
+statement error
+SELECT * FROM fit_classifier('train_data', 'class_metadata', n_estimators := 100001, name := 'm27b');
+----
+n_estimators must be <= 100000 (got 100001)
+
+query I
+SELECT n_trees FROM fit_classifier('train_data', 'class_metadata', n_estimators := 100000, max_depth := 1,
+                                   name := 'm27c');
+----
+100000
 
 # The criterion has to match the task; sc would reject this too, but catching it
 # here names the function the user actually called.

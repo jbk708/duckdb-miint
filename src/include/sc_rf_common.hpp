@@ -56,16 +56,16 @@ struct TargetArray {
 //! outlive the sc call -- sc's import borrows in place and never releases.
 void BuildTargets(TargetArray &t, bool classification);
 
-//! Scan the data relation into `builder`, rejecting NULLs.
-void ScanCounts(Connection &conn, const ScTrainingInput &bind, miint::ScCooBuilder &builder);
-
-//! Reject duplicate cells, showing the values so the caller can tell a join
-//! fanout (identical values, deduplicate) from repeat measurements (differing
-//! values, maybe sum).
-void RequireNoDuplicateCells(const miint::ScCooBuilder &builder, const ScTrainingInput &bind);
-
 //! Fill `params` with sklearn's defaults for the task.
 void ApplyDefaults(sc_rf_params_t &params, bool classification);
+
+//! The most trees a forest may have, 1000x the default. sklearn has no limit,
+//! but sc reserves the whole forest before growing a tree, and a count the
+//! allocator grants lazily then grows trees until memory runs out.
+constexpr int64_t kMaxNEstimators = 100000;
+
+//! Parse `n_estimators`: 1 to kMaxNEstimators.
+int64_t ParseNEstimators(const Value &v, const char *caller);
 
 // Parse one named parameter's SQL value into its sc tagged union. `caller` names
 // the SQL function in any error.

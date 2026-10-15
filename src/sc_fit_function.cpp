@@ -29,10 +29,9 @@ using sc_rf::ParseCriterion;
 using sc_rf::ParseMaxFeatures;
 using sc_rf::ParseMaxSamples;
 using sc_rf::ParseMinSamples;
-using sc_rf::RequireNoDuplicateCells;
+using sc_rf::ParseNEstimators;
 using sc_rf::RequireSameSamples;
 using sc_rf::ResolveTargetColumn;
-using sc_rf::ScanCounts;
 using sc_rf::ScanTargets;
 using sc_rf::ScTrainingInput;
 using sc_rf::TargetArray;
@@ -65,6 +64,8 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 	data->classification = classification;
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->metadata_relation = input.inputs[1].GetValue<string>();
+	RejectCTERelationName(input, data->data_relation);
+	RejectCTERelationName(input, data->metadata_relation);
 	if (data->data_relation.empty() || data->metadata_relation.empty()) {
 		throw InvalidInputException("fit: data and metadata relation names must not be empty");
 	}
@@ -94,10 +95,7 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 			}
 			data->model = "random_forest"; // normalised, so the column is stable
 		} else if (StringUtil::CIEquals(k, "n_estimators")) {
-			params.n_estimators = v.GetValue<int64_t>();
-			if (params.n_estimators <= 0) {
-				throw InvalidInputException("fit: n_estimators must be > 0 (got %lld)", (int64_t)params.n_estimators);
-			}
+			params.n_estimators = ParseNEstimators(v, data->caller);
 		} else if (StringUtil::CIEquals(k, "random_state")) {
 			params.random_state = static_cast<uint64_t>(v.GetValue<int64_t>());
 		} else if (StringUtil::CIEquals(k, "max_depth")) {
@@ -206,14 +204,11 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	// instantiate the builder class on the function stack, intake triplets, canoncialise them, and produce a sparse
 	// matrix.
 	miint::ScCooBuilder builder;
-	ScanCounts(conn, bind, builder);
+	miint::ScanCooRelation(context, conn, bind.data_relation, bind.caller, builder);
 	if (builder.NumNonZeros() == 0) {
 		throw InvalidInputException("fit: data relation '%s' produced no cells", bind.data_relation);
 	}
-	// remove duplicate triplets using sorted flat array of bitwise packed values
-	// prefetchable, cache-friendly and less memory than a hash table. The builder's internal state is now a non
-	// duplicated sparse matrix in COO format, ready to be packaged to arrow and passed to sc
-	RequireNoDuplicateCells(builder, bind);
+	miint::RequireNoDuplicateCells(builder, bind.caller, bind.data_relation);
 
 	// Targets are positional: element i must be the label for sample index i.
 	// The order comes from the builder's sorted dictionary, looked up through a

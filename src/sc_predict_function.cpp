@@ -7,10 +7,8 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/connection.hpp"
-#include "duckdb/parser/keyword_helper.hpp"
 
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace duckdb {
@@ -43,6 +41,8 @@ unique_ptr<FunctionData> ScPredictBind(ClientContext &context, TableFunctionBind
 	auto data = make_uniq<ScPredictData>();
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->model_relation = input.inputs[1].GetValue<string>();
+	RejectCTERelationName(input, data->data_relation);
+	RejectCTERelationName(input, data->model_relation);
 	if (data->data_relation.empty() || data->model_relation.empty()) {
 		throw InvalidInputException("predict: data and model relation names must not be empty");
 	}
@@ -80,58 +80,6 @@ unique_ptr<GlobalTableFunctionState> ScPredictInitGlobal(ClientContext &, TableF
 	return make_uniq<ScPredictGlobalState>();
 }
 
-//! Scan the prediction data into `builder`, which already carries the model's
-//! vocabulary. Reads through UnifiedVectorFormat so a cell costs no allocation.
-void ScanForPrediction(Connection &conn, const ScPredictData &bind, miint::ScCooBuilder &builder) {
-	const auto q = KeywordHelper::WriteOptionallyQuoted(bind.data_relation);
-	// The casts are load-bearing, not cosmetic. Reading a vector's buffer
-	// directly assumes its physical type, and DuckDB infers `42.0` as
-	// DECIMAL(3,1) (physical INT16), an INTEGER count column as INT32, and
-	// woltka's feature ids as BIGINT or UUID. Vector::GetValue used to convert
-	// on the way out; a raw buffer read cannot. Casting in SQL makes DuckDB do
-	// the conversion and guarantees the layout this loop reads.
-	auto result = conn.Query("SELECT sample_id::VARCHAR, feature_id::VARCHAR, value::DOUBLE FROM " + q);
-	if (result->HasError()) {
-		throw InvalidInputException("predict: Data relation '%s' does not match the required COO triplet schema.\n"
-		                            "  Expected columns : sample_id, feature_id, value\n"
-		                            "  Engine error     : %s\n\n"
-		                            "Remedy:\n"
-		                            "  Prediction data must be shaped exactly like the data the model was fit on.\n"
-		                            "  If your relation uses different column names, wrap it in an aliased view:\n"
-		                            "    CREATE VIEW my_counts AS\n"
-		                            "      SELECT your_sample_col  AS sample_id,\n"
-		                            "             your_feature_col AS feature_id,\n"
-		                            "             your_count_col   AS value\n"
-		                            "      FROM %s;",
-		                            bind.data_relation, result->GetError(), bind.data_relation);
-	}
-	while (auto chunk = result->Fetch()) {
-		const idx_t n = chunk->size();
-		UnifiedVectorFormat sf, ff, vf;
-		chunk->data[0].ToUnifiedFormat(n, sf);
-		chunk->data[1].ToUnifiedFormat(n, ff);
-		chunk->data[2].ToUnifiedFormat(n, vf);
-		const auto *samples = UnifiedVectorFormat::GetData<string_t>(sf);
-		const auto *features = UnifiedVectorFormat::GetData<string_t>(ff);
-		const auto *values = UnifiedVectorFormat::GetData<double>(vf);
-
-		for (idx_t row = 0; row < n; row++) {
-			const auto si = sf.sel->get_index(row);
-			const auto fi = ff.sel->get_index(row);
-			const auto vi = vf.sel->get_index(row);
-			if (!sf.validity.RowIsValid(si) || !ff.validity.RowIsValid(fi) || !vf.validity.RowIsValid(vi)) {
-				throw InvalidInputException(
-				    "predict: NULL in data relation '%s' (sample_id/feature_id/value must all be non-NULL)",
-				    bind.data_relation);
-			}
-			const auto &s = samples[si];
-			const auto &f = features[fi];
-			builder.Append(std::string_view(s.GetData(), s.GetSize()), std::string_view(f.GetData(), f.GetSize()),
-			               values[vi]);
-		}
-	}
-}
-
 void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChunk &output) {
 	auto &gstate = input.global_state->Cast<ScPredictGlobalState>();
 	const auto &bind = input.bind_data->Cast<ScPredictData>();
@@ -159,7 +107,8 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 
 		miint::ScCooBuilder builder;
 		builder.SetFeatureVocabulary(std::move(vocab));
-		ScanForPrediction(conn, bind, builder);
+		miint::ScanCooRelation(context, conn, bind.data_relation, "predict", builder);
+		miint::RequireNoDuplicateCells(builder, "predict", bind.data_relation);
 
 		const auto builder_dropped = builder.DroppedCells();
 		auto table = builder.Finalize();

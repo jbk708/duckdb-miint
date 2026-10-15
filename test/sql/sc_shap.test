@@ -440,3 +440,51 @@ statement error
 SELECT * FROM shap('shp_alien', 'shp_models', name := 'reg');
 ----
 do not share a feature vocabulary
+
+# sc sums duplicate cells, so a fanned-out row would explain a count the user
+# never had. Rejected, as at fit.
+statement ok
+CREATE TABLE shp_fanned AS SELECT * FROM shp_few UNION ALL (SELECT * FROM shp_few LIMIT 1);
+
+statement error
+SELECT * FROM shap('shp_fanned', 'shp_models', name := 'reg');
+----
+shap: 1 duplicate (sample_id, feature_id) cell(s) in 'shp_fanned'
+
+# A model blob is untrusted input. sc rejects non-finite numbers in one, but
+# finite covers can still overflow: a root cover of 1e-300 over a child of 1e300
+# drives TreeSHAP to inf and NaN. Such an attribution explains nothing, and a
+# NaN cannot be put in waterfall order, so it is an error rather than a row.
+statement ok
+CREATE TABLE nf_counts AS
+  SELECT 's' || i AS sample_id, 'f' || j AS feature_id, (i * j)::DOUBLE AS value
+  FROM range(1, 7) t(i), range(1, 3) u(j);
+
+statement ok
+CREATE TABLE nf_meta AS SELECT 's' || i AS sample_id, i::DOUBLE AS value FROM range(1, 7) t(i);
+
+statement ok
+CREATE TABLE nf_model AS
+  SELECT * FROM fit_regressor('nf_counts', 'nf_meta', n_estimators := 1, max_depth := 1, bootstrap := false, name := 'nf');
+
+# One split over six samples: covers [6, 3, 3], encoded as a length byte and
+# three little-endian doubles. The root's 6 becomes 1e-300, the left child's 3
+# becomes 1e300.
+statement ok
+CREATE TABLE nf_bad AS
+  SELECT * REPLACE (unhex(replace(hex(model_blob),
+      '0300000000000018400000000000000840',
+      '0359F3F8C21F6EA5019C7500883CE4377E')) AS model_blob)
+  FROM nf_model;
+
+# The edit landed. If sc's encoding changes this fails first, instead of the
+# error test below failing for the wrong reason.
+query I
+SELECT (SELECT model_blob FROM nf_bad) <> (SELECT model_blob FROM nf_model);
+----
+true
+
+statement error
+SELECT * FROM shap('nf_counts', 'nf_bad');
+----
+shap: non-finite attribution -inf for sample 's1', feature 'f1'; the model in 'nf_bad' is malformed

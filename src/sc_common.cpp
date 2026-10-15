@@ -2,12 +2,16 @@
 
 #include "id_column_utils.hpp"
 
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <string_view>
 
 namespace miint {
 
@@ -210,6 +214,25 @@ std::string ReadModelTask(duckdb::Connection &conn, const std::string &relation,
 	return task;
 }
 
+namespace {
+
+[[noreturn]] void ThrowCooSchemaError(const char *caller, const std::string &relation, const std::string &error) {
+	throw InvalidInputException("%s: Data relation '%s' does not match the required COO triplet schema.\n"
+	                            "  Expected columns : sample_id, feature_id, value\n"
+	                            "  Engine error     : %s\n\n"
+	                            "Remedy:\n"
+	                            "  If your relation uses different column names (e.g. ASV/taxa names, read counts),\n"
+	                            "  wrap it in an aliased view:\n"
+	                            "    CREATE VIEW my_counts AS\n"
+	                            "      SELECT your_sample_col  AS sample_id,\n"
+	                            "             your_feature_col AS feature_id,\n"
+	                            "             your_count_col   AS value\n"
+	                            "      FROM %s;",
+	                            caller, relation, error, relation);
+}
+
+} // namespace
+
 ScIdTypes ProbeIdTypes(duckdb::Connection &conn, const std::string &relation, const char *caller) {
 	const auto q = duckdb::KeywordHelper::WriteOptionallyQuoted(relation);
 	// Ids uncast so their own types come through; value cast so a value column
@@ -217,19 +240,7 @@ ScIdTypes ProbeIdTypes(duckdb::Connection &conn, const std::string &relation, co
 	// the relation without reading it.
 	auto probe = conn.Query("SELECT sample_id, feature_id, value::DOUBLE FROM " + q + " LIMIT 0");
 	if (probe->HasError()) {
-		throw InvalidInputException(
-		    "%s: Data relation '%s' does not match the required COO triplet schema.\n"
-		    "  Expected columns : sample_id, feature_id, value\n"
-		    "  Engine error     : %s\n\n"
-		    "Remedy:\n"
-		    "  If your relation uses different column names (e.g. ASV/taxa names, read counts),\n"
-		    "  wrap it in an aliased view:\n"
-		    "    CREATE VIEW my_counts AS\n"
-		    "      SELECT your_sample_col  AS sample_id,\n"
-		    "             your_feature_col AS feature_id,\n"
-		    "             your_count_col   AS value\n"
-		    "      FROM %s;",
-		    caller, relation, probe->GetError(), relation);
+		ThrowCooSchemaError(caller, relation, probe->GetError());
 	}
 	ScIdTypes types;
 	types.sample_id = probe->types[0];
@@ -252,6 +263,107 @@ ScIdTypes ProbeIdTypes(duckdb::Connection &conn, const std::string &relation, co
 	require_allowed("feature_id", types.feature_id,
 	                "sample_id, feature_id::" + cast_to(types.feature_id) + " AS feature_id, value");
 	return types;
+}
+
+void ScanCooRelation(duckdb::ClientContext &context, duckdb::Connection &conn, const std::string &relation,
+                     const char *caller, ScCooBuilder &builder) {
+	using duckdb::idx_t;
+	using duckdb::string_t;
+	using duckdb::UnifiedVectorFormat;
+	const auto q = duckdb::KeywordHelper::WriteOptionallyQuoted(relation);
+	// The casts are required, not cosmetic. Reading a vector's buffer directly
+	// assumes its physical type, and DuckDB infers `42.0` as DECIMAL(3,1)
+	// (physical INT16), an INTEGER count column as INT32, and woltka's feature
+	// ids as BIGINT or UUID. Casting in SQL makes DuckDB do the conversion and
+	// guarantees the layout this loop reads.
+	//
+	// Streamed, so one chunk is held at a time rather than the whole relation
+	// next to the builder's own copy of it.
+	auto result = conn.SendQuery("SELECT sample_id::VARCHAR, feature_id::VARCHAR, value::DOUBLE FROM " + q);
+	if (result->HasError()) {
+		ThrowCooSchemaError(caller, relation, result->GetError());
+	}
+	// A stream surfaces an error raised in a later chunk -- a value that fails the
+	// DOUBLE cast -- in one of two ways: Fetch returns no chunk with the error
+	// recorded, or, when chunks were already buffered, the next Fetch throws.
+	// Both must fail the scan. The first, unchecked, looks exactly like the end
+	// of the relation and would fit a model on whatever preceded the bad row.
+	const auto next_chunk = [&]() {
+		duckdb::unique_ptr<duckdb::DataChunk> chunk;
+		try {
+			chunk = result->Fetch();
+		} catch (std::exception &ex) {
+			throw InvalidInputException("%s: reading data relation '%s' failed: %s", caller, relation,
+			                            result->HasError() ? result->GetError() : duckdb::ErrorData(ex).Message());
+		}
+		if (!chunk && result->HasError()) {
+			throw InvalidInputException("%s: reading data relation '%s' failed: %s", caller, relation,
+			                            result->GetError());
+		}
+		return chunk;
+	};
+	// UnifiedVectorFormat rather than Vector::GetValue: GetValue builds a
+	// heap-allocating Value per cell, which dominates a 13M-cell scan, while
+	// these string_t views are read in place and ScCooBuilder::Append copies an
+	// id only the first time it sees it. Unified rather than flat because a
+	// column may arrive constant- or dictionary-encoded.
+	while (auto chunk = next_chunk()) {
+		if (context.interrupted) {
+			throw duckdb::InterruptException();
+		}
+		const idx_t n = chunk->size();
+		UnifiedVectorFormat sf, ff, vf;
+		chunk->data[0].ToUnifiedFormat(n, sf);
+		chunk->data[1].ToUnifiedFormat(n, ff);
+		chunk->data[2].ToUnifiedFormat(n, vf);
+		const auto *samples = UnifiedVectorFormat::GetData<string_t>(sf);
+		const auto *features = UnifiedVectorFormat::GetData<string_t>(ff);
+		const auto *values = UnifiedVectorFormat::GetData<double>(vf);
+		for (idx_t row = 0; row < n; row++) {
+			const auto si = sf.sel->get_index(row);
+			const auto fi = ff.sel->get_index(row);
+			const auto vi = vf.sel->get_index(row);
+			// A NULL here means a broken join upstream, not a zero count. An
+			// absent cell is already zero in a sparse matrix, so guessing at a
+			// NULL would hide the mistake.
+			if (!sf.validity.RowIsValid(si) || !ff.validity.RowIsValid(fi) || !vf.validity.RowIsValid(vi)) {
+				throw InvalidInputException(
+				    "%s: NULL in data relation '%s' (sample_id/feature_id/value must all be non-NULL)", caller,
+				    relation);
+			}
+			const string_t &s = samples[si];
+			const string_t &f = features[fi];
+			// NaN and infinity fail every `x <= threshold`, so a tree routes them
+			// right and predicts confidently; sc's fit panics on them instead.
+			if (!std::isfinite(values[vi])) {
+				throw InvalidInputException("%s: non-finite value %s in data relation '%s' (sample '%s', feature "
+				                            "'%s'); values must be finite",
+				                            caller, std::to_string(values[vi]), relation, s.GetString(), f.GetString());
+			}
+			builder.Append(std::string_view(s.GetData(), s.GetSize()), std::string_view(f.GetData(), f.GetSize()),
+			               values[vi]);
+		}
+	}
+}
+
+void RequireNoDuplicateCells(const ScCooBuilder &builder, const char *caller, const std::string &relation) {
+	const auto report = builder.FindDuplicateCells();
+	if (report.Empty()) {
+		return;
+	}
+	auto msg = duckdb::StringUtil::Format("%s: %llu duplicate (sample_id, feature_id) cell(s) in '%s'.", caller,
+	                                      (uint64_t)report.duplicate_cells, relation);
+	for (const auto &c : report.examples) {
+		std::string values;
+		for (size_t i = 0; i < c.values.size(); i++) {
+			values += (i ? ", " : "") + duckdb::StringUtil::Format("%g", c.values[i]);
+		}
+		msg += duckdb::StringUtil::Format("\n  %s / %s  x%llu  values: %s", c.sample_id, c.feature_id,
+		                                  (uint64_t)c.count, values);
+	}
+	msg += "\nIdentical values suggest a join fanout (deduplicate); differing values suggest repeat "
+	       "measurements (aggregate deliberately).";
+	throw InvalidInputException(msg);
 }
 
 duckdb::LogicalType ReadModelFeatureIdType(duckdb::Connection &conn, const std::string &relation,
@@ -315,6 +427,12 @@ void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation
 	if (result->HasError()) {
 		throw InvalidInputException("%s: model relation '%s' must expose a 'model_blob' column: %s", caller, relation,
 		                            result->GetError());
+	}
+	// Read below as raw bytes, which only a BLOB holds; any other type would be
+	// an INTERNAL error, and that invalidates the whole database.
+	if (result->types[0].id() != duckdb::LogicalTypeId::BLOB) {
+		throw InvalidInputException("%s: model_blob in '%s' is %s; it must be the BLOB a fit produced", caller,
+		                            relation, result->types[0].ToString());
 	}
 
 	duckdb::Value blob;

@@ -26,10 +26,9 @@ using sc_rf::ParseCriterion;
 using sc_rf::ParseMaxFeatures;
 using sc_rf::ParseMaxSamples;
 using sc_rf::ParseMinSamples;
-using sc_rf::RequireNoDuplicateCells;
+using sc_rf::ParseNEstimators;
 using sc_rf::RequireSameSamples;
 using sc_rf::ResolveTargetColumn;
-using sc_rf::ScanCounts;
 using sc_rf::ScanTargets;
 using sc_rf::ScTrainingInput;
 using sc_rf::TargetArray;
@@ -75,6 +74,8 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 	data->classification = classification;
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->metadata_relation = input.inputs[1].GetValue<string>();
+	RejectCTERelationName(input, data->data_relation);
+	RejectCTERelationName(input, data->metadata_relation);
 	if (data->data_relation.empty() || data->metadata_relation.empty()) {
 		throw InvalidInputException("%s: data and metadata relation names must not be empty", data->caller);
 	}
@@ -110,11 +111,7 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 			data->n_threads = v.GetValue<int32_t>();
 			params.n_threads = data->n_threads;
 		} else if (StringUtil::CIEquals(k, "n_estimators")) {
-			params.n_estimators = v.GetValue<int64_t>();
-			if (params.n_estimators <= 0) {
-				throw InvalidInputException("%s: n_estimators must be > 0 (got %lld)", data->caller,
-				                            (int64_t)params.n_estimators);
-			}
+			params.n_estimators = ParseNEstimators(v, data->caller);
 		} else if (StringUtil::CIEquals(k, "random_state")) {
 			params.random_state = static_cast<uint64_t>(v.GetValue<int64_t>());
 		} else if (StringUtil::CIEquals(k, "max_depth")) {
@@ -202,11 +199,11 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 	auto conn = MakeReadOnlyHelperConnection(context);
 
 	miint::ScCooBuilder builder;
-	ScanCounts(conn, bind, builder);
+	miint::ScanCooRelation(context, conn, bind.data_relation, bind.caller, builder);
 	if (builder.NumNonZeros() == 0) {
 		throw InvalidInputException("%s: data relation '%s' produced no cells", bind.caller, bind.data_relation);
 	}
-	RequireNoDuplicateCells(builder, bind);
+	miint::RequireNoDuplicateCells(builder, bind.caller, bind.data_relation);
 
 	// Targets are positional: element i is the target of sample index i, in the
 	// builder's sorted dictionary order.

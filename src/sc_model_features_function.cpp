@@ -34,6 +34,7 @@ unique_ptr<FunctionData> ScModelFeaturesBind(ClientContext &context, TableFuncti
 	// make_uniq for RAII.  It makes a smart pointer. this is C++ lifecycle management for heap data
 	auto data = make_uniq<ScModelFeaturesData>();
 	data->model_relation = input.inputs[0].GetValue<string>();
+	RejectCTERelationName(input, data->model_relation);
 	if (data->model_relation.empty()) {
 		// if we didn't have a smart ptr then this path would cause a memory leak
 		throw InvalidInputException("model_features: model relation name must not be empty");

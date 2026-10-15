@@ -7,10 +7,8 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/connection.hpp"
-#include "duckdb/parser/keyword_helper.hpp"
 
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace duckdb {
@@ -41,6 +39,8 @@ unique_ptr<FunctionData> ScProbaBind(ClientContext &context, TableFunctionBindIn
 	auto data = make_uniq<ScProbaData>();
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->model_relation = input.inputs[1].GetValue<string>();
+	RejectCTERelationName(input, data->data_relation);
+	RejectCTERelationName(input, data->model_relation);
 	if (data->data_relation.empty() || data->model_relation.empty()) {
 		throw InvalidInputException("predict_proba: data and model relation names must not be empty");
 	}
@@ -83,51 +83,6 @@ unique_ptr<GlobalTableFunctionState> ScProbaInitGlobal(ClientContext &, TableFun
 	return make_uniq<ScProbaGlobalState>();
 }
 
-void ScanForProba(Connection &conn, const ScProbaData &bind, miint::ScCooBuilder &builder) {
-	const auto q = KeywordHelper::WriteOptionallyQuoted(bind.data_relation);
-	// The casts guarantee the physical layout the buffer reads below assume;
-	// see the note in sc_fit_function.cpp.
-	auto result = conn.Query("SELECT sample_id::VARCHAR, feature_id::VARCHAR, value::DOUBLE FROM " + q);
-	if (result->HasError()) {
-		throw InvalidInputException(
-		    "predict_proba: Data relation '%s' does not match the required COO triplet schema.\n"
-		    "  Expected columns : sample_id, feature_id, value\n"
-		    "  Engine error     : %s\n\n"
-		    "Remedy:\n"
-		    "  Wrap it in an aliased view before predicting:\n"
-		    "    CREATE VIEW my_counts AS\n"
-		    "      SELECT your_sample_col  AS sample_id,\n"
-		    "             your_feature_col AS feature_id,\n"
-		    "             your_count_col   AS value\n"
-		    "      FROM %s;",
-		    bind.data_relation, result->GetError(), bind.data_relation);
-	}
-	while (auto chunk = result->Fetch()) {
-		const idx_t n = chunk->size();
-		UnifiedVectorFormat sf, ff, vf;
-		chunk->data[0].ToUnifiedFormat(n, sf);
-		chunk->data[1].ToUnifiedFormat(n, ff);
-		chunk->data[2].ToUnifiedFormat(n, vf);
-		const auto *samples = UnifiedVectorFormat::GetData<string_t>(sf);
-		const auto *features = UnifiedVectorFormat::GetData<string_t>(ff);
-		const auto *values = UnifiedVectorFormat::GetData<double>(vf);
-		for (idx_t row = 0; row < n; row++) {
-			const auto si = sf.sel->get_index(row);
-			const auto fi = ff.sel->get_index(row);
-			const auto vi = vf.sel->get_index(row);
-			if (!sf.validity.RowIsValid(si) || !ff.validity.RowIsValid(fi) || !vf.validity.RowIsValid(vi)) {
-				throw InvalidInputException("predict_proba: NULL in data relation '%s' "
-				                            "(sample_id/feature_id/value must all be non-NULL)",
-				                            bind.data_relation);
-			}
-			const auto &s = samples[si];
-			const auto &f = features[fi];
-			builder.Append(std::string_view(s.GetData(), s.GetSize()), std::string_view(f.GetData(), f.GetSize()),
-			               values[vi]);
-		}
-	}
-}
-
 void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk &output) {
 	auto &gstate = input.global_state->Cast<ScProbaGlobalState>();
 	const auto &bind = input.bind_data->Cast<ScProbaData>();
@@ -151,7 +106,8 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		}
 		miint::ScCooBuilder builder;
 		builder.SetFeatureVocabulary(vocab.ReadUtf8("sc_model_feature_ids"));
-		ScanForProba(conn, bind, builder);
+		miint::ScanCooRelation(context, conn, bind.data_relation, "predict_proba", builder);
+		miint::RequireNoDuplicateCells(builder, "predict_proba", bind.data_relation);
 
 		const auto dropped = builder.DroppedCells();
 		auto table = builder.Finalize();

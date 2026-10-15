@@ -315,6 +315,12 @@ SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', n_estimators := 
 ----
 n_estimators must be > 0
 
+# Capped as in fit: see sc_fit.test for why.
+statement error
+SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', n_estimators := 100001);
+----
+cross_validate_regressor: n_estimators must be <= 100000 (got 100001)
+
 statement error
 SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', max_samples := 0.5, bootstrap := false);
 ----

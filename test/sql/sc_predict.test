@@ -170,6 +170,24 @@ SELECT * FROM predict('p_full', 'p_full');
 ----
 has no 'task' column
 
+# A model_blob that is not a BLOB -- a hand-assembled or CSV-round-tripped
+# model table -- is an input error. Reading it as one used to raise an INTERNAL
+# error, which invalidates the whole database, not just the query.
+statement ok
+CREATE TABLE p_int_blob AS
+  SELECT name, model, 42 AS model_blob, n_samples, n_features, n_trees, task, random_state, feature_id_type
+  FROM p_rmodel;
+
+statement error
+SELECT * FROM predict('p_full', 'p_int_blob');
+----
+predict: model_blob in 'p_int_blob' is INTEGER; it must be the BLOB a fit produced
+
+query I
+SELECT count(*) FROM predict('p_full', 'p_rmodel');
+----
+6
+
 statement error
 SELECT * FROM predict('no_such_table', 'p_rmodel');
 ----
@@ -184,6 +202,37 @@ statement error
 SELECT * FROM predict('p_nulls', 'p_rmodel');
 ----
 NULL in data relation
+
+# NaN and infinity fail every `x <= threshold` test, so a tree would silently
+# send them down the right branch and return a confident prediction. Rejected.
+statement ok
+CREATE TABLE p_nan AS
+  SELECT sample_id, feature_id, CASE WHEN value = 5 THEN 'NaN'::DOUBLE ELSE value END AS value FROM p_full;
+
+statement error
+SELECT * FROM predict('p_nan', 'p_rmodel');
+----
+predict: non-finite value nan in data relation 'p_nan'
+
+statement ok
+CREATE TABLE p_inf AS
+  SELECT sample_id, feature_id, CASE WHEN value = 5 THEN 'inf'::DOUBLE ELSE value END AS value FROM p_full;
+
+statement error
+SELECT * FROM predict('p_inf', 'p_rmodel');
+----
+predict: non-finite value inf in data relation 'p_inf'
+
+# A duplicated cell is an error here too, not only at fit. sc sums duplicate
+# (row, col) pairs, so a join fanout on the prediction data would double that
+# count and shift the prediction with no error at all.
+statement ok
+CREATE TABLE p_fanned AS SELECT * FROM p_full UNION ALL (SELECT * FROM p_full LIMIT 1);
+
+statement error
+SELECT * FROM predict('p_fanned', 'p_rmodel');
+----
+predict: 1 duplicate (sample_id, feature_id) cell(s) in 'p_fanned'
 
 # Non-DOUBLE counts and non-VARCHAR ids are cast, not misread. Reading a
 # vector's buffer directly assumes its physical type; DECIMAL and INTEGER

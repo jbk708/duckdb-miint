@@ -1,5 +1,8 @@
 #pragma once
 
+#include "sc_coo_builder.hpp"
+
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/connection.hpp"
 
 #include <string>
@@ -128,6 +131,21 @@ struct ScIdTypes {
 //! Ids travel through sc as text either way; the types are what each function
 //! casts its id output back to, so a BIGINT id comes back BIGINT.
 ScIdTypes ProbeIdTypes(duckdb::Connection &conn, const std::string &relation, const char *caller);
+
+//! Stream a data relation's `(sample_id, feature_id, value)` cells into
+//! `builder`, rejecting NULLs. The one intake shared by every sc function that
+//! reads counts, so they all accept and reject the same input.
+void ScanCooRelation(duckdb::ClientContext &context, duckdb::Connection &conn, const std::string &relation,
+                     const char *caller, ScCooBuilder &builder);
+
+//! Reject a `(sample_id, feature_id)` pair that appears more than once.
+//!
+//! sc sums duplicates, which is right for repeat measurements and wrong for a
+//! join fanout, and it cannot tell them apart -- so fitting and applying a
+//! model both refuse rather than guess. The message shows the values: identical
+//! ones point at a fanout (deduplicate), differing ones at repeat measurements
+//! (aggregate deliberately).
+void RequireNoDuplicateCells(const ScCooBuilder &builder, const char *caller, const std::string &relation);
 
 //! Read the `feature_id_type` column of a model relation: the type of the
 //! feature ids the model was fit on.

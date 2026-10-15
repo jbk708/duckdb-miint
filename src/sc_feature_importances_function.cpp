@@ -32,6 +32,7 @@ unique_ptr<FunctionData> ScImportancesBind(ClientContext &context, TableFunction
                                            vector<LogicalType> &return_types, vector<string> &names) {
 	auto data = make_uniq<ScImportancesData>();
 	data->model_relation = input.inputs[0].GetValue<string>();
+	RejectCTERelationName(input, data->model_relation);
 	if (data->model_relation.empty()) {
 		throw InvalidInputException("feature_importances: model relation name must not be empty");
 	}

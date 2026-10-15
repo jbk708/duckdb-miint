@@ -7,13 +7,12 @@
 
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/connection.hpp"
-#include "duckdb/parser/keyword_helper.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace duckdb {
@@ -97,6 +96,8 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 	auto data = make_uniq<ScShapData>();
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->model_relation = input.inputs[1].GetValue<string>();
+	RejectCTERelationName(input, data->data_relation);
+	RejectCTERelationName(input, data->model_relation);
 	if (data->data_relation.empty() || data->model_relation.empty()) {
 		throw InvalidInputException("shap: data and model relation names must not be empty");
 	}
@@ -154,53 +155,6 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 
 unique_ptr<GlobalTableFunctionState> ScShapInitGlobal(ClientContext &, TableFunctionInitInput &) {
 	return make_uniq<ScShapGlobalState>();
-}
-
-void ScanForShap(Connection &conn, const ScShapData &bind, miint::ScCooBuilder &builder) {
-	const auto q = KeywordHelper::WriteOptionallyQuoted(bind.data_relation);
-	// The casts guarantee the physical layout the buffer reads below assume;
-	// see the note in sc_fit_function.cpp.
-	auto result = conn.Query("SELECT sample_id::VARCHAR, feature_id::VARCHAR, value::DOUBLE FROM " + q);
-	if (result->HasError()) {
-		throw InvalidInputException("shap: Data relation '%s' does not match the required COO triplet schema.\n"
-		                            "  Expected columns : sample_id, feature_id, value\n"
-		                            "  Engine error     : %s\n\n"
-		                            "Remedy:\n"
-		                            "  Wrap it in an aliased view before explaining:\n"
-		                            "    CREATE VIEW my_counts AS\n"
-		                            "      SELECT your_sample_col  AS sample_id,\n"
-		                            "             your_feature_col AS feature_id,\n"
-		                            "             your_count_col   AS value\n"
-		                            "      FROM %s;",
-		                            bind.data_relation, result->GetError(), bind.data_relation);
-	}
-	while (auto chunk = result->Fetch()) {
-		const idx_t n = chunk->size();
-		UnifiedVectorFormat sf, ff, vf;
-		chunk->data[0].ToUnifiedFormat(n, sf);
-		chunk->data[1].ToUnifiedFormat(n, ff);
-		chunk->data[2].ToUnifiedFormat(n, vf);
-		const auto *samples = UnifiedVectorFormat::GetData<string_t>(sf);
-		const auto *features = UnifiedVectorFormat::GetData<string_t>(ff);
-		const auto *values = UnifiedVectorFormat::GetData<double>(vf);
-		for (idx_t row = 0; row < n; row++) {
-			const auto si = sf.sel->get_index(row);
-			const auto fi = ff.sel->get_index(row);
-			const auto vi = vf.sel->get_index(row);
-			if (!sf.validity.RowIsValid(si) || !ff.validity.RowIsValid(fi) || !vf.validity.RowIsValid(vi)) {
-				throw InvalidInputException(
-				    "shap: NULL in data relation '%s' (sample_id/feature_id/value must all be non-NULL)",
-				    bind.data_relation);
-			}
-			// favor 8 byte alias addr over 16 byte struct value copy onto the stack
-			// with string_t& s reads from the chunk's buffer, not a copy, so the builder copies it onto the heap for
-			// later use double is 8 bytes so copy is cheap and no pointer indirection is needed
-			const string_t &s = samples[si];
-			const string_t &f = features[fi];
-			builder.Append(std::string_view(s.GetData(), s.GetSize()), std::string_view(f.GetData(), f.GetSize()),
-			               values[vi]);
-		}
-	}
 }
 
 //! Take ownership of one array sc wrote inside sc_shap_result_t.
@@ -286,7 +240,8 @@ void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState
 
 	miint::ScCooBuilder builder;
 	builder.SetFeatureVocabulary(gstate.feature_ids);
-	ScanForShap(conn, bind, builder);
+	miint::ScanCooRelation(context, conn, bind.data_relation, "shap", builder);
+	miint::RequireNoDuplicateCells(builder, "shap", bind.data_relation);
 
 	const auto dropped = builder.DroppedCells();
 	gstate.table = builder.Finalize();
@@ -422,6 +377,18 @@ void LoadBatch(const ScShapData &bind, ScShapGlobalState &gstate, size_t first) 
 	// reported, or every attribution would be labelled with the wrong class.
 	if (bind.classification && shap_classes.ReadUtf8("sc_shap classes") != gstate.classes) {
 		throw InternalException("sc_shap: class order differs between sc_shap and sc_predict_proba");
+	}
+	// sc refuses a model holding a non-finite number, but finite covers can still
+	// overflow inside TreeSHAP. An inf or NaN attribution explains nothing, and a
+	// NaN has no place in waterfall order, so the model is rejected here.
+	for (size_t i = 0; i < rows * gstate.n_outputs * gstate.n_features; i++) {
+		if (!std::isfinite(gstate.values[i])) {
+			const auto &sample_id = gstate.table->SampleIds()[first + i / (gstate.n_outputs * gstate.n_features)];
+			throw InvalidInputException(
+			    "shap: non-finite attribution %s for sample '%s', feature '%s'; the model in '%s' is malformed",
+			    std::to_string(gstate.values[i]), sample_id, gstate.feature_ids[i % gstate.n_features],
+			    bind.model_relation);
+		}
 	}
 	gstate.batch_first = first;
 	gstate.batch_count = count;

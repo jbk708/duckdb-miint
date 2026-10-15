@@ -128,3 +128,13 @@ statement error
 SELECT * FROM predict_proba('pp_data', 'pp_models', name := 'nope');
 ----
 No model named 'nope'
+
+# sc sums duplicate cells, so a fanned-out row would silently inflate a count
+# and move the probabilities. Rejected, as at fit.
+statement ok
+CREATE TABLE pp_fanned AS SELECT * FROM pp_data UNION ALL (SELECT * FROM pp_data LIMIT 1);
+
+statement error
+SELECT * FROM predict_proba('pp_fanned', 'pp_models', name := 'site');
+----
+predict_proba: 1 duplicate (sample_id, feature_id) cell(s) in 'pp_fanned'

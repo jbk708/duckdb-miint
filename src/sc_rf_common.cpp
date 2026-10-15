@@ -1,7 +1,6 @@
 #include "sc_rf_common.hpp"
 
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace duckdb {
@@ -62,116 +61,6 @@ void BuildTargets(TargetArray &t, bool classification) {
 	t.array.private_data = nullptr;
 }
 
-//! Scan the data relation into `builder`, rejecting NULLs.
-void ScanCounts(Connection &conn, const ScTrainingInput &bind, miint::ScCooBuilder &builder) {
-	const auto q = KeywordHelper::WriteOptionallyQuoted(bind.data_relation);
-	// The casts are load-bearing, not cosmetic. Reading a vector's buffer
-	// directly assumes its physical type, and DuckDB infers `42.0` as
-	// DECIMAL(3,1) (physical INT16), an INTEGER count column as INT32, and
-	// woltka's feature ids as BIGINT or UUID. Vector::GetValue used to convert
-	// on the way out; a raw buffer read cannot. Casting in SQL makes DuckDB do
-	// the conversion and guarantees the layout this loop reads.
-
-	// given a table with triplet columns as input to the duck db table function sc_fit_*, we are invoking the duckdb
-	// SQL engine to go fetch the data in columnar format, n output chunks of <= 2048 rows each
-	auto result = conn.Query("SELECT sample_id::VARCHAR, feature_id::VARCHAR, value::DOUBLE FROM " + q);
-	if (result->HasError()) {
-		throw InvalidInputException(
-		    "%s: Data relation '%s' does not match the required COO triplet schema.\n"
-		    "  Expected columns : sample_id, feature_id, value\n"
-		    "  Engine error     : %s\n\n"
-		    "Remedy:\n"
-		    "  If your relation uses different column names (e.g. ASV/taxa names, read counts),\n"
-		    "  wrap it in an aliased view before fitting:\n"
-		    "    CREATE VIEW my_counts AS\n"
-		    "      SELECT your_sample_col  AS sample_id,\n"
-		    "             your_feature_col AS feature_id,\n"
-		    "             your_count_col   AS value\n"
-		    "      FROM %s;",
-		    bind.caller, bind.data_relation, result->GetError(), bind.data_relation);
-	}
-	// Read through UnifiedVectorFormat rather than Vector::GetValue(row).
-	// GetValue materialises a duckdb::Value per cell -- a heap-allocating
-	// variant -- and ToString() allocates again on top, so a scan of n cells
-	// costs ~5n allocations that are discarded immediately. At 13M cells that
-	// dominates the scan. This path reads string_t views straight out of
-	// DuckDB's own buffers, and ScCooBuilder::Append takes string_view, so a
-	// cell now costs no allocation at all beyond interning a genuinely new id.
-	//
-	// Unified (not FlatVector) because the column may arrive constant- or
-	// dictionary-encoded, in which case the selection vector maps row -> slot.
-	// chunk is the <= 2048 record /rows coming from DuckDB in one go
-	// duckdb::unique_ptr<duckdb::DataChunk> chunk is owned by
-	while (duckdb::unique_ptr<duckdb::DataChunk> chunk = result->Fetch()) {
-		const idx_t n = chunk->size();
-		// alocate a unified vector format for each column on the stack, and fill it with the data from the
-		// corresponding chunk buffer.  This is a view into the chunk's data, not a copy.
-		UnifiedVectorFormat sf, ff, vf;
-		chunk->data[0].ToUnifiedFormat(n, sf);
-		chunk->data[1].ToUnifiedFormat(n, ff);
-		chunk->data[2].ToUnifiedFormat(n, vf);
-		const auto *samples = UnifiedVectorFormat::GetData<string_t>(sf);
-		const auto *features = UnifiedVectorFormat::GetData<string_t>(ff);
-		const auto *values = UnifiedVectorFormat::GetData<double>(vf);
-
-		for (idx_t row = 0; row < n; row++) {
-			// Step 1: Translate logical row -> physical buffer index
-			const auto si = sf.sel->get_index(row);
-			const auto fi = ff.sel->get_index(row);
-			const auto vi = vf.sel->get_index(row);
-			// A NULL here means a broken join upstream, not a zero count. An
-			// absent cell is already zero in a sparse matrix, so a NULL cannot
-			// be passed through and guessing at it would hide the mistake.
-			if (!sf.validity.RowIsValid(si) || !ff.validity.RowIsValid(fi) || !vf.validity.RowIsValid(vi)) {
-				throw InvalidInputException(
-				    "%s: NULL in data relation '%s' (sample_id/feature_id/value must all be non-NULL)", bind.caller,
-				    bind.data_relation);
-			}
-			// Step 2: Use si to fetch the actual data from the raw buffer
-			// assign the result to a readonly alias
-			// bracket operator is dereference operator
-			// prevent stack copy when dereferencing the pointer via & aliasing
-			// & refers to the address of the object
-			// allocation no new variable storage
-			const string_t &s = samples[si];
-			const string_t &f = features[fi];
-			const double v = values[vi];
-			//  append borrowed views of the sample_id, feature_id as string_view
-			//  +-------------------+-------------------+
-			//	|  const char* ptr  |    size_t len     |
-			//	+-------------------+-------------------+
-			//  16 bytes 8 byte pointer, a length number
-			//  copy values as double, which is 8 bytes on most platforms
-			builder.Append(std::string_view(s.GetData(), s.GetSize()), std::string_view(f.GetData(), f.GetSize()), v);
-		}
-	} // duckdb::unique_ptr<duckdb::DataChunk> chunk freed, by now relevant view data is copied on the heap for the
-	  // sc::ScCooBuilder
-}
-
-//! Reject duplicate cells, showing the values so the caller can tell a join
-//! fanout (identical values, deduplicate) from repeat measurements (differing
-//! values, maybe sum). Summing a fanout silently inflates every count, so the
-//! message deliberately does not prescribe a repair.
-void RequireNoDuplicateCells(const miint::ScCooBuilder &builder, const ScTrainingInput &bind) {
-	const auto report = builder.FindDuplicateCells();
-	if (report.Empty()) {
-		return;
-	}
-	string msg = StringUtil::Format("%s: %llu duplicate (sample_id, feature_id) cell(s) in '%s'.", bind.caller,
-	                                (uint64_t)report.duplicate_cells, bind.data_relation.c_str());
-	for (const auto &c : report.examples) {
-		string values;
-		for (size_t i = 0; i < c.values.size(); i++) {
-			values += (i ? ", " : "") + StringUtil::Format("%g", c.values[i]);
-		}
-		msg += StringUtil::Format("\n  %s / %s  x%llu  values: %s", c.sample_id.c_str(), c.feature_id.c_str(),
-		                          (uint64_t)c.count, values.c_str());
-	}
-	msg += "\nIdentical values suggest a join fanout (deduplicate); differing values suggest repeat "
-	       "measurements (aggregate deliberately).";
-	throw InvalidInputException(msg);
-}
-
 //! Fill `params` with sklearn's defaults for the task.
 //!
 //! Classifier: gini, max_features='sqrt'. Regressor: squared_error,
@@ -196,6 +85,18 @@ void ApplyDefaults(sc_rf_params_t &params, bool classification) {
 	params.parameter_tuning = false;
 	params.cv = 0;
 	params.n_threads = 0;
+}
+
+int64_t ParseNEstimators(const Value &v, const char *caller) {
+	const auto n = v.GetValue<int64_t>();
+	if (n <= 0) {
+		throw InvalidInputException("%s: n_estimators must be > 0 (got %lld)", caller, (int64_t)n);
+	}
+	if (n > kMaxNEstimators) {
+		throw InvalidInputException("%s: n_estimators must be <= %lld (got %lld)", caller, (int64_t)kMaxNEstimators,
+		                            (int64_t)n);
+	}
+	return n;
 }
 
 //! Is this value an SQL integer rather than a float?
