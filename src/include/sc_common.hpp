@@ -94,8 +94,16 @@ private:
 	ArrowSchema schema_ {};
 };
 
+//! Take ownership of an array sc moved into a result struct. The C Data
+//! Interface permits moving these structs: copy the bytes, then mark the source
+//! released so nothing frees it twice. Call it for every field before checking
+//! the status, so an error path still cleans up.
+void TakeArray(ArrowArray &src, ArrowSchema &src_schema, OwnedArrowArray &dst);
+
 //! Turn a non-zero `sc_status_t` into a DuckDB error, preferring sc's own
-//! message from the context's last-error slot.
+//! message from the context's last-error slot. Pass the context only for a
+//! call that took it: sc records nothing for one that did not, so the slot
+//! could only hold an earlier, unrelated message.
 [[noreturn]] void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status);
 
 //! Open an sc context running on `n_threads` (0: rayon's global pool),
@@ -106,6 +114,10 @@ private:
 //! pool would need threads it cannot spawn. sc's results are identical at any
 //! thread count, so only speed differs.
 void OpenScContext(int32_t n_threads, const char *caller, ScContext &out);
+
+//! Parse `n_threads`: 0 for one thread per core, or a count. sc reads any value
+//! <= 0 as "every core", so a negative one is refused rather than passed on.
+int32_t ParseNThreads(const duckdb::Value &v, const char *caller);
 
 //! Read the `task` column of a model relation: "classification" or
 //! "regression".

@@ -11,6 +11,12 @@
 
 namespace miint {
 
+//! Export `values` as an Arrow `Float64` / `Utf8` array that owns its buffers:
+//! its release callback frees them. sc's imports borrow and never release, so
+//! the caller does, after the sc call -- an `OwnedArrowArray` on scope exit.
+void ExportFloat64(ArrowArray &array, ArrowSchema &schema, std::vector<double> values);
+void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::string> &values);
+
 //! Owns every buffer behind an `sc_coo_table_t` and releases them on destruction.
 //!
 //! sc borrows across the Arrow C Data Interface — `sc-arrow`'s `import_*` reads

@@ -1,6 +1,7 @@
 #include "sc_cross_validate_function.hpp"
 
 #include "catalog_utils.hpp"
+#include "id_column_utils.hpp"
 #include "sc_common.hpp"
 #include "sc_coo_builder.hpp"
 #include "sc_rf_common.hpp"
@@ -21,17 +22,12 @@ namespace {
 // Everything shared with sc_fit -- input scanning, validation, forest-parameter
 // parsing -- lives in sc_rf_common.
 using sc_rf::ApplyDefaults;
-using sc_rf::BuildTargets;
-using sc_rf::ParseCriterion;
-using sc_rf::ParseMaxFeatures;
-using sc_rf::ParseMaxSamples;
-using sc_rf::ParseMinSamples;
-using sc_rf::ParseNEstimators;
+using sc_rf::ParseForestParameter;
 using sc_rf::RequireSameSamples;
 using sc_rf::ResolveTargetColumn;
 using sc_rf::ScanTargets;
 using sc_rf::ScTrainingInput;
-using sc_rf::TargetArray;
+using sc_rf::ValidateForestParameters;
 
 //! q2's `cv` default, and sklearn's for cross_val_score.
 constexpr int64_t kDefaultCvFolds = 5;
@@ -103,6 +99,9 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 		if (v.IsNull()) {
 			throw InvalidInputException("%s: named parameter '%s' must not be NULL", data->caller, k);
 		}
+		if (ParseForestParameter(k, v, classification, data->caller, params)) {
+			continue;
+		}
 		if (StringUtil::CIEquals(k, "target_column")) {
 			data->target_column = v.GetValue<string>();
 		} else if (StringUtil::CIEquals(k, "n_folds") || StringUtil::CIEquals(k, "cv")) {
@@ -117,43 +116,18 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 		} else if (StringUtil::CIEquals(k, "parameter_tuning")) {
 			params.parameter_tuning = v.GetValue<bool>();
 		} else if (StringUtil::CIEquals(k, "n_threads")) {
-			data->n_threads = v.GetValue<int32_t>();
-		} else if (StringUtil::CIEquals(k, "n_estimators")) {
-			params.n_estimators = ParseNEstimators(v, data->caller);
-		} else if (StringUtil::CIEquals(k, "random_state")) {
-			params.random_state = static_cast<uint64_t>(v.GetValue<int64_t>());
-		} else if (StringUtil::CIEquals(k, "max_depth")) {
-			params.max_depth = v.GetValue<int64_t>();
-		} else if (StringUtil::CIEquals(k, "criterion")) {
-			ParseCriterion(v, classification, "cross_validate", params.criterion);
-		} else if (StringUtil::CIEquals(k, "max_features")) {
-			ParseMaxFeatures(v, data->caller, params.max_features);
-		} else if (StringUtil::CIEquals(k, "min_samples_split")) {
-			ParseMinSamples(v, "min_samples_split", 2, data->caller, params.min_samples_split);
-		} else if (StringUtil::CIEquals(k, "min_samples_leaf")) {
-			ParseMinSamples(v, "min_samples_leaf", 1, data->caller, params.min_samples_leaf);
-		} else if (StringUtil::CIEquals(k, "min_weight_fraction_leaf")) {
-			params.min_weight_fraction_leaf = v.GetValue<double>();
-		} else if (StringUtil::CIEquals(k, "min_impurity_decrease")) {
-			params.min_impurity_decrease = v.GetValue<double>();
-		} else if (StringUtil::CIEquals(k, "bootstrap")) {
-			params.bootstrap = v.GetValue<bool>();
-		} else if (StringUtil::CIEquals(k, "max_samples")) {
-			ParseMaxSamples(v, data->caller, params.max_samples);
+			data->n_threads = miint::ParseNThreads(v, data->caller);
 		}
 	}
 	if (n_folds_given && cv_given) {
 		throw InvalidInputException("%s: pass n_folds or cv, not both -- cv is the q2/sklearn spelling of n_folds",
 		                            data->caller);
 	}
-	if (data->target_column.empty()) {
+	{
 		auto conn = MakeReadOnlyHelperConnection(context);
-		data->target_column = ResolveTargetColumn(conn, data->metadata_relation, data->caller);
+		data->target_column = ResolveTargetColumn(conn, data->metadata_relation, data->target_column, data->caller);
 	}
-	// sklearn rejects max_samples without bootstrap rather than ignoring it.
-	if (!params.bootstrap && params.max_samples.kind != SC_MAX_SAMPLES_ALL) {
-		throw InvalidInputException("%s: max_samples is only meaningful with bootstrap := true", data->caller);
-	}
+	ValidateForestParameters(params, data->caller);
 
 	// No model comes out, so there is nothing to name and nothing to store: the
 	// per-fold forests exist only to be scored. The prediction column follows the
@@ -190,18 +164,6 @@ unique_ptr<GlobalTableFunctionState> ScCvInitGlobal(ClientContext &, TableFuncti
 	return make_uniq<ScCvGlobalState>();
 }
 
-//! Take ownership of one array sc wrote into sc_cv_result_t.
-//!
-//! The C Data Interface permits moving these structs: copy the bytes, then mark
-//! the source released so nothing frees it twice. Done for every field before
-//! the status is checked, so an error path still cleans up.
-void TakeArray(ArrowArray &src, ArrowSchema &src_schema, miint::OwnedArrowArray &dst) {
-	*dst.array() = src;
-	*dst.schema() = src_schema;
-	src.release = nullptr;
-	src_schema.release = nullptr;
-}
-
 //! Scan both relations, run the folds, and keep what the rows need.
 void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobalState &gstate) {
 	auto conn = MakeReadOnlyHelperConnection(context);
@@ -215,28 +177,29 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 
 	// Targets are positional: element i is the target of sample index i, in the
 	// builder's sorted dictionary order.
-	TargetArray targets;
+	miint::OwnedArrowArray targets;
 	std::unique_ptr<miint::ScCooTable> table;
 	if (bind.classification) {
-		auto labels = ScanTargets<string>(conn, bind, "VARCHAR");
+		auto labels = ScanTargets<string>(conn, bind);
 		table = builder.Finalize();
 		gstate.sample_ids = table->SampleIds();
 		RequireSameSamples(gstate.sample_ids, labels, bind);
-		targets.labels.reserve(gstate.sample_ids.size());
+		gstate.actual_labels.reserve(gstate.sample_ids.size());
 		for (const auto &s : gstate.sample_ids) {
-			targets.labels.push_back(labels.at(s));
+			gstate.actual_labels.push_back(labels.at(s));
 		}
+		miint::ExportUtf8(*targets.array(), *targets.schema(), gstate.actual_labels);
 	} else {
-		auto values = ScanTargets<double>(conn, bind, "DOUBLE");
+		auto values = ScanTargets<double>(conn, bind);
 		table = builder.Finalize();
 		gstate.sample_ids = table->SampleIds();
 		RequireSameSamples(gstate.sample_ids, values, bind);
-		targets.numbers.reserve(gstate.sample_ids.size());
+		gstate.actual_values.reserve(gstate.sample_ids.size());
 		for (const auto &s : gstate.sample_ids) {
-			targets.numbers.push_back(values.at(s));
+			gstate.actual_values.push_back(values.at(s));
 		}
+		miint::ExportFloat64(*targets.array(), *targets.schema(), gstate.actual_values);
 	}
-	BuildTargets(targets, bind.classification);
 
 	const auto n_samples = gstate.sample_ids.size();
 	// Caught here rather than in sc, where the message would name a matrix rather
@@ -250,22 +213,17 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 	miint::OpenScContext(bind.n_threads, bind.caller, ctx);
 
 	sc_cv_result_t res {};
-	const auto st = sc_cross_validate(ctx.ptr, table->get(), &targets.array, &targets.schema, &bind.params, &res);
+	const auto st = sc_cross_validate(ctx.ptr, table->get(), targets.array(), targets.schema(), &bind.params, &res);
 	// Every field, including the probabilities this function does not return:
 	// unclaimed arrays would leak.
 	miint::OwnedArrowArray predictions, proba, classes, fold_scores;
-	TakeArray(res.predictions, res.predictions_schema, predictions);
-	TakeArray(res.proba, res.proba_schema, proba);
-	TakeArray(res.classes, res.classes_schema, classes);
-	TakeArray(res.fold_scores, res.fold_scores_schema, fold_scores);
+	miint::TakeArray(res.predictions, res.predictions_schema, predictions);
+	miint::TakeArray(res.proba, res.proba_schema, proba);
+	miint::TakeArray(res.classes, res.classes_schema, classes);
+	miint::TakeArray(res.fold_scores, res.fold_scores_schema, fold_scores);
 	if (st != SC_OK) {
 		miint::ThrowSc(bind.caller, ctx.ptr, st);
 	}
-
-	// Safe only now that sc has read them: the Arrow arrays it borrowed point
-	// into these buffers.
-	gstate.actual_labels = std::move(targets.labels);
-	gstate.actual_values = std::move(targets.numbers);
 
 	if (bind.classification) {
 		gstate.labels = predictions.ReadUtf8("sc_cross_validate predictions");
@@ -324,7 +282,7 @@ void ScCvExecute(ClientContext &context, TableFunctionInput &input, DataChunk &o
 	idx_t n = 0;
 	while (n < STANDARD_VECTOR_SIZE && gstate.cursor < total) {
 		const auto i = gstate.cursor++;
-		output.SetValue(0, n, Value(gstate.sample_ids[i]).DefaultCastAs(bind.id_types.sample_id));
+		EmitIdCell(output.data[0], n, gstate.sample_ids[i], bind.id_types.sample_id);
 		output.SetValue(1, n, bind.classification ? Value(gstate.labels[i]) : Value::DOUBLE(gstate.values[i]));
 		output.SetValue(2, n,
 		                bind.classification ? Value(gstate.actual_labels[i]) : Value::DOUBLE(gstate.actual_values[i]));

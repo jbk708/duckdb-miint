@@ -123,3 +123,10 @@ statement error
 SELECT * FROM model_features('mf_data');
 ----
 Could not read 'feature_id_type'
+
+# A NULL name is an error, not an omitted one: it would otherwise select the
+# relation's only model.
+statement error
+SELECT * FROM model_features('mf_sub_model', name := NULL);
+----
+model_features: named parameter 'name' must not be NULL

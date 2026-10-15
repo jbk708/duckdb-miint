@@ -1,6 +1,7 @@
 #include "sc_model_features_function.hpp"
 
 #include "catalog_utils.hpp"
+#include "id_column_utils.hpp"
 #include "sc_common.hpp"
 
 #include "duckdb/common/string_util.hpp"
@@ -40,7 +41,10 @@ unique_ptr<FunctionData> ScModelFeaturesBind(ClientContext &context, TableFuncti
 		throw InvalidInputException("model_features: model relation name must not be empty");
 	}
 	for (auto &kv : input.named_parameters) {
-		if (!kv.second.IsNull() && StringUtil::CIEquals(kv.first, "name")) {
+		if (kv.second.IsNull()) {
+			throw InvalidInputException("model_features: named parameter '%s' must not be NULL", kv.first);
+		}
+		if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
 	}
@@ -77,7 +81,7 @@ void ScModelFeaturesExecute(ClientContext &context, TableFunctionInput &input, D
 
 		miint::OwnedArrowArray ids;
 		if (auto st = sc_model_feature_ids(model.ptr, ids.array(), ids.schema()); st != SC_OK) {
-			miint::ThrowSc("sc_model_feature_ids", ctx.ptr, st);
+			miint::ThrowSc("sc_model_feature_ids", nullptr, st);
 		}
 		gstate.feature_ids = ids.ReadUtf8("sc_model_feature_ids");
 	}
@@ -87,7 +91,7 @@ void ScModelFeaturesExecute(ClientContext &context, TableFunctionInput &input, D
 	output.SetCardinality(n);
 	for (idx_t i = 0; i < n; i++) {
 		const auto at = gstate.emitted + i;
-		output.SetValue(0, i, Value(gstate.feature_ids[at]).DefaultCastAs(bind.feature_id_type));
+		EmitIdCell(output.data[0], i, gstate.feature_ids[at], bind.feature_id_type);
 		// Position in the model's matrix, which is what fit and predict must
 		// agree on.
 		output.SetValue(1, i, Value::BIGINT(static_cast<int64_t>(at)));

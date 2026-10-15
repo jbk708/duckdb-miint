@@ -8,6 +8,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 
@@ -40,22 +41,6 @@ struct ScTrainingInput {
 	miint::ScIdTypes id_types;
 };
 
-//! Export one Arrow array of targets. sc takes Utf8 labels for a classifier and
-//! Float64 for a regressor; the two are otherwise identical at this boundary.
-struct TargetArray {
-	ArrowArray array {};
-	ArrowSchema schema {};
-	std::vector<std::string> labels; // classification
-	std::vector<double> numbers;     // regression
-	std::vector<int32_t> offsets;
-	std::vector<char> chars;
-	const void *buffers[3] = {nullptr, nullptr, nullptr};
-};
-
-//! Fill `t` as an Arrow array sc can borrow. `t` owns the buffers and must
-//! outlive the sc call -- sc's import borrows in place and never releases.
-void BuildTargets(TargetArray &t, bool classification);
-
 //! Fill `params` with sklearn's defaults for the task.
 void ApplyDefaults(sc_rf_params_t &params, bool classification);
 
@@ -74,16 +59,31 @@ void ParseMinSamples(const Value &v, const char *name, uint64_t min_count, const
 void ParseMaxSamples(const Value &v, const char *caller, sc_max_samples_t &out);
 void ParseCriterion(const Value &v, bool classification, const char *caller, sc_criterion_t &out);
 
-//! Work out which metadata column holds the target.
-std::string ResolveTargetColumn(Connection &conn, const std::string &relation, const char *caller);
+//! Parse `k` into `params` if it is a forest parameter, which fit and
+//! cross-validation share, and return false for any other name. One copy, so
+//! the two functions cannot drift apart.
+bool ParseForestParameter(const std::string &k, const Value &v, bool classification, const char *caller,
+                          sc_rf_params_t &params);
+
+//! Checks that span forest parameters, run once all of them are parsed.
+void ValidateForestParameters(const sc_rf_params_t &params, const char *caller);
+
+//! Work out which metadata column holds the target, or check the one the caller
+//! named (`requested`, empty when none was).
+std::string ResolveTargetColumn(Connection &conn, const std::string &relation, const std::string &requested,
+                                const char *caller);
 
 // Templates: defined here because the target type varies by task -- Utf8 labels
 // for a classifier, Float64 values for a regressor.
 
 //! Scan the metadata relation into a sample_id -> target map, rejecting NULLs
-//! and duplicate labels.
+//! and duplicate labels. The target is cast to the SQL type matching `T`:
+//! VARCHAR labels for a classifier, DOUBLE values for a regressor.
 template <class T>
-std::unordered_map<std::string, T> ScanTargets(Connection &conn, const ScTrainingInput &bind, const char *cast) {
+std::unordered_map<std::string, T> ScanTargets(Connection &conn, const ScTrainingInput &bind) {
+	static_assert(std::is_same<T, std::string>::value || std::is_same<T, double>::value,
+	              "targets are VARCHAR labels or DOUBLE values");
+	const char *cast = std::is_same<T, double>::value ? "DOUBLE" : "VARCHAR";
 	const auto q = KeywordHelper::WriteOptionallyQuoted(bind.metadata_relation);
 	const auto col = KeywordHelper::WriteOptionallyQuoted(bind.target_column);
 	auto result = conn.Query("SELECT sample_id, " + col + "::" + cast + " FROM " + q);

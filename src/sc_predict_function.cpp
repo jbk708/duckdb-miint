@@ -1,6 +1,7 @@
 #include "sc_predict_function.hpp"
 
 #include "catalog_utils.hpp"
+#include "id_column_utils.hpp"
 #include "sc_common.hpp"
 #include "sc_coo_builder.hpp"
 #include "miint_log.hpp"
@@ -48,10 +49,10 @@ unique_ptr<FunctionData> ScPredictBind(ClientContext &context, TableFunctionBind
 	}
 	for (auto &kv : input.named_parameters) {
 		if (kv.second.IsNull()) {
-			continue;
+			throw InvalidInputException("predict: named parameter '%s' must not be NULL", kv.first);
 		}
 		if (StringUtil::CIEquals(kv.first, "n_threads")) {
-			data->n_threads = kv.second.GetValue<int32_t>();
+			data->n_threads = miint::ParseNThreads(kv.second, "predict");
 		} else if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
@@ -97,7 +98,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		// This is the whole reason sc_model_feature_ids exists.
 		miint::OwnedArrowArray vocab_array;
 		if (auto st = sc_model_feature_ids(model.ptr, vocab_array.array(), vocab_array.schema()); st != SC_OK) {
-			miint::ThrowSc("sc_model_feature_ids", ctx.ptr, st);
+			miint::ThrowSc("sc_model_feature_ids", nullptr, st);
 		}
 		auto vocab = vocab_array.ReadUtf8("sc_model_feature_ids");
 
@@ -181,7 +182,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 	output.SetCardinality(n);
 	for (idx_t i = 0; i < n; i++) {
 		const auto at = gstate.emitted + i;
-		output.SetValue(0, i, Value(gstate.sample_ids[at]).DefaultCastAs(bind.id_types.sample_id));
+		EmitIdCell(output.data[0], i, gstate.sample_ids[at], bind.id_types.sample_id);
 		if (bind.classification) {
 			output.SetValue(1, i, Value(gstate.labels[at]));
 		} else {

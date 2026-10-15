@@ -2,6 +2,7 @@
 
 #include "catalog_utils.hpp"
 #include "miint_log.hpp"
+#include "id_column_utils.hpp"
 #include "sc_common.hpp"
 #include "sc_coo_builder.hpp"
 
@@ -130,7 +131,7 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 				throw InvalidInputException("shap: batch_size must be > 0 (got %lld)", (int64_t)data->batch_size);
 			}
 		} else if (StringUtil::CIEquals(k, "n_threads")) {
-			data->n_threads = v.GetValue<int32_t>();
+			data->n_threads = miint::ParseNThreads(v, "shap");
 		}
 	}
 	if (data->batch_size > 0 && data->max_attributions_set) {
@@ -155,18 +156,6 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 
 unique_ptr<GlobalTableFunctionState> ScShapInitGlobal(ClientContext &, TableFunctionInitInput &) {
 	return make_uniq<ScShapGlobalState>();
-}
-
-//! Take ownership of one array sc wrote inside sc_shap_result_t.
-//!
-//! The C Data Interface permits moving these structs: copy the bytes, then mark
-//! the source released so nothing frees it twice. Done immediately after the
-//! call, before the status is checked, so an error path still cleans up.
-void TakeArray(ArrowArray &src, ArrowSchema &src_schema, miint::OwnedArrowArray &dst) {
-	*dst.array() = src;
-	*dst.schema() = src_schema;
-	src.release = nullptr;
-	src_schema.release = nullptr;
 }
 
 //! Choose which features of one (sample, output) attribution row to emit, and
@@ -230,7 +219,7 @@ void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState
 
 	miint::OwnedArrowArray vocab;
 	if (auto st = sc_model_feature_ids(gstate.model.ptr, vocab.array(), vocab.schema()); st != SC_OK) {
-		miint::ThrowSc("sc_model_feature_ids", gstate.ctx.ptr, st);
+		miint::ThrowSc("sc_model_feature_ids", nullptr, st);
 	}
 	gstate.feature_ids = vocab.ReadUtf8("sc_model_feature_ids");
 
@@ -338,9 +327,9 @@ void LoadBatch(const ScShapData &bind, ScShapGlobalState &gstate, size_t first) 
 	sc_shap_result_t res {};
 	const auto st = sc_shap(gstate.ctx.ptr, gstate.model.ptr, batch->get(), &res);
 	miint::OwnedArrowArray base_values, shap_classes;
-	TakeArray(res.shap_values, res.shap_values_schema, *gstate.shap_array);
-	TakeArray(res.base_values, res.base_values_schema, base_values);
-	TakeArray(res.classes, res.classes_schema, shap_classes);
+	miint::TakeArray(res.shap_values, res.shap_values_schema, *gstate.shap_array);
+	miint::TakeArray(res.base_values, res.base_values_schema, base_values);
+	miint::TakeArray(res.classes, res.classes_schema, shap_classes);
 	if (st != SC_OK) {
 		miint::ThrowSc("sc_shap", gstate.ctx.ptr, st);
 	}
@@ -438,10 +427,10 @@ void ScShapExecute(ClientContext &context, TableFunctionInput &input, DataChunk 
 		const auto f = gstate.chosen[gstate.next_chosen++];
 		const auto base =
 		    ((gstate.cur_sample - gstate.batch_first) * gstate.n_outputs + gstate.cur_output) * gstate.n_features;
-		output.SetValue(0, n, Value(sample_ids[gstate.cur_sample]).DefaultCastAs(bind.id_types.sample_id));
+		EmitIdCell(output.data[0], n, sample_ids[gstate.cur_sample], bind.id_types.sample_id);
 		output.SetValue(1, n,
 		                bind.classification ? Value(gstate.classes[gstate.cur_output]) : Value(LogicalType::VARCHAR));
-		output.SetValue(2, n, Value(gstate.feature_ids[f]).DefaultCastAs(bind.id_types.feature_id));
+		EmitIdCell(output.data[2], n, gstate.feature_ids[f], bind.id_types.feature_id);
 		output.SetValue(3, n, Value::DOUBLE(gstate.values[base + f]));
 		output.SetValue(4, n, Value::DOUBLE(gstate.base_values[gstate.cur_output]));
 		output.SetValue(5, n, Value::DOUBLE(coverage[gstate.cur_sample]));

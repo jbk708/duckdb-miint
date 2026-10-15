@@ -90,6 +90,8 @@ void ExportInt64(ArrowArray &array, ArrowSchema &schema, std::vector<int64_t> va
 	InitSchema(schema, "l");
 }
 
+} // namespace
+
 //! Export `values` as an Arrow `Float64` array (format "g"): [validity, data].
 void ExportFloat64(ArrowArray &array, ArrowSchema &schema, std::vector<double> values) {
 	auto *bag = new BufferBag();
@@ -157,6 +159,8 @@ void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::s
 	InitArray(array, static_cast<int64_t>(values.size()), 3, bag);
 	InitSchema(schema, "u");
 }
+
+namespace {
 
 void ReleaseIfLive(ArrowArray &array, ArrowSchema &schema) {
 	if (array.release) {

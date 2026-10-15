@@ -488,3 +488,8 @@ statement error
 SELECT * FROM shap('nf_counts', 'nf_bad');
 ----
 shap: non-finite attribution -inf for sample 's1', feature 'f1'; the model in 'nf_bad' is malformed
+
+statement error
+SELECT * FROM shap('shp_few', 'shp_models', name := 'reg', n_threads := -1);
+----
+shap: n_threads must be >= 0 (0 = one per core), got -1

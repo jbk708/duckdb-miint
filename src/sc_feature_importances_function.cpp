@@ -1,6 +1,7 @@
 #include "sc_feature_importances_function.hpp"
 
 #include "catalog_utils.hpp"
+#include "id_column_utils.hpp"
 #include "sc_common.hpp"
 
 #include "duckdb/common/string_util.hpp"
@@ -37,7 +38,10 @@ unique_ptr<FunctionData> ScImportancesBind(ClientContext &context, TableFunction
 		throw InvalidInputException("feature_importances: model relation name must not be empty");
 	}
 	for (auto &kv : input.named_parameters) {
-		if (!kv.second.IsNull() && StringUtil::CIEquals(kv.first, "name")) {
+		if (kv.second.IsNull()) {
+			throw InvalidInputException("feature_importances: named parameter '%s' must not be NULL", kv.first);
+		}
+		if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
 	}
@@ -72,11 +76,11 @@ void ScImportancesExecute(ClientContext &context, TableFunctionInput &input, Dat
 		// them even if the second call throws.
 		miint::OwnedArrowArray ids;
 		if (auto st = sc_model_feature_ids(model.ptr, ids.array(), ids.schema()); st != SC_OK) {
-			miint::ThrowSc("sc_model_feature_ids", ctx.ptr, st);
+			miint::ThrowSc("sc_model_feature_ids", nullptr, st);
 		}
 		miint::OwnedArrowArray weights;
 		if (auto st = sc_feature_importances(model.ptr, weights.array(), weights.schema()); st != SC_OK) {
-			miint::ThrowSc("sc_feature_importances", ctx.ptr, st);
+			miint::ThrowSc("sc_feature_importances", nullptr, st);
 		}
 
 		gstate.feature_ids = ids.ReadUtf8("sc_model_feature_ids");
@@ -94,7 +98,7 @@ void ScImportancesExecute(ClientContext &context, TableFunctionInput &input, Dat
 	const idx_t n = remaining < STANDARD_VECTOR_SIZE ? remaining : STANDARD_VECTOR_SIZE;
 	output.SetCardinality(n);
 	for (idx_t i = 0; i < n; i++) {
-		output.SetValue(0, i, Value(gstate.feature_ids[gstate.emitted + i]).DefaultCastAs(bind.feature_id_type));
+		EmitIdCell(output.data[0], i, gstate.feature_ids[gstate.emitted + i], bind.feature_id_type);
 		output.SetValue(1, i, Value::DOUBLE(gstate.importances[gstate.emitted + i]));
 	}
 	gstate.emitted += n;

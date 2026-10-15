@@ -24,17 +24,12 @@ namespace {
 // Everything fit and cross-validate share -- input scanning, validation,
 // forest-parameter parsing -- lives in sc_rf_common.
 using sc_rf::ApplyDefaults;
-using sc_rf::BuildTargets;
-using sc_rf::ParseCriterion;
-using sc_rf::ParseMaxFeatures;
-using sc_rf::ParseMaxSamples;
-using sc_rf::ParseMinSamples;
-using sc_rf::ParseNEstimators;
+using sc_rf::ParseForestParameter;
 using sc_rf::RequireSameSamples;
 using sc_rf::ResolveTargetColumn;
 using sc_rf::ScanTargets;
 using sc_rf::ScTrainingInput;
-using sc_rf::TargetArray;
+using sc_rf::ValidateForestParameters;
 
 //! The two relations plus the forest parameters, resolved at bind time.
 //!
@@ -62,12 +57,13 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
                                    vector<LogicalType> &return_types, vector<string> &names, bool classification) {
 	auto data = make_uniq<ScFitData>();
 	data->classification = classification;
+	data->caller = classification ? "fit_classifier" : "fit_regressor";
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->metadata_relation = input.inputs[1].GetValue<string>();
 	RejectCTERelationName(input, data->data_relation);
 	RejectCTERelationName(input, data->metadata_relation);
 	if (data->data_relation.empty() || data->metadata_relation.empty()) {
-		throw InvalidInputException("fit: data and metadata relation names must not be empty");
+		throw InvalidInputException("%s: data and metadata relation names must not be empty", data->caller);
 	}
 
 	ApplyDefaults(data->params, classification);
@@ -76,53 +72,31 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 		const auto &k = kv.first;
 		const auto &v = kv.second;
 		if (v.IsNull()) {
-			throw InvalidInputException("fit: named parameter '%s' must not be NULL", k);
+			throw InvalidInputException("%s: named parameter '%s' must not be NULL", data->caller, k);
+		}
+		if (ParseForestParameter(k, v, classification, data->caller, params)) {
+			continue;
 		}
 		if (StringUtil::CIEquals(k, "name")) {
 			data->name = v.GetValue<string>();
 			if (data->name.empty()) {
-				throw InvalidInputException("fit: name must not be empty; omit it to leave the model unnamed");
+				throw InvalidInputException("%s: name must not be empty; every model needs one", data->caller);
 			}
 		} else if (StringUtil::CIEquals(k, "target_column")) {
 			data->target_column = v.GetValue<string>();
 		} else if (StringUtil::CIEquals(k, "n_threads")) {
-			data->n_threads = v.GetValue<int32_t>();
+			data->n_threads = miint::ParseNThreads(v, data->caller);
 		} else if (StringUtil::CIEquals(k, "model")) {
 			const auto m = v.GetValue<string>();
 			if (!StringUtil::CIEquals(m, "random_forest")) {
-				throw InvalidInputException("fit: model must be 'random_forest' (got '%s')", m);
+				throw InvalidInputException("%s: model must be 'random_forest' (got '%s')", data->caller, m);
 			}
 			data->model = "random_forest"; // normalised, so the column is stable
-		} else if (StringUtil::CIEquals(k, "n_estimators")) {
-			params.n_estimators = ParseNEstimators(v, data->caller);
-		} else if (StringUtil::CIEquals(k, "random_state")) {
-			params.random_state = static_cast<uint64_t>(v.GetValue<int64_t>());
-		} else if (StringUtil::CIEquals(k, "max_depth")) {
-			// <= 0 is sklearn's None (unbounded), which sc reads the same way.
-			params.max_depth = v.GetValue<int64_t>();
-		} else if (StringUtil::CIEquals(k, "criterion")) {
-			ParseCriterion(v, classification, data->caller, params.criterion);
-		} else if (StringUtil::CIEquals(k, "max_features")) {
-			ParseMaxFeatures(v, data->caller, params.max_features);
-		} else if (StringUtil::CIEquals(k, "min_samples_split")) {
-			ParseMinSamples(v, "min_samples_split", 2, data->caller, params.min_samples_split);
-		} else if (StringUtil::CIEquals(k, "min_samples_leaf")) {
-			ParseMinSamples(v, "min_samples_leaf", 1, data->caller, params.min_samples_leaf);
-		} else if (StringUtil::CIEquals(k, "min_weight_fraction_leaf")) {
-			params.min_weight_fraction_leaf = v.GetValue<double>();
-		} else if (StringUtil::CIEquals(k, "min_impurity_decrease")) {
-			params.min_impurity_decrease = v.GetValue<double>();
-		} else if (StringUtil::CIEquals(k, "bootstrap")) {
-			params.bootstrap = v.GetValue<bool>();
-		} else if (StringUtil::CIEquals(k, "max_samples")) {
-			ParseMaxSamples(v, data->caller, params.max_samples);
 		}
 	}
-	// Only probe when the caller did not say. An explicit target_column
-	// short-circuits this entirely.
-	if (data->target_column.empty()) {
+	{
 		auto conn = MakeReadOnlyHelperConnection(context);
-		data->target_column = ResolveTargetColumn(conn, data->metadata_relation, data->caller);
+		data->target_column = ResolveTargetColumn(conn, data->metadata_relation, data->target_column, data->caller);
 	}
 
 	// Required rather than optional. A name is not an input to the fit -- the
@@ -133,15 +107,12 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 	// needs ALTER TABLE and rowid archaeology to become selectable.
 	if (data->name.empty()) {
 		throw InvalidInputException(
-		    "fit: name is required -- `name := 'my_model'`. It is how a model is selected later, e.g. "
-		    "predict(data, models, name := 'my_model'). Any label will do if you are just exploring.");
+		    "%s: name is required -- `name := 'my_model'`. It is how a model is selected later, e.g. "
+		    "predict(data, models, name := 'my_model'). Any label will do if you are just exploring.",
+		    data->caller);
 	}
 
-	// sklearn rejects max_samples without bootstrap rather than silently ignoring
-	// it; sc has no opinion, so catch it here where the message can be specific.
-	if (!params.bootstrap && params.max_samples.kind != SC_MAX_SAMPLES_ALL) {
-		throw InvalidInputException("fit: max_samples is only meaningful with bootstrap := true");
-	}
+	ValidateForestParameters(params, data->caller);
 
 	// `name` is required, so this column is never NULL and a registry is
 	// selectable from the moment it is created. Nothing is ever invented to fill
@@ -205,7 +176,7 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	miint::ScCooBuilder builder;
 	miint::ScanCooRelation(context, conn, bind.data_relation, bind.caller, builder);
 	if (builder.NumNonZeros() == 0) {
-		throw InvalidInputException("fit: data relation '%s' produced no cells", bind.data_relation);
+		throw InvalidInputException("%s: data relation '%s' produced no cells", bind.caller, bind.data_relation);
 	}
 	miint::RequireNoDuplicateCells(builder, bind.caller, bind.data_relation);
 
@@ -213,32 +184,35 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	// The order comes from the builder's sorted dictionary, looked up through a
 	// hash -- never from a second ORDER BY, whose collation need not match
 	// std::string's byte ordering.
-	TargetArray targets;
+	miint::OwnedArrowArray targets;
 	std::vector<std::string> data_samples;
 	auto table = std::unique_ptr<miint::ScCooTable> {};
 
 	if (bind.classification) {
-		auto labels = ScanTargets<string>(conn, bind, "VARCHAR");
+		auto labels = ScanTargets<string>(conn, bind);
 		table = builder.Finalize();
 		// sorted sample ids after Finalize()
 		data_samples = table->SampleIds();
 		RequireSameSamples(data_samples, labels, bind);
-		targets.labels.reserve(data_samples.size());
+		std::vector<std::string> ordered;
+		ordered.reserve(data_samples.size());
 		for (const auto &s : data_samples) {
-			targets.labels.push_back(labels.at(s));
+			ordered.push_back(labels.at(s));
 		}
+		miint::ExportUtf8(*targets.array(), *targets.schema(), ordered);
 	} else {
-		auto values = ScanTargets<double>(conn, bind, "DOUBLE");
+		auto values = ScanTargets<double>(conn, bind);
 		table = builder.Finalize();
 		// sorted sample ids after Finalize()
 		data_samples = table->SampleIds();
 		RequireSameSamples(data_samples, values, bind);
-		targets.numbers.reserve(data_samples.size());
+		std::vector<double> ordered;
+		ordered.reserve(data_samples.size());
 		for (const auto &s : data_samples) {
-			targets.numbers.push_back(values.at(s));
+			ordered.push_back(values.at(s));
 		}
+		miint::ExportFloat64(*targets.array(), *targets.schema(), std::move(ordered));
 	}
-	BuildTargets(targets, bind.classification);
 
 	// Fully resolved at bind time, so a bad parameter fails the query before any
 	// scanning happens.
@@ -247,11 +221,11 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	miint::ScContext ctx;
 	miint::OpenScContext(bind.n_threads, bind.caller, ctx);
 
-	// hand over the arrow data to sc, which will take ownership of the buffers and free them when done. The table is
-	// now owned by sc and must not be freed by the caller. Fit the model and serialize it into a blob
+	// sc borrows the table and the targets for the call and frees neither; both
+	// are released here on scope exit. Fit the model and serialize it into a blob.
 	miint::ScModel model;
 	const auto fit = bind.classification ? sc_fit_classifier : sc_fit_regressor;
-	if (auto st = fit(ctx.ptr, table->get(), &targets.array, &targets.schema, &params, &model.ptr); st != SC_OK) {
+	if (auto st = fit(ctx.ptr, table->get(), targets.array(), targets.schema(), &params, &model.ptr); st != SC_OK) {
 		miint::ThrowSc(bind.classification ? "sc_fit_classifier" : "sc_fit_regressor", ctx.ptr, st);
 	}
 
@@ -260,7 +234,7 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	// hand over **blob, one more level of indirection, to copy over the value of the memory addr mapped to the variable
 	// blob and capture that inside the scope of the C function so it can dereference it and write to it.
 	if (auto st = sc_model_serialize(model.ptr, &blob, &blob_len); st != SC_OK) {
-		miint::ThrowSc("sc_model_serialize", ctx.ptr, st);
+		miint::ThrowSc("sc_model_serialize", nullptr, st);
 	}
 	// sc owns this buffer until sc_buffer_free; copy it into DuckDB's heap first. Then free it from sc's heap. This is
 	// a one-time copy, so the model blob is now owned by DuckDB.

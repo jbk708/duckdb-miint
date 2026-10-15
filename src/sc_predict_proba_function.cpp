@@ -2,6 +2,7 @@
 
 #include "catalog_utils.hpp"
 #include "miint_log.hpp"
+#include "id_column_utils.hpp"
 #include "sc_common.hpp"
 #include "sc_coo_builder.hpp"
 
@@ -46,10 +47,10 @@ unique_ptr<FunctionData> ScProbaBind(ClientContext &context, TableFunctionBindIn
 	}
 	for (auto &kv : input.named_parameters) {
 		if (kv.second.IsNull()) {
-			continue;
+			throw InvalidInputException("predict_proba: named parameter '%s' must not be NULL", kv.first);
 		}
 		if (StringUtil::CIEquals(kv.first, "n_threads")) {
-			data->n_threads = kv.second.GetValue<int32_t>();
+			data->n_threads = miint::ParseNThreads(kv.second, "predict_proba");
 		} else if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
@@ -98,7 +99,7 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 
 		miint::OwnedArrowArray vocab;
 		if (auto st = sc_model_feature_ids(model.ptr, vocab.array(), vocab.schema()); st != SC_OK) {
-			miint::ThrowSc("sc_model_feature_ids", ctx.ptr, st);
+			miint::ThrowSc("sc_model_feature_ids", nullptr, st);
 		}
 		miint::ScCooBuilder builder;
 		builder.SetFeatureVocabulary(vocab.ReadUtf8("sc_model_feature_ids"));
@@ -159,7 +160,7 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		const auto at = gstate.emitted + i;
 		const auto sample = at / n_classes;
 		const auto klass = at % n_classes;
-		output.SetValue(0, i, Value(gstate.sample_ids[sample]).DefaultCastAs(bind.id_types.sample_id));
+		EmitIdCell(output.data[0], i, gstate.sample_ids[sample], bind.id_types.sample_id);
 		output.SetValue(1, i, Value(gstate.classes[klass]));
 		output.SetValue(2, i, Value::DOUBLE(gstate.proba[at]));
 		output.SetValue(3, i, Value::DOUBLE(gstate.coverage[sample]));

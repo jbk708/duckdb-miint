@@ -1,65 +1,11 @@
 #include "sc_rf_common.hpp"
 
+#include <cmath>
 #include <string>
 #include <vector>
 
 namespace duckdb {
 namespace sc_rf {
-
-namespace {
-
-void ReleaseNothing(ArrowArray *array) {
-	array->release = nullptr;
-}
-void ReleaseNothingSchema(ArrowSchema *schema) {
-	schema->release = nullptr;
-}
-
-} // namespace
-
-void BuildTargets(TargetArray &t, bool classification) {
-	t.schema.format = classification ? "u" : "g";
-	t.schema.name = nullptr;
-	t.schema.metadata = nullptr;
-	t.schema.flags = 0;
-	t.schema.n_children = 0;
-	t.schema.children = nullptr;
-	t.schema.dictionary = nullptr;
-	t.schema.release = ReleaseNothingSchema;
-	t.schema.private_data = nullptr;
-
-	int64_t length = 0;
-	int64_t n_buffers = 0;
-	if (classification) {
-		length = static_cast<int64_t>(t.labels.size());
-		t.offsets.reserve(t.labels.size() + 1);
-		int32_t cursor = 0;
-		t.offsets.push_back(cursor);
-		for (const auto &s : t.labels) {
-			t.chars.insert(t.chars.end(), s.begin(), s.end());
-			cursor += static_cast<int32_t>(s.size());
-			t.offsets.push_back(cursor);
-		}
-		t.buffers[1] = t.offsets.data();
-		t.buffers[2] = t.chars.empty() ? nullptr : t.chars.data();
-		n_buffers = 3;
-	} else {
-		length = static_cast<int64_t>(t.numbers.size());
-		t.buffers[1] = t.numbers.data();
-		n_buffers = 2;
-	}
-	// buffers[0] stays NULL: no nulls, which sc requires (null_count must be 0).
-	t.array.length = length;
-	t.array.null_count = 0;
-	t.array.offset = 0;
-	t.array.n_buffers = n_buffers;
-	t.array.n_children = 0;
-	t.array.buffers = t.buffers;
-	t.array.children = nullptr;
-	t.array.dictionary = nullptr;
-	t.array.release = ReleaseNothing;
-	t.array.private_data = nullptr;
-}
 
 //! Fill `params` with sklearn's defaults for the task.
 //!
@@ -212,7 +158,7 @@ void ParseCriterion(const Value &v, bool classification, const char *caller, sc_
 		} else if (StringUtil::CIEquals(s, "entropy")) {
 			out = SC_CRITERION_ENTROPY;
 		} else {
-			throw InvalidInputException("%s_classifier: criterion must be 'gini' or 'entropy' (got '%s')", caller, s);
+			throw InvalidInputException("%s: criterion must be 'gini' or 'entropy' (got '%s')", caller, s);
 		}
 		return;
 	}
@@ -220,7 +166,56 @@ void ParseCriterion(const Value &v, bool classification, const char *caller, sc_
 		out = SC_CRITERION_SQUARED_ERROR;
 		return;
 	}
-	throw InvalidInputException("%s_regressor: criterion must be 'squared_error' (got '%s')", caller, s);
+	throw InvalidInputException("%s: criterion must be 'squared_error' (got '%s')", caller, s);
+}
+
+bool ParseForestParameter(const std::string &k, const Value &v, bool classification, const char *caller,
+                          sc_rf_params_t &params) {
+	if (StringUtil::CIEquals(k, "n_estimators")) {
+		params.n_estimators = ParseNEstimators(v, caller);
+	} else if (StringUtil::CIEquals(k, "random_state")) {
+		params.random_state = static_cast<uint64_t>(v.GetValue<int64_t>());
+	} else if (StringUtil::CIEquals(k, "max_depth")) {
+		// <= 0 is sklearn's None (unbounded), which sc reads the same way.
+		params.max_depth = v.GetValue<int64_t>();
+	} else if (StringUtil::CIEquals(k, "criterion")) {
+		ParseCriterion(v, classification, caller, params.criterion);
+	} else if (StringUtil::CIEquals(k, "max_features")) {
+		ParseMaxFeatures(v, caller, params.max_features);
+	} else if (StringUtil::CIEquals(k, "min_samples_split")) {
+		ParseMinSamples(v, "min_samples_split", 2, caller, params.min_samples_split);
+	} else if (StringUtil::CIEquals(k, "min_samples_leaf")) {
+		ParseMinSamples(v, "min_samples_leaf", 1, caller, params.min_samples_leaf);
+	} else if (StringUtil::CIEquals(k, "min_weight_fraction_leaf")) {
+		// sc checks both of these too, but only once the fit runs, after the
+		// whole table has been scanned.
+		params.min_weight_fraction_leaf = v.GetValue<double>();
+		if (!(params.min_weight_fraction_leaf >= 0.0 && params.min_weight_fraction_leaf <= 0.5)) {
+			throw InvalidInputException("%s: min_weight_fraction_leaf must be in [0, 0.5] (got %s)", caller,
+			                            Value::DOUBLE(params.min_weight_fraction_leaf).ToString());
+		}
+	} else if (StringUtil::CIEquals(k, "min_impurity_decrease")) {
+		params.min_impurity_decrease = v.GetValue<double>();
+		if (!(std::isfinite(params.min_impurity_decrease) && params.min_impurity_decrease >= 0.0)) {
+			throw InvalidInputException("%s: min_impurity_decrease must be finite and >= 0 (got %s)", caller,
+			                            Value::DOUBLE(params.min_impurity_decrease).ToString());
+		}
+	} else if (StringUtil::CIEquals(k, "bootstrap")) {
+		params.bootstrap = v.GetValue<bool>();
+	} else if (StringUtil::CIEquals(k, "max_samples")) {
+		ParseMaxSamples(v, caller, params.max_samples);
+	} else {
+		return false;
+	}
+	return true;
+}
+
+void ValidateForestParameters(const sc_rf_params_t &params, const char *caller) {
+	// sklearn rejects max_samples without bootstrap rather than silently ignoring
+	// it; sc has no opinion, so catch it here where the message can be specific.
+	if (!params.bootstrap && params.max_samples.kind != SC_MAX_SAMPLES_ALL) {
+		throw InvalidInputException("%s: max_samples is only meaningful with bootstrap := true", caller);
+	}
 }
 
 //! Work out which metadata column holds the target.
@@ -231,9 +226,13 @@ void ParseCriterion(const Value &v, bool classification, const char *caller, sc_
 //! `(sample_id, age, bmi, delivery_mode)` table has three equally plausible
 //! targets and picking one silently would be the worst outcome.
 //!
+//! A named column is checked here too, so a typo fails when the query is
+//! planned rather than after the data has been scanned.
+//!
 //! This replaces a hardcoded default of "value", which happened to suit
 //! long-format metadata and quietly failed for everything else.
-std::string ResolveTargetColumn(Connection &conn, const std::string &relation, const char *caller) {
+std::string ResolveTargetColumn(Connection &conn, const std::string &relation, const std::string &requested,
+                                const char *caller) {
 	const auto q = KeywordHelper::WriteOptionallyQuoted(relation);
 	// LIMIT 0 binds the relation and returns its schema without scanning it.
 	auto probe = conn.Query("SELECT * FROM " + q + " LIMIT 0");
@@ -258,24 +257,30 @@ std::string ResolveTargetColumn(Connection &conn, const std::string &relation, c
 		throw InvalidInputException(
 		    "%s: metadata relation '%s' has only a sample_id column; it needs a target column too", caller, relation);
 	}
-	if (candidates.size() == 1) {
-		return candidates[0];
-	}
-
 	std::string list;
 	for (size_t i = 0; i < candidates.size(); i++) {
 		list += (i ? ", " : "") + ("'" + candidates[i] + "'");
+	}
+	if (!requested.empty()) {
+		for (const auto &c : candidates) {
+			if (StringUtil::CIEquals(c, requested)) {
+				return requested;
+			}
+		}
+		throw InvalidInputException("%s: metadata relation '%s' has no column '%s' to use as the target.\n"
+		                            "  Candidates : [%s]",
+		                            caller, relation, requested, list);
+	}
+	if (candidates.size() == 1) {
+		return candidates[0];
 	}
 	throw InvalidInputException(
 	    "%s: Metadata relation '%s' has more than one column that could be the target.\n"
 	    "  Candidates : [%s]\n\n"
 	    "Remedy:\n"
-	    "  Name the variable you are modelling, so the wrong one cannot be picked silently:\n"
-	    "    SELECT * FROM %s_regressor('counts', '%s',\n"
-	    "                                   target_column := 'one_of_the_above',\n"
-	    "                                   name := 'my_model');\n"
+	    "  Pass target_column := 'one_of_the_above' to %s, so the wrong one cannot be picked silently.\n"
 	    "  A metadata relation with exactly one non-sample_id column needs no target_column at all.",
-	    caller, relation, list, caller, relation);
+	    caller, relation, list, caller);
 }
 
 } // namespace sc_rf

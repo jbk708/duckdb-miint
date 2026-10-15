@@ -129,7 +129,7 @@ CREATE TABLE nan_data AS
 statement error
 SELECT * FROM fit_regressor('nan_data', 'train_metadata', name := 'm11n');
 ----
-fit: non-finite value nan in data relation 'nan_data'
+fit_regressor: non-finite value nan in data relation 'nan_data'
 
 statement ok
 CREATE TABLE neg_inf_data AS
@@ -139,7 +139,7 @@ CREATE TABLE neg_inf_data AS
 statement error
 SELECT * FROM fit_regressor('neg_inf_data', 'train_metadata', name := 'm11i');
 ----
-fit: non-finite value -inf in data relation 'neg_inf_data'
+fit_regressor: non-finite value -inf in data relation 'neg_inf_data'
 
 # The data relation is streamed. A value that cannot become a DOUBLE, placed well
 # past the first chunk, must fail the fit -- not train a model on the rows that
@@ -163,7 +163,7 @@ SET threads = 1;
 statement error
 SELECT * FROM fit_regressor('late_bad', 'late_bad_meta', name := 'm11b');
 ----
-fit: reading data relation 'late_bad' failed
+fit_regressor: reading data relation 'late_bad' failed
 
 statement ok
 SET threads = 4;
@@ -171,7 +171,7 @@ SET threads = 4;
 statement error
 SELECT * FROM fit_regressor('late_bad', 'late_bad_meta', name := 'm11c');
 ----
-fit: reading data relation 'late_bad' failed
+fit_regressor: reading data relation 'late_bad' failed
 
 statement ok
 RESET threads;
@@ -221,7 +221,13 @@ SELECT * FROM fit_regressor('train_data', 'meta_many', n_estimators := 5, name :
 ----
 Candidates : ['age', 'bmi', 'delivery_mode']
 
-# ...and naming one resolves it, without probing.
+# The remedy names the function that was called, not a fixed one.
+statement error
+SELECT * FROM fit_classifier('train_data', 'meta_many', n_estimators := 5, name := 'ambiguous');
+----
+Pass target_column := 'one_of_the_above' to fit_classifier
+
+# ...and naming one resolves it.
 query I
 SELECT n_samples FROM fit_regressor('train_data', 'meta_many', target_column := 'bmi', n_estimators := 5, name := 'picked');
 ----
@@ -469,7 +475,7 @@ true
 statement error
 SELECT * FROM fit_regressor('train_data', 'train_metadata', name := '');
 ----
-name must not be empty
+fit_regressor: name must not be empty; every model needs one
 
 # --- the whole flow, as it is actually written ---
 #
@@ -532,3 +538,90 @@ SELECT (SELECT count(DISTINCT feature_id) FROM gm_data),
        (SELECT count(DISTINCT feature_id) FROM gm_test_data);
 ----
 5	3
+
+# --- parameter ranges are checked when the query is planned ---
+#
+# sc rejects these too, but only once the fit runs, after the whole table has
+# been scanned. EXPLAIN plans without running, so each of these errors here
+# proves the check happens at bind.
+
+statement error
+EXPLAIN SELECT * FROM fit_regressor('train_data', 'train_metadata', n_threads := -1, name := 'nt');
+----
+fit_regressor: n_threads must be >= 0 (0 = one per core), got -1
+
+statement error
+EXPLAIN SELECT * FROM fit_regressor('train_data', 'train_metadata', min_weight_fraction_leaf := 0.6, name := 'w');
+----
+fit_regressor: min_weight_fraction_leaf must be in [0, 0.5] (got 0.6)
+
+statement error
+EXPLAIN SELECT * FROM fit_regressor('train_data', 'train_metadata', min_weight_fraction_leaf := -0.1, name := 'w');
+----
+fit_regressor: min_weight_fraction_leaf must be in [0, 0.5] (got -0.1)
+
+statement error
+EXPLAIN SELECT * FROM fit_classifier('train_data', 'class_metadata', min_impurity_decrease := -1.0, name := 'd');
+----
+fit_classifier: min_impurity_decrease must be finite and >= 0 (got -1.0)
+
+statement error
+EXPLAIN SELECT * FROM fit_classifier('train_data', 'class_metadata', min_impurity_decrease := 'NaN'::DOUBLE, name := 'd');
+----
+fit_classifier: min_impurity_decrease must be finite and >= 0 (got nan)
+
+# The edges are allowed.
+query I
+SELECT n_trees FROM fit_regressor('train_data', 'train_metadata', n_estimators := 3, min_weight_fraction_leaf := 0.5,
+                                  min_impurity_decrease := 0.0, n_threads := 0, name := 'edges');
+----
+3
+
+# A named target_column is checked against the metadata when the query is
+# planned. Unchecked, a typo would surface only after the whole data table had
+# been scanned.
+statement error
+EXPLAIN SELECT * FROM fit_regressor('train_data', 'meta_many', target_column := 'agee', name := 'typo');
+----
+fit_regressor: metadata relation 'meta_many' has no column 'agee' to use as the target.
+  Candidates : ['age', 'bmi', 'delivery_mode']
+
+statement error
+EXPLAIN SELECT * FROM fit_regressor('train_data', 'meta_many', target_column := 'sample_id', name := 'sid');
+----
+fit_regressor: metadata relation 'meta_many' has no column 'sample_id' to use as the target.
+
+# Column names match case-insensitively, as everywhere in DuckDB.
+query I
+SELECT n_samples FROM fit_regressor('train_data', 'meta_many', target_column := 'BMI', n_estimators := 3, name := 'upper');
+----
+6
+
+# --- relation names are quoted, not spliced ---
+#
+# Every function builds its own SELECT from the names it is given. A space or a
+# double quote in a name must reach DuckDB as part of one identifier.
+
+statement ok
+CREATE TABLE "odd counts" AS SELECT * FROM train_data;
+
+statement ok
+CREATE TABLE "odd ""meta""" AS SELECT * FROM class_metadata;
+
+statement ok
+CREATE TABLE "odd models" AS
+  SELECT * FROM fit_classifier('odd counts', 'odd "meta"', n_estimators := 5, random_state := 1, name := 'odd');
+
+query IIIII
+SELECT (SELECT count(*) FROM predict('odd counts', 'odd models')),
+       (SELECT count(*) FROM predict_proba('odd counts', 'odd models')),
+       (SELECT count(DISTINCT sample_id) FROM shap('odd counts', 'odd models')),
+       (SELECT count(*) FROM feature_importances('odd models')),
+       (SELECT count(*) FROM model_features('odd models'));
+----
+6	12	6	5	5
+
+query I
+SELECT count(*) FROM cross_validate_classifier('odd counts', 'odd "meta"', n_folds := 2, n_estimators := 5);
+----
+6

@@ -109,6 +109,29 @@ SELECT count(*) FROM predict('u_counts', 'models', name := 'u') p SEMI JOIN u_me
 ----
 20
 
+query I
+SELECT count(DISTINCT sample_id) FROM predict_proba('b_counts', 'models', name := 'b') p SEMI JOIN b_meta USING (sample_id);
+----
+20
+
+query I
+SELECT count(*) FROM cross_validate_classifier('u_counts', 'u_meta', n_folds := 2, n_estimators := 5) c
+  SEMI JOIN u_meta USING (sample_id);
+----
+20
+
+query I
+SELECT count(*) FROM model_features('models', name := 'b') m
+  SEMI JOIN (SELECT DISTINCT feature_id FROM b_counts) USING (feature_id);
+----
+8
+
+query I
+SELECT count(*) FROM feature_importances('models', name := 'u') i
+  SEMI JOIN (SELECT DISTINCT feature_id FROM u_counts) USING (feature_id);
+----
+8
+
 # sample_id follows the data, not the model: a model has no sample ids of its own.
 statement ok
 CREATE VIEW b_text_samples AS SELECT sample_id::VARCHAR AS sample_id, feature_id, value FROM b_counts;
@@ -164,7 +187,7 @@ CREATE VIEW i_samples AS SELECT sample_id::INTEGER AS sample_id, feature_id, val
 statement error
 SELECT * FROM fit_classifier('i_samples', 'b_meta', name := 'i');
 ----
-fit: 'i_samples' field sample_id has INTEGER, but ids must be VARCHAR, BIGINT, or UUID. Cast it first: CREATE VIEW v AS SELECT sample_id::BIGINT AS sample_id, feature_id, value FROM i_samples;
+fit_classifier: 'i_samples' field sample_id has INTEGER, but ids must be VARCHAR, BIGINT, or UUID. Cast it first: CREATE VIEW v AS SELECT sample_id::BIGINT AS sample_id, feature_id, value FROM i_samples;
 
 statement ok
 CREATE VIEW d_features AS SELECT sample_id, feature_id::DOUBLE AS feature_id, value FROM b_counts;

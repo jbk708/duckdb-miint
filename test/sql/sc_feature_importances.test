@@ -227,3 +227,10 @@ statement error
 SELECT * FROM feature_importances('fi_reg');
 ----
 so this call is ambiguous
+
+# A NULL name is an error, not an omitted one: it would otherwise select the
+# relation's only model.
+statement error
+SELECT * FROM feature_importances('fi_model', name := NULL);
+----
+feature_importances: named parameter 'name' must not be NULL

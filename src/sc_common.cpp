@@ -129,9 +129,24 @@ std::vector<double> OwnedArrowArray::ReadFixedSizeListFloat64(const char *what, 
 	return std::vector<double>(values, values + static_cast<size_t>(array_.length * width));
 }
 
+void TakeArray(ArrowArray &src, ArrowSchema &src_schema, OwnedArrowArray &dst) {
+	*dst.array() = src;
+	*dst.schema() = src_schema;
+	src.release = nullptr;
+	src_schema.release = nullptr;
+}
+
 void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status) {
 	const char *msg = ctx ? sc_context_last_error(ctx) : nullptr;
 	throw InvalidInputException("%s: sc error %d%s%s", what, static_cast<int>(status), msg ? ": " : "", msg ? msg : "");
+}
+
+int32_t ParseNThreads(const duckdb::Value &v, const char *caller) {
+	const auto n = v.GetValue<int32_t>();
+	if (n < 0) {
+		throw InvalidInputException("%s: n_threads must be >= 0 (0 = one per core), got %d", caller, n);
+	}
+	return n;
 }
 
 void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {

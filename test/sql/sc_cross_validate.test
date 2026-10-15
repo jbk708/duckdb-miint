@@ -244,6 +244,19 @@ SELECT * FROM cross_validate_classifier('cv_counts', 'cv_many', n_estimators := 
 ----
 more than one column that could be the target
 
+# The remedy names this function. It once suggested a nonexistent
+# cross_validate_classifier_regressor taking a `name`.
+statement error
+SELECT * FROM cross_validate_classifier('cv_counts', 'cv_many', n_estimators := 5);
+----
+Pass target_column := 'one_of_the_above' to cross_validate_classifier
+
+# Errors carry the name of the function that was called, here as in fit.
+statement error
+SELECT * FROM cross_validate_classifier('cv_counts', 'cv_stage', criterion := 'squared_error');
+----
+cross_validate_classifier: criterion must be 'gini' or 'entropy' (got 'squared_error')
+
 query I
 SELECT any_value(metric) FROM
   cross_validate_classifier('cv_counts', 'cv_many', target_column := 'stage', n_estimators := 5, n_folds := 2);
@@ -325,3 +338,14 @@ statement error
 SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', max_samples := 0.5, bootstrap := false);
 ----
 max_samples is only meaningful with bootstrap := true
+
+statement error
+SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', n_threads := -1);
+----
+cross_validate_regressor: n_threads must be >= 0 (0 = one per core), got -1
+
+# Range checks run when the query is planned, as for fit.
+statement error
+SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', min_impurity_decrease := -0.5);
+----
+cross_validate_regressor: min_impurity_decrease must be finite and >= 0 (got -0.5)
