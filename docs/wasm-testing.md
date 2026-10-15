@@ -8,7 +8,8 @@ of verification, each catching different classes of bugs.
 
 - **emscripten** (emsdk) installed and activated (`emcc` in PATH)
 - **VCPKG_TOOLCHAIN_PATH** set, or `vcpkg/` symlinked in repo root
-- **Rust** with `wasm32-unknown-emscripten` target (`rustup target add wasm32-unknown-emscripten`)
+- **Rust** via rustup. The build installs the pinned toolchain (1.86.0) with the
+  `wasm32-unknown-emscripten` target and the `rust-src` component it needs
 - **Node.js** (for import verification and headless load test)
 - **Google Chrome** or Chromium, and network access, for the browser check (Level 4)
 
@@ -86,6 +87,23 @@ The verification script checks:
 1. No direct `env.*` imports of library symbols (= not linked at all)
 2. No `GOT.*` imports without matching exports (= linked but PIC broken)
 3. `miint_duckdb_cpp_init` export exists (extension entry point)
+4. In a build whose C++ uses wasm-native exceptions (`wasm_eh`), no imports of
+   Emscripten's JS exception-handling helpers (`invoke_*`,
+   `__cxa_find_matching_catch_*`, `__resumeException`)
+
+### Why the Rust glue uses wasm-native exceptions
+
+Rust code built with Emscripten's JS exceptions calls through `invoke_*` helpers
+that duckdb-wasm generates in JS. On that path Emscripten truncates Rust symbol
+names at `$`, so calls trap with `function signature mismatch`, and sign-extends
+the low word of i64 arguments, so a Rust function receives a wrong value and
+returns a wrong answer without any error. A Rust panic also aborts the module
+instead of becoming a SQL error (#315). So on `wasm_eh`, where the C++ uses
+`-fwasm-exceptions`, `CMakeLists.txt` builds the glue with
+`-Zemscripten-wasm-eh` and rebuilds std with it (`-Zbuild-std`), and check 4
+fails a build that still imports the JS helpers. `wasm_mvp`, and `wasm_threads`
+as extension-ci-tools configures it, compile the C++ with JS exceptions; their
+glue stays on JS exceptions, and neither is shipped.
 
 ## Level 3: Headless Load Test
 
@@ -154,8 +172,9 @@ value. It exits nonzero on any mismatch or error.
 own main module and JS glue from the `duckdb/` submodule, while the browser check
 runs the duckdb-wasm release users get. The two differ in the JS helpers
 Emscripten generates for a side module, which is where Rust code is exposed
-(#315). When the load test was used to judge Rust code, it reported every
-Rust-backed function as crashing, including ones that work in the playground.
+(see "Why the Rust glue uses wasm-native exceptions"). When the load test was
+used to judge Rust code, it reported every Rust-backed function as crashing,
+including ones that work in the playground.
 
 ### Adding steps
 
