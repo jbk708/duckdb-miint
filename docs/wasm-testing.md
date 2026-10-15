@@ -87,9 +87,11 @@ The verification script checks:
 1. No direct `env.*` imports of library symbols (= not linked at all)
 2. No `GOT.*` imports without matching exports (= linked but PIC broken)
 3. `miint_duckdb_cpp_init` export exists (extension entry point)
-4. In a build whose C++ uses wasm-native exceptions (`wasm_eh`), no imports of
+4. In a build with wasm-native exceptions (`wasm_eh`), no imports of
    Emscripten's JS exception-handling helpers (`invoke_*`,
-   `__cxa_find_matching_catch_*`, `__resumeException`)
+   `__cxa_find_matching_catch_*`, `__resumeException`). The build records its
+   exception model as `MIINT_WASM_NATIVE_EH` in `CMakeCache.txt`; a build that
+   does not record it fails the check rather than skipping it
 
 ### Why the Rust glue uses wasm-native exceptions
 

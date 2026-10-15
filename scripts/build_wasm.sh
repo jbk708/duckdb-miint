@@ -147,14 +147,23 @@ if $VERIFY; then
 
         echo "--- Checking $t: $WASM_FILE ---"
 
-        # A build whose C++ uses wasm-native exceptions builds the Rust glue the
-        # same way (CMakeLists.txt, "Rust glue"), so it must not import
-        # Emscripten's JS exception helpers: duckdb-wasm generates them, and on
-        # that path Rust symbol names are truncated and i64 arguments corrupted (#315).
-        NATIVE_EH=false
-        if grep -q '^CMAKE_CXX_FLAGS:.*-fwasm-exceptions' "build/$t/CMakeCache.txt" 2>/dev/null; then
-            NATIVE_EH=true
-        fi
+        # A build with wasm-native exceptions (MIINT_WASM_NATIVE_EH, recorded by
+        # CMakeLists.txt) must not import Emscripten's JS exception helpers:
+        # duckdb-wasm generates them, and on that path Rust symbol names are
+        # truncated and i64 arguments corrupted (#315).
+        CACHE="build/$t/CMakeCache.txt"
+        NATIVE_EH=$(sed -n 's/^MIINT_WASM_NATIVE_EH:INTERNAL=//p' "$CACHE" 2>/dev/null || true)
+        case "$NATIVE_EH" in
+            ON)  NATIVE_EH=true ;;
+            OFF) NATIVE_EH=false ;;
+            *)
+                echo "  FAIL: $CACHE does not record MIINT_WASM_NATIVE_EH, so the exception"
+                echo "  check cannot run. Rebuild with this script to reconfigure."
+                VERIFY_OK=false
+                echo ""
+                continue
+                ;;
+        esac
 
         # Use Node.js to compile the WASM module and inspect imports/exports.
         #

@@ -1131,6 +1131,19 @@ set(GLUE_CONFIGURE_CMD "")
 # MIINT_WASM_RUST_TOOLCHAIN above); propagated to the build via RUSTUP_TOOLCHAIN.
 set(GLUE_RUSTUP_TOOLCHAIN "")
 if(EMSCRIPTEN)
+    # Match the C++ side's exception model. With JS exceptions, rustc routes every
+    # call that can unwind through Emscripten's invoke_* helpers, which duckdb-wasm
+    # generates in JS, and on that path Emscripten truncates Rust symbol names at
+    # '$' and sign-extends the low word of i64 arguments: calls trap or receive
+    # corrupted values, and a panic aborts the module (#315). So when the C++ uses
+    # wasm-native exceptions, the glue does too. The flag, not the platform name,
+    # decides: extension-ci-tools builds wasm_threads without it. Recorded in the
+    # cache for scripts/build_wasm.sh's import check.
+    if(CMAKE_CXX_FLAGS MATCHES "-fwasm-exceptions")
+        set(MIINT_WASM_NATIVE_EH ON CACHE INTERNAL "Rust glue built with wasm-native exceptions")
+    else()
+        set(MIINT_WASM_NATIVE_EH OFF CACHE INTERNAL "Rust glue built with wasm-native exceptions")
+    endif()
     find_program(RUSTUP rustup)
     set(GLUE_CARGO_TARGET_FLAG "--target" "wasm32-unknown-emscripten")
     set(GLUE_LIB_SUBDIR "wasm32-unknown-emscripten/release")
@@ -1149,7 +1162,7 @@ if ! rustup toolchain list | grep -q "^${ver}"; then
     rustup toolchain install "${ver}" --profile minimal
 fi
 rustup target add --toolchain "${ver}" wasm32-unknown-emscripten
-# -Zbuild-std (wasm-native exceptions, below) rebuilds std from its source.
+# -Zbuild-std (wasm-native exceptions) rebuilds std from its source.
 rustup component add --toolchain "${ver}" rust-src
 ]=])
         set(GLUE_CONFIGURE_CMD sh ${GLUE_WASM_RUST_PIN_SH} ${MIINT_WASM_RUST_TOOLCHAIN})
@@ -1216,18 +1229,11 @@ if(EMSCRIPTEN)
     list(APPEND GLUE_RUSTFLAGS_LIST "-C" "link-arg=-sSIDE_MODULE=2")
 endif()
 
-# Match the C++ side's exception model. With JS exceptions, rustc routes every
-# call that can unwind through Emscripten's invoke_* helpers, which duckdb-wasm
-# generates in JS, and on that path Emscripten truncates Rust symbol names at
-# '$' and sign-extends the low word of i64 arguments: calls trap or receive
-# corrupted values, and a panic aborts the module (#315). So when the C++ uses
-# wasm-native exceptions (wasm_eh), the glue does too. Rust 1.86 offers that
+# Wasm-native exceptions (MIINT_WASM_NATIVE_EH, above). Rust 1.86 offers them
 # only as an unstable flag, which needs std rebuilt from source (rust-src) and
 # RUSTC_BOOTSTRAP to accept -Z on a stable toolchain.
-set(GLUE_WASM_NATIVE_EH OFF)
 set(GLUE_CARGO_UNSTABLE_ARGS "")
-if(EMSCRIPTEN AND CMAKE_CXX_FLAGS MATCHES "-fwasm-exceptions")
-    set(GLUE_WASM_NATIVE_EH ON)
+if(EMSCRIPTEN AND MIINT_WASM_NATIVE_EH)
     list(APPEND GLUE_RUSTFLAGS_LIST "-Zemscripten-wasm-eh")
     set(GLUE_CARGO_UNSTABLE_ARGS "-Zbuild-std=std,panic_unwind")
     message(STATUS "Rust glue: wasm-native exceptions, matching the C++ (-fwasm-exceptions)")
@@ -1256,7 +1262,7 @@ if(GLUE_RUSTUP_TOOLCHAIN)
     # Force cargo (the rustup shim) onto the pinned toolchain for this build.
     list(APPEND GLUE_ENV_ARGS "RUSTUP_TOOLCHAIN=${GLUE_RUSTUP_TOOLCHAIN}")
 endif()
-if(GLUE_WASM_NATIVE_EH)
+if(EMSCRIPTEN AND MIINT_WASM_NATIVE_EH)
     list(APPEND GLUE_ENV_ARGS "RUSTC_BOOTSTRAP=1")
 endif()
 if(GLUE_ENV_ARGS)
