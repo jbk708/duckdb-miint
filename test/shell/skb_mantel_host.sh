@@ -90,10 +90,10 @@ for case in "invalid_input|Invalid Input Error: skb_mantel: fake invalid_input f
     out=$(run_with_host "$(fake_host "host_$kind" "$(error_body "$kind")")")
     expect "$kind" "$out" "${case#*|}"
     survives "$kind" "$out"
+    if [ "$kind" = internal ]; then
+        expect "internal carries the host's traceback" "$out" "Traceback: fake frame"
+    fi
 done
-
-out=$(run_with_host "$(fake_host host_internal_tb "$(error_body internal)")")
-expect "internal carries the host's traceback" "$out" "Traceback: fake frame"
 
 echo "Running: a host that dies mid-call"
 out=$(run_with_host "$(fake_host host_dies 'echo "about to die" >&2; kill -9 $$')")

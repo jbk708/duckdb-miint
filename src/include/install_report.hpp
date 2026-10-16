@@ -36,6 +36,21 @@ inline bool InstallForceArg(DataChunk &args) {
 	return UnifiedVectorFormat::GetData<bool>(fmt)[idx];
 }
 
+/// An installer's overloads: 0-arg (find, else install) and 1-arg BOOLEAN
+/// `force`. The stubs build theirs here too, so SQL that passes `force`
+/// type-checks on every build.
+inline ScalarFunctionSet InstallFunctionSet(const char *name, scalar_function_t execute, bool is_volatile) {
+	ScalarFunctionSet set(name);
+	for (const auto &arguments : {vector<LogicalType> {}, vector<LogicalType> {LogicalType::BOOLEAN}}) {
+		ScalarFunction fn(arguments, InstallReportType(), execute);
+		if (is_volatile) {
+			fn.SetVolatile();
+		}
+		set.AddFunction(fn);
+	}
+	return set;
+}
+
 /// Make `result` a constant vector of one report, so `SELECT installer()
 /// FROM range(n)` installs once, not n times.
 inline void SetInstallReport(Vector &result, bool installed, const string &path, const string &version,

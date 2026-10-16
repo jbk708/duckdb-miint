@@ -643,34 +643,6 @@ void LineReader::FillOnce() {
 // stderr capture
 // =============================================================================
 
-void AppendAvailableStderr(int fd, std::string &sink) {
-	if (fd < 0) {
-		return;
-	}
-	const int orig_flags = ::fcntl(fd, F_GETFL, 0);
-	if (orig_flags < 0) {
-		return;
-	}
-	if (!(orig_flags & O_NONBLOCK)) {
-		if (::fcntl(fd, F_SETFL, orig_flags | O_NONBLOCK) < 0) {
-			return;
-		}
-	}
-	std::array<char, 4096> buf {};
-	for (;;) {
-		ssize_t n = ::read(fd, buf.data(), buf.size());
-		if (n > 0) {
-			sink.append(buf.data(), static_cast<size_t>(n));
-			continue;
-		}
-		// n == 0 (EOF) or -1 (EAGAIN/EWOULDBLOCK/other): stop draining.
-		break;
-	}
-	if (!(orig_flags & O_NONBLOCK)) {
-		(void)::fcntl(fd, F_SETFL, orig_flags); // best effort restore
-	}
-}
-
 void TruncateHead(std::string &s, std::size_t cap) {
 	if (s.size() > cap) {
 		s = "...(truncated head)...\n" + s.substr(s.size() - cap);

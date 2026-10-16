@@ -7,6 +7,7 @@
 #include "env_test_helpers.hpp"
 #include "gpl_boundary/arrow_ipc.hpp"
 #include "nanoarrow/nanoarrow.h"
+#include "process_test_helpers.hpp"
 
 #include <chrono>
 #include <cmath>
@@ -15,7 +16,6 @@
 #include <fcntl.h>
 #include <fstream>
 #include <limits>
-#include <poll.h>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
@@ -26,6 +26,8 @@ using namespace duckdb::miint::skb_arrow;
 namespace gb = duckdb::miint::gpl_boundary;
 using Catch::Matchers::ContainsSubstring;
 using miint_test::EnvGuard;
+using miint_test::EofWithin;
+using miint_test::Witness;
 
 // =============================================================================
 // Fixtures
@@ -213,34 +215,6 @@ Decoded DecodeIntTable(const std::string &bytes) {
 	}
 	schema.release(&schema);
 	return out;
-}
-
-// True once `fd` reaches EOF within `ms`.
-bool EofWithin(int fd, int ms) {
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
-	char buf[256];
-	for (;;) {
-		const auto left =
-		    std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
-		if (left <= 0) {
-			return false;
-		}
-		pollfd p {fd, POLLIN, 0};
-		const int ready = ::poll(&p, 1, static_cast<int>(left));
-		if (ready < 0 && errno == EINTR) {
-			continue;
-		}
-		if (ready <= 0) {
-			return false;
-		}
-		const ssize_t n = ::read(fd, buf, sizeof(buf));
-		if (n == 0) {
-			return true;
-		}
-		if (n < 0 && errno != EINTR) {
-			return false;
-		}
-	}
 }
 
 } // namespace
@@ -664,15 +638,14 @@ TEST_CASE("Host reports a host that dies mid-call, with its last words, and clea
 TEST_CASE("Host kills the host and everything it started when the call is interrupted", "[skb-arrow]") {
 	// No cancel message exists: cancelling a query kills the process group.
 	// The witness pipe reaches EOF only once the host and its `sleep` are gone.
-	int witness[2];
-	REQUIRE(::pipe(witness) == 0);
+	Witness witness;
 	FakeHosts fakes;
 	const std::string bin = fakes.Write("next\nsleep 30 &\nwait");
 	std::string dir;
 	std::chrono::steady_clock::duration took {};
 	{
 		Host host(fakes.Options(bin), kNever);
-		::close(witness[1]);
+		witness.CloseWriteEnd();
 		dir = host.dir();
 		const auto start = std::chrono::steady_clock::now();
 		const InterruptCheck cancel_soon = [start] {
@@ -684,9 +657,8 @@ TEST_CASE("Host kills the host and everything it started when the call is interr
 		took = std::chrono::steady_clock::now() - start;
 		// Already gone when the exception arrives, not only at destruction.
 		REQUIRE_FALSE(Exists(dir));
-		REQUIRE(EofWithin(witness[0], 2000));
+		REQUIRE(EofWithin(witness.read_fd, 2000));
 	}
-	::close(witness[0]);
 	REQUIRE(took < std::chrono::seconds(2));
 }
 

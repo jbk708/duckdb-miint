@@ -10,7 +10,6 @@
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
-#include <vector>
 
 namespace duckdb {
 
@@ -268,15 +267,12 @@ ScalarFunction InstallGplBoundaryScalar::GetFunction() {
 }
 
 void InstallGplBoundaryScalar::Register(ExtensionLoader &loader) {
-	ScalarFunctionSet set("install_gpl_boundary");
 	// 0-arg: idempotent find-or-install. Short-circuits on any binary found
 	// at the override path, miint cache, or PATH.
-	set.AddFunction(ScalarFunction({}, InstallReportType(), InstallGplBoundaryExecute));
 	// 1-arg: force=true bypasses the probe and re-downloads latest into the
 	// miint cache. Used to escape a stale binary on PATH that the probe
 	// considers "good enough".
-	set.AddFunction(ScalarFunction({LogicalType::BOOLEAN}, InstallReportType(), InstallGplBoundaryExecute));
-	loader.RegisterFunction(set);
+	loader.RegisterFunction(InstallFunctionSet("install_gpl_boundary", InstallGplBoundaryExecute, false));
 }
 
 } // namespace duckdb

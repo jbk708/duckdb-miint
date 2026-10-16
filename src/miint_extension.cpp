@@ -121,7 +121,6 @@
 #include <duckdb/storage/storage_extension.hpp>
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/string_vector.hpp"
-#include "duckdb/common/vector/struct_vector.hpp"
 #include <htslib-1.22.1/htslib/hts.h>
 #include <kseq++/config.hpp>
 #include <zlib.h>
@@ -455,9 +454,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	loader.RegisterFunction(phylogeny_fasttree_stub);
 
 	// Stubs: install_gpl_boundary() and install_skb_arrow() report that the
-	// platform can't run their tool at all, so installing wouldn't help. Each
-	// mirrors the real 0-arg + 1-arg(BOOLEAN) overload set, so SQL that passes
-	// `force` still type-checks on stub builds.
+	// platform can't run their tool at all, so installing wouldn't help.
 	const auto register_install_stub = [&loader](const char *name, const string &tool, bool is_volatile) {
 		const string msg = string(name) +
 		                   ": this miint build was compiled without MIINT_ENABLE_GPL_BOUNDARY (typically "
@@ -466,15 +463,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 		const scalar_function_t exec = [msg](DataChunk &args, ExpressionState &state, Vector &result) {
 			SetInstallReport(result, false, "", "", msg);
 		};
-		ScalarFunctionSet set(name);
-		for (const auto &arguments : {vector<LogicalType> {}, vector<LogicalType> {LogicalType::BOOLEAN}}) {
-			ScalarFunction fn(arguments, InstallReportType(), exec);
-			if (is_volatile) {
-				fn.SetVolatile();
-			}
-			set.AddFunction(fn);
-		}
-		loader.RegisterFunction(set);
+		loader.RegisterFunction(InstallFunctionSet(name, exec, is_volatile));
 	};
 	register_install_stub("install_gpl_boundary", "gpl-boundary", false);
 	register_install_stub("install_skb_arrow", "skb-arrow", true);

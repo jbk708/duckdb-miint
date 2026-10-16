@@ -51,13 +51,7 @@ void SkbArrowAvailableExecute(DataChunk &args, ExpressionState &state, Vector &r
 } // namespace
 
 void RegisterSkbArrowInstallFunctions(ExtensionLoader &loader) {
-	ScalarFunctionSet install("install_skb_arrow");
-	for (const auto &arguments : {vector<LogicalType> {}, vector<LogicalType> {LogicalType::BOOLEAN}}) {
-		ScalarFunction fn(arguments, InstallReportType(), InstallSkbArrowExecute);
-		fn.SetVolatile();
-		install.AddFunction(fn);
-	}
-	loader.RegisterFunction(install);
+	loader.RegisterFunction(InstallFunctionSet("install_skb_arrow", InstallSkbArrowExecute, true));
 	loader.RegisterFunction(ScalarFunction("skb_arrow_available", {}, LogicalType::BOOLEAN, SkbArrowAvailableExecute));
 }
 

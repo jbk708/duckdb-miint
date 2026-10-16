@@ -492,62 +492,12 @@ TEST_CASE("WriteLine appends newline and flushes immediately", "[gpl-boundary][p
 #include <fcntl.h>
 #include <cerrno>
 #include <memory>
-#include <poll.h>
 #include <stdexcept>
 
-namespace {
-// True once `fd` reaches EOF within `ms`; false on timeout. Discards data.
-bool eof_within(int fd, int ms) {
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
-	char buf[256];
-	for (;;) {
-		const auto left =
-		    std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
-		if (left <= 0) {
-			return false;
-		}
-		pollfd p {fd, POLLIN, 0};
-		const int ready = ::poll(&p, 1, static_cast<int>(left));
-		if (ready < 0 && errno == EINTR) {
-			continue;
-		}
-		if (ready <= 0) {
-			return false;
-		}
-		const ssize_t n = ::read(fd, buf, sizeof(buf));
-		if (n == 0) {
-			return true;
-		}
-		if (n < 0 && errno != EINTR) {
-			return false;
-		}
-	}
-}
+#include "process_test_helpers.hpp"
 
-// A pipe whose write end every child (and grandchild) inherits: plain pipe(),
-// not close-on-exec. Once the test closes its own write end, EOF on the read
-// end means every process holding it has exited.
-struct Witness {
-	int read_fd = -1;
-	int write_fd = -1;
-	Witness() {
-		int fds[2];
-		REQUIRE(::pipe(fds) == 0);
-		read_fd = fds[0];
-		write_fd = fds[1];
-	}
-	void CloseWriteEnd() {
-		::close(write_fd);
-		write_fd = -1;
-	}
-	~Witness() {
-		::close(read_fd);
-		if (write_fd >= 0) {
-			::close(write_fd);
-		}
-	}
-};
-} // namespace
+using miint_test::EofWithin;
+using miint_test::Witness;
 
 TEST_CASE("ChildProcess pipe ends do not leak into a later child", "[gpl-boundary][process]") {
 	// Each child's parent-side pipe ends must be close-on-exec. Otherwise a
@@ -625,7 +575,7 @@ TEST_CASE("KillGroup kills the child and everything it started", "[gpl-boundary]
 	REQUIRE(line == "started");
 	child.KillGroup();
 	// The witness reaches EOF only once bash AND its `sleep` have exited.
-	const bool all_gone = eof_within(witness.read_fd, 2000);
+	const bool all_gone = EofWithin(witness.read_fd, 2000);
 	REQUIRE(all_gone);
 	const int status = child.Wait();
 	REQUIRE(WIFSIGNALED(status));
@@ -655,7 +605,7 @@ TEST_CASE("Destroying a new_session ChildProcess kills its whole group", "[gpl-b
 		REQUIRE(reader.ReadLine(line));
 		REQUIRE(line == "started");
 	}
-	REQUIRE(eof_within(witness.read_fd, 2000));
+	REQUIRE(EofWithin(witness.read_fd, 2000));
 }
 
 TEST_CASE("ChildProcessOptions set_env and unset_env shape the child's environment", "[gpl-boundary][process]") {

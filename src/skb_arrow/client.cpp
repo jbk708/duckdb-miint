@@ -524,12 +524,7 @@ Host::Host(const HostOptions &options, const InterruptCheck &check)
     : options_(options), dir_(options.segment_parent), child_(SpawnHost(options, dir_.path())),
       reader_(child_.stdout_fd()) {
 	try {
-		try {
-			gb::WriteLine(child_.stdin_fd(), R"({"type":"init","protocol_version":1})");
-		} catch (const std::runtime_error &) {
-			ThrowHostDeath("the handshake");
-		}
-		const std::string line = ReadResponse(check, "the handshake");
+		const std::string line = Exchange(R"({"type":"init","protocol_version":1})", check, "the handshake");
 		const DocPtr doc = ParseResponse(line);
 		yj::yyjson_val *root = yj::yyjson_doc_get_root(doc.get());
 		const std::string type = GetString(root, "type");
@@ -636,12 +631,7 @@ CallResult Host::Call(const std::string &capability, const Params &params,
 
 	std::string line;
 	try {
-		try {
-			gb::WriteLine(child_.stdin_fd(), request);
-		} catch (const std::runtime_error &) {
-			ThrowHostDeath("a call");
-		}
-		line = ReadResponse(check, "a call");
+		line = Exchange(request, check, "a call");
 	} catch (...) {
 		Kill();
 		throw;
@@ -659,13 +649,11 @@ CallResult Host::Call(const std::string &capability, const Params &params,
 			ThrowMalformed("expected the response to call id " + std::to_string(id));
 		}
 		const std::string type = GetString(r, "type");
-		if (type != "result" && type != "error") {
-			ThrowMalformed("expected 'result' or 'error', got '" + type + "'");
-		}
-		if (type == "error") {
-			// Fall through, out of this try, to throw the host's error.
-		} else {
+		if (type == "result") {
 			return ParseResult(r);
+		}
+		if (type != "error") {
+			ThrowMalformed("expected 'result' or 'error', got '" + type + "'");
 		}
 	} catch (...) {
 		Kill();
@@ -707,14 +695,9 @@ void Host::Shutdown() {
 	if (done_) {
 		return;
 	}
-	done_ = true;
 	child_.CloseStdin();
 	(void)child_.ReapAndDescribe(options_.shutdown_grace_ms);
-	if (!child_.reaped()) {
-		child_.KillGroup();
-		child_.Wait();
-	}
-	dir_.Remove();
+	Kill(); // a host still running after the grace period
 }
 
 void Host::Kill() noexcept {
@@ -730,7 +713,12 @@ void Host::Kill() noexcept {
 	dir_.Remove();
 }
 
-std::string Host::ReadResponse(const InterruptCheck &check, const char *awaiting) {
+std::string Host::Exchange(const std::string &request, const InterruptCheck &check, const char *awaiting) {
+	try {
+		gb::WriteLine(child_.stdin_fd(), request);
+	} catch (const std::runtime_error &) {
+		ThrowHostDeath(awaiting);
+	}
 	while (!reader_.HasLine()) {
 		pollfd p {child_.stdout_fd(), POLLIN, 0};
 		const int ready = ::poll(&p, 1, kPollMs);
@@ -757,9 +745,7 @@ void Host::ThrowHostDeath(const char *awaiting) {
 	// Killing the group before reading them would lose them.
 	std::string tail = ReadToEof(child_.stderr_fd(), kStderrEofMs);
 	gb::TruncateHead(tail, kStderrTailCap);
-	if (!child_.reaped()) {
-		child_.KillGroup(); // anything the host left running
-	}
+	child_.KillGroup(); // anything the host left running
 	const std::string how = child_.ReapAndDescribe(1000);
 	Kill();
 	std::string message = std::string("skb-arrow exited during ") + awaiting + " (" + how + ")";

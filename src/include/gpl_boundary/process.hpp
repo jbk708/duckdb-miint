@@ -136,12 +136,6 @@ public:
 	/// only zombies remain) counts as killed. Reap with `Wait()` afterwards.
 	void KillGroup();
 
-	/// True once the child is reaped (by `Wait`, `ReapAndDescribe`, or a
-	/// failed spawn), so `Wait()` returns without blocking.
-	bool reaped() const {
-		return waited_;
-	}
-
 private:
 	pid_t pid_ = -1;
 	int stdin_fd_ = -1;
@@ -205,18 +199,6 @@ private:
 	                     // but not yet returned via ReadLine)
 	bool eof_ = false;
 };
-
-/// Non-blocking drain of an fd, appending everything currently available to
-/// `sink`. Used to keep a child's stderr pipe from filling, which would wedge
-/// the child on a blocked write while we wait for its response, and on the
-/// failure paths to grab the child's last words. MUST be non-blocking — the
-/// child is typically still alive, so the pipe has no EOF and a blocking read
-/// would hang.
-///
-/// Restores the original O_NONBLOCK state on exit so other readers aren't
-/// surprised. Truncation is the caller's job (see TruncateHead) so a rolling
-/// buffer is only trimmed once after appending.
-void AppendAvailableStderr(int fd, std::string &sink);
 
 /// Trim `s` from the front to at most `cap` bytes, prefixing a marker so the
 /// reader knows output was dropped. Keeps the tail — that's where the

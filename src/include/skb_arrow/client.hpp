@@ -241,7 +241,8 @@ public:
 	void Kill() noexcept;
 
 private:
-	std::string ReadResponse(const InterruptCheck &check, const char *awaiting);
+	// Send one request line and wait for its response line.
+	std::string Exchange(const std::string &request, const InterruptCheck &check, const char *awaiting);
 	[[noreturn]] void ThrowHostDeath(const char *awaiting);
 
 	HostOptions options_;

@@ -65,7 +65,6 @@ struct SkbArrowInput {
 struct SkbArrowCallData : public TableFunctionData {
 	std::string function;
 	std::string capability;
-	int64_t schema_version = 0;
 	std::vector<SkbArrowInput> inputs;
 	// The named params the user set, forwarded verbatim; skb-arrow fills the
 	// rest with its defaults and checks every value.
@@ -83,10 +82,9 @@ struct SkbArrowCallData : public TableFunctionData {
 
 	bool Equals(const FunctionData &other_p) const override {
 		const auto &other = other_p.Cast<SkbArrowCallData>();
-		if (function != other.function || capability != other.capability || schema_version != other.schema_version ||
-		    inputs != other.inputs || threads != other.threads || output_names != other.output_names ||
-		    wire_types != other.wire_types || output_types != other.output_types ||
-		    params.size() != other.params.size()) {
+		if (function != other.function || capability != other.capability || inputs != other.inputs ||
+		    threads != other.threads || output_names != other.output_names || wire_types != other.wire_types ||
+		    output_types != other.output_types || params.size() != other.params.size()) {
 			return false;
 		}
 		for (idx_t i = 0; i < params.size(); i++) {
@@ -153,9 +151,6 @@ sk::Params ToParams(const std::vector<std::pair<std::string, Value>> &params) {
 	for (const auto &param : params) {
 		const std::string &name = param.first;
 		const Value &value = param.second;
-		if (value.IsNull()) {
-			continue; // skb-arrow reads null as absent: its default
-		}
 		switch (value.type().id()) {
 		case LogicalTypeId::BOOLEAN:
 			out.SetBool(name, BooleanValue::Get(value));
@@ -312,7 +307,12 @@ void RunCall(ClientContext &context, const SkbArrowCallData &data, ColumnDataCol
 	options.binary = LocateSkbArrow(data.function);
 	options.segment_parent = sk::SegmentDirParent();
 	options.threads = data.threads;
-	options.required = {{data.capability, data.schema_version}};
+	// The schema_version miint was built against, from the table Probe checks.
+	for (const auto &capability : sk::MiintCapabilities()) {
+		if (capability.first == data.capability) {
+			options.required = {capability};
+		}
+	}
 	const sk::InterruptCheck check = [&context] {
 		context.BlockingInterruptCheck();
 	};
@@ -365,21 +365,24 @@ void SkbArrowExecute(ClientContext &, TableFunctionInput &input, DataChunk &outp
 }
 
 // Named params: `threads` is miint's; every other one is forwarded verbatim,
-// in name order.
+// in name order. A NULL one is unset, as skb-arrow reads null: its default.
 void ReadNamedParams(ClientContext &context, TableFunctionBindInput &input, SkbArrowCallData &data) {
 	int32_t threads = 0;
 	for (const auto &kv : input.named_parameters) {
 		const auto name = StringUtil::Lower(kv.first.GetIdentifierName());
 		const Value &value = kv.second;
+		if (value.IsNull()) {
+			continue;
+		}
 		if (name == "threads") {
-			threads = value.IsNull() ? 0 : value.GetValue<int32_t>();
+			threads = value.GetValue<int32_t>();
 			continue;
 		}
 		// NaN and Infinity aren't JSON, and a null would mean "the default".
-		if (value.type().id() == LogicalTypeId::DOUBLE && !value.IsNull() && !std::isfinite(DoubleValue::Get(value))) {
+		if (value.type().id() == LogicalTypeId::DOUBLE && !std::isfinite(DoubleValue::Get(value))) {
 			throw BinderException(data.function + ": " + name + " must be finite (got " + value.ToString() + ")");
 		}
-		if (value.type().id() == LogicalTypeId::LIST && !value.IsNull()) {
+		if (value.type().id() == LogicalTypeId::LIST) {
 			for (const auto &item : ListValue::GetChildren(value)) {
 				if (item.IsNull()) {
 					throw BinderException(data.function + ": " + name + " must not contain NULL");
@@ -554,7 +557,6 @@ unique_ptr<FunctionData> SkbMantelBind(ClientContext &context, TableFunctionBind
 	auto data = make_uniq<SkbArrowCallData>();
 	data->function = "skb_mantel";
 	data->capability = "mantel";
-	data->schema_version = 1;
 	const std::string x = input.inputs[0].GetValue<string>();
 	const std::string y = input.inputs[1].GetValue<string>();
 	// Every name before any is resolved: a CTE named by y must not hide behind a missing x.
@@ -582,7 +584,6 @@ unique_ptr<FunctionData> SkbAncombcBind(ClientContext &context, TableFunctionBin
 	auto data = make_uniq<SkbArrowCallData>();
 	data->function = "skb_ancombc";
 	data->capability = "ancombc";
-	data->schema_version = 1;
 	const std::string table = input.inputs[0].GetValue<string>();
 	const std::string metadata = input.inputs[1].GetValue<string>();
 	const std::string formula = input.inputs[2].GetValue<string>();
@@ -592,7 +593,7 @@ unique_ptr<FunctionData> SkbAncombcBind(ClientContext &context, TableFunctionBin
 	ReadNamedParams(context, input, *data);
 	std::string grouping;
 	for (const auto &param : data->params) {
-		if (param.first == "grouping" && !param.second.IsNull()) {
+		if (param.first == "grouping") {
 			grouping = StringValue::Get(param.second);
 		}
 	}
