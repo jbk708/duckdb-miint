@@ -62,9 +62,25 @@ bool IsIntegerValue(const Value &v) {
 	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
 		return true;
 	default:
 		return false;
+	}
+}
+
+//! Read a fraction, which must be written as one. GetValue<double> converts
+//! other types too -- `true` reads as 1.0 -- so they are refused rather than
+//! taken for a number.
+double ReadFraction(const Value &v, const char *name, const char *caller) {
+	switch (v.type().id()) {
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DECIMAL:
+		return v.GetValue<double>();
+	default:
+		throw InvalidInputException("%s: %s must be a count or a fraction, got a %s", caller, name,
+		                            v.type().ToString());
 	}
 }
 
@@ -93,7 +109,7 @@ void ParseMaxFeatures(const Value &v, const char *caller, sc_max_features_t &out
 		out.count = static_cast<uint64_t>(n);
 		return;
 	}
-	const auto f = v.GetValue<double>();
+	const auto f = ReadFraction(v, "max_features", caller);
 	if (!(f > 0.0 && f <= 1.0)) {
 		throw InvalidInputException("%s: max_features fraction must be in (0, 1] (got %g)", caller, f);
 	}
@@ -112,7 +128,7 @@ void ParseMinSamples(const Value &v, const char *name, uint64_t min_count, const
 		out.count = static_cast<uint64_t>(n);
 		return;
 	}
-	const auto f = v.GetValue<double>();
+	const auto f = ReadFraction(v, name, caller);
 	if (!(f > 0.0 && f <= 1.0)) {
 		throw InvalidInputException("%s: %s fraction must be in (0, 1] (got %g)", caller, name, f);
 	}
@@ -140,7 +156,7 @@ void ParseMaxSamples(const Value &v, const char *caller, sc_max_samples_t &out) 
 		out.count = static_cast<uint64_t>(n);
 		return;
 	}
-	const auto f = v.GetValue<double>();
+	const auto f = ReadFraction(v, "max_samples", caller);
 	if (!(f > 0.0 && f <= 1.0)) {
 		throw InvalidInputException("%s: max_samples fraction must be in (0, 1] (got %g)", caller, f);
 	}
@@ -208,6 +224,25 @@ bool ParseForestParameter(const std::string &k, const Value &v, bool classificat
 		return false;
 	}
 	return true;
+}
+
+void RegisterTrainingParameters(TableFunction &fn) {
+	fn.named_parameters["target_column"] = LogicalType::VARCHAR;
+	fn.named_parameters["threads"] = LogicalType::INTEGER;
+	fn.named_parameters["n_estimators"] = LogicalType::BIGINT;
+	fn.named_parameters["random_state"] = LogicalType::BIGINT;
+	fn.named_parameters["max_depth"] = LogicalType::BIGINT;
+	fn.named_parameters["criterion"] = LogicalType::VARCHAR;
+	fn.named_parameters["min_weight_fraction_leaf"] = LogicalType::DOUBLE;
+	fn.named_parameters["min_impurity_decrease"] = LogicalType::DOUBLE;
+	fn.named_parameters["bootstrap"] = LogicalType::BOOLEAN;
+	// ANY, not a fixed type: these are sklearn's tagged unions, where an integer
+	// means a count and a float a fraction. SQL literal types carry that
+	// distinction already, so the parsers dispatch on what the user wrote.
+	fn.named_parameters["max_features"] = LogicalType::ANY;
+	fn.named_parameters["min_samples_split"] = LogicalType::ANY;
+	fn.named_parameters["min_samples_leaf"] = LogicalType::ANY;
+	fn.named_parameters["max_samples"] = LogicalType::ANY;
 }
 
 void ValidateForestParameters(const sc_rf_params_t &params, const char *caller) {

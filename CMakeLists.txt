@@ -1099,16 +1099,16 @@ if(MIINT_ENABLE_SORTMERNA)
     add_dependencies(sortmerna sortmerna_bundle)
 endif()
 
-# rype + sylph are independent Rust crates; each emits a staticlib that
-# statically embeds its own copy of the Rust std runtime (rust_eh_personality,
-# EMPTY_PANIC, ...). Linking both as separate .a archives produces
-# duplicate-symbol errors on every supported linker (GNU ld, Apple ld-prime,
-# Mach-O classic, lld) — see the Rust Reference (Linkage chapter).
+# rype, sylph and sc are independent Rust crates; each would emit a staticlib
+# that statically embeds its own copy of the Rust std runtime
+# (rust_eh_personality, EMPTY_PANIC, ...). Linking them as separate .a archives
+# produces duplicate-symbol errors on every supported linker (GNU ld, Apple
+# ld-prime, Mach-O classic, lld) — see the Rust Reference (Linkage chapter).
 #
-# Fix: an umbrella `miint_rust_glue` crate (ext/miint-rust-glue/) lists both
-# as path dependencies, cargo compiles them through a shared std, and the
+# Fix: an umbrella `miint_rust_glue` crate (ext/miint-rust-glue/) lists all
+# three as path dependencies, cargo compiles them through a shared std, and the
 # resulting libmiint_rust_glue.a contains a single deduplicated copy of std
-# plus the #[no_mangle] C ABI surface from both crates. This is the canonical
+# plus the #[no_mangle] C ABI surface of each crate. This is the canonical
 # pattern (Mozilla's "rul" super-crate for Firefox/Gecko).
 find_program(CARGO cargo REQUIRED)
 message(STATUS "Found cargo: ${CARGO}")
@@ -1276,8 +1276,8 @@ ExternalProject_Add(
 )
 
 # `rype` is the sole IMPORTED STATIC target for the merged archive. The
-# archive contains both rype and sylph symbols, so linking `rype` provides
-# everything — there is no separate `sylph` link target.
+# archive contains the rype, sylph and sc symbols, so linking `rype` provides
+# all three; there is no separate `sylph` or `sc` link target.
 #
 # Why no second target: declaring an additional IMPORTED STATIC target
 # pointing at the same archive caused libmiint_rust_glue.a to appear twice on
@@ -1468,10 +1468,11 @@ endif()
 set(RYPE_LIB_PATH ${GLUE_LIB_PATH})
 
 # adapted kseq++ include use from strobealign
-# ext/sc/include holds sc.h, a cbindgen BUILD PRODUCT (gitignored in sc) written
-# by sc-capi's build.rs during the rust-glue build. It does not exist on a fresh
-# clone; the `rype` link target's dependency on miint_rust_glue_build orders the
-# glue ahead of the C++ compile, so it is present by the time anything includes it.
+# ext/sc/include holds sc.h, a cbindgen build product (gitignored in sc) that
+# sc-capi's build.rs writes during the rust-glue build; a fresh clone lacks it.
+# A target compiling a file that includes it must build after
+# miint_rust_glue_build: the extension targets do through their `rype` link,
+# and `tests` through its own add_dependencies.
 include_directories(src/include third_party/microtar ext ext/WFA2-lib ${CMAKE_CURRENT_SOURCE_DIR}/ext/rype
                     ${CMAKE_CURRENT_SOURCE_DIR}/ext/sc/include)
 if(MIINT_ENABLE_SYLPH)

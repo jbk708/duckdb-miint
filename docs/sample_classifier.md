@@ -2,7 +2,7 @@
 
 Predict a sample's metadata from its feature table: which body site a sample came from, how old the infant was, whether a treatment took. A random forest is trained on a `(sample_id, feature_id, value)` count table plus one label per sample, stored in a DuckDB table, and then used to predict, to score itself by cross-validation, and to explain individual predictions.
 
-These functions are powered by [sc](https://github.com/the-miint/sc), a Rust reimplementation of the random forest and nested cross-validation in [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier), plus path-dependent TreeSHAP to explain predictions. Defaults match scikit-learn's `RandomForestClassifier` / `RandomForestRegressor`, except that `random_state` defaults to 0 rather than unseeded, so a fit is reproducible. Results are checked against scikit-learn 1.4.2 fixtures.
+These functions are powered by [sc](https://github.com/the-miint/sc), a Rust reimplementation of the random forest and nested cross-validation in [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier) (QIIME 2's sample classifier, "q2" below), plus path-dependent TreeSHAP, which computes exact SHAP feature attributions for tree ensembles, to explain predictions. Defaults match scikit-learn's `RandomForestClassifier` / `RandomForestRegressor`, except that `random_state` defaults to 0 rather than unseeded, so a fit is reproducible.
 
 ## Get started
 
@@ -53,7 +53,7 @@ INSERT INTO models SELECT * FROM fit_regressor('counts', 'meta', target_column :
 | column | |
 |---|---|
 | `name` | required at fit; how every later function selects the model |
-| `model` | the algorithm, currently always `random_forest` |
+| `model` | the algorithm: `random_forest` |
 | `model_blob` | the serialized forest |
 | `n_samples`, `n_features`, `n_estimators` | what it was trained on |
 | `task` | `classification` or `regression`; decides the type of the prediction column |
@@ -72,22 +72,22 @@ SELECT * FROM fit_classifier('counts', 'meta', name := 'site', n_estimators := 5
 |---|---|---|
 | `name` | *required* | the model's handle |
 | `target_column` | auto | required when the metadata has more than one candidate column |
-| `model` | `random_forest` | the only algorithm so far |
+| `model` | `random_forest` | the algorithm; `random_forest` is the one accepted |
 | `n_estimators` | 100 | trees, at most 100,000 |
 | `random_state` | 0 | seed |
-| `n_threads` | 0 | 0 = DuckDB's `threads` setting, otherwise a count; ignored in DuckDB-Wasm, which has one |
+| `threads` | 0 | 0 = DuckDB's `threads` setting, otherwise a count; ignored in DuckDB-Wasm, which has one |
 | `max_depth` | unbounded | `<= 0` is sklearn's `None` |
-| `criterion` | `gini` / `squared_error` | classifier / regressor |
-| `max_features` | `sqrt` / `all` | features each split may consider: `'sqrt'`, `'log2'`, `'all'`, a fraction in (0, 1], or an integer count |
-| `min_samples_split` | 2 | integer count or fraction |
-| `min_samples_leaf` | 1 | integer count or fraction |
+| `criterion` | `gini` / `squared_error` | classifier: `'gini'` or `'entropy'`; regressor: `'squared_error'` |
+| `max_features` | `sqrt` / `all` | features each split may consider: `'sqrt'`, `'log2'`, `'all'` (or `'none'`), a fraction in (0, 1], or an integer count |
+| `min_samples_split` | 2 | an integer count >= 2, or a fraction in (0, 1] |
+| `min_samples_leaf` | 1 | an integer count >= 1, or a fraction in (0, 1] |
 | `min_weight_fraction_leaf`, `min_impurity_decrease` | 0.0 | in [0, 0.5], and finite and >= 0 |
 | `bootstrap` | true | |
-| `max_samples` | all | only with `bootstrap := true` |
+| `max_samples` | all | each tree's bootstrap sample: `'all'` (or `'none'`), a fraction in (0, 1], or a positive count; only with `bootstrap := true` |
 
 As in sklearn, integer versus float matters: `max_features := 10` means ten features, `0.3` means thirty percent.
 
-`max_features` is not a filter on the table. At every split of every tree, a fresh random set of that many candidate features is drawn and the best split among them is taken. That randomness decorrelates the trees, which is where a forest's advantage comes from; `'all'` removes it and is slower without usually scoring better.
+`max_features` is not a filter on the table. At every split of every tree, a fresh random set of that many candidate features is drawn and the best split among them is taken. That randomness decorrelates the trees, which is where a forest's advantage comes from; `'all'` removes it.
 
 ### Predicting
 
@@ -99,6 +99,11 @@ SELECT * FROM predict_proba('new_counts', 'models', name := 'site');
 -- sample_id, class, probability, known_feature_fraction   (one row per sample and class)
 ```
 
+| parameter | default | |
+|---|---|---|
+| `name` | | the model to use; required when the model relation holds more than one |
+| `threads` | 0 | as at fit |
+
 `prediction` is VARCHAR for a classifier and DOUBLE for a regressor, read from the model's `task` when the query is planned. A wrong model name, or `predict_proba` on a regressor, therefore fails before any data is read. A forest's probability is the mean of its trees' leaf class proportions, not a calibrated posterior.
 
 ### Cross-validation
@@ -109,6 +114,13 @@ How well does this recipe generalize to unseen samples? The samples are cut into
 CREATE TABLE cv AS SELECT * FROM cross_validate_classifier('counts', 'meta', target_column := 'body_site', n_folds := 5, random_state := 42);
 SELECT DISTINCT metric, mean_score, std_score, fold_scores FROM cv;
 ```
+
+| parameter | default | |
+|---|---|---|
+| `target_column` | auto | as at fit |
+| `n_folds` | 5 | at least 2; also accepted as `cv` |
+| `parameter_tuning` | false | see below |
+| `n_estimators`, `random_state`, `threads` and every forest parameter from [Fitting](#fitting) | as at fit | the recipe each fold's forest is fit with |
 
 | column | |
 |---|---|
@@ -122,9 +134,9 @@ SELECT DISTINCT metric, mean_score, std_score, fold_scores FROM cv;
 
 - `std_score` is computed with `ddof=0` (population standard deviation) to match `q2-sample-classifier`.
 - **The per-fold forests are discarded.** This measures the recipe, not a model; fit the model you will use with `fit_classifier` or `fit_regressor` on all the data.
-- **The four summary columns repeat on every row**, because a table function returns one relation and a separate summary function would have to rerun every fold. `SELECT DISTINCT` recovers the single summary row.
+- **The four summary columns repeat on every row.** `SELECT DISTINCT` recovers the single summary row.
 - **`n_folds` is also accepted as `cv`**, q2's and sklearn's name for it; passing both is an error.
-- **`parameter_tuning := true`** runs a randomized search inside each training fold, so the held-out fold stays unseen. Each training fold scores 20 candidate settings with an inner `n_folds`-fold cross-validation, so it costs about 20 × `n_folds`² extra fits (500 at five folds). The chosen parameters are not yet reported.
+- **`parameter_tuning := true`** runs a randomized search inside each training fold, so the held-out fold stays unseen. Each training fold scores 20 candidate settings with an inner `n_folds`-fold cross-validation, so it costs about 20 × `n_folds`² extra fits (500 at five folds). The chosen parameters are not returned.
 
 ```sql
 -- Confusion matrix, no join required.
@@ -144,16 +156,18 @@ SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
 
 | parameter | default | |
 |---|---|---|
+| `name` | | as at prediction |
 | `predicted_class_only` | true | with two classes the other is an exact mirror; with three or more, `false` also explains the other classes |
-| `top_k` | off | keep the k strongest features per sample, split evenly between those pushing toward the prediction and against it |
+| `top_k` | off | keep the k strongest features per sample, or per sample and class with `predicted_class_only := false`, split evenly between those pushing toward the prediction and against it |
 | `max_attributions` | 10,000,000 | attributions one batch may hold (samples × classes × features, 8 bytes each, so ~80 MB) |
 | `batch_size` | derived | samples per batch, overriding `max_attributions`; passing both is an error |
+| `threads` | 0 | as at fit |
 
 - **`base_value`** is the model's average output over the training data for the row's class (a regressor has one), so it repeats on every row of that class.
 - **Absent features get attributions too.** A feature the model knows but the sample lacks is a zero, and a zero can push a prediction as hard as a large count; the absence of adult taxa is evidence of an infant.
 - **`top_k` shrinks the output, not the computation**, since every attribution is computed before the strongest are picked.
 - **Rows come out in waterfall order**: `sample_id` (as text; see [Input tables](#input-tables)), `class`, then `shap_value` descending.
-- **Attributions are computed one batch at a time**, so 20,000 samples need no more attribution memory than 2,000. The input table is held in full, as at prediction.
+- **Attributions are computed one batch at a time**, and a batch holds at most `max_attributions` of them (8 bytes each: 80 MB at the default), so by construction 20,000 samples need no more attribution memory than 2,000. The input table is held in full, as at prediction.
 
 ### Feature importances
 
@@ -164,7 +178,7 @@ SELECT * FROM model_features('models', name := 'site');
 -- feature_id, column_index
 ```
 
-`feature_importances` is mean decrease in impurity, summing to 1. It describes the model, not any prediction, and is biased toward features with many distinct values; the mean absolute SHAP value per feature is a less biased global ranking. `model_features` lists the features the model expects, in its own column order.
+Both take `name`, as `predict` does. `feature_importances` is mean decrease in impurity, summing to 1. It describes the model, not any prediction, and is biased toward features with many distinct values; the mean absolute SHAP value per feature is a less biased global ranking. `model_features` lists the features the model expects, in its own column order.
 
 ### Unknown and absent features
 
@@ -175,12 +189,12 @@ SELECT * FROM model_features('models', name := 'site');
 
 ### Reproducibility
 
-`random_state` fixes everything sc does: bootstrap draws, feature subsampling, cross-validation folds and the tuning search. Output is bit-identical at any `n_threads`. Sample and feature ids are sorted before encoding, so the order DuckDB scans rows in cannot change the result, and prediction always uses the model's own feature order.
+`random_state` fixes everything sc does: bootstrap draws, feature subsampling, cross-validation folds and the tuning search. Output is bit-identical at any `threads`. Sample and feature ids are sorted before encoding, so the order DuckDB scans rows in cannot change the result, and prediction always uses the model's own feature order.
 
 ```sql
 -- Same seed, different thread counts: identical models.
 CREATE TABLE a AS SELECT * FROM fit_regressor('counts', 'meta', name := 'a', random_state := 7);
-CREATE TABLE b AS SELECT * FROM fit_regressor('counts', 'meta', name := 'b', random_state := 7, n_threads := 8);
+CREATE TABLE b AS SELECT * FROM fit_regressor('counts', 'meta', name := 'b', random_state := 7, threads := 8);
 SELECT (SELECT md5(model_blob) FROM a) = (SELECT md5(model_blob) FROM b) AS identical;
 ```
 
@@ -197,9 +211,9 @@ CREATE VIEW common AS
              HAVING count(DISTINCT sample_id) >= 0.01 * (SELECT count(DISTINCT sample_id) FROM counts)) USING (feature_id);
 ```
 
-- **Fitting** spends most of its time loading the table into sc, so the cell count matters more than `n_estimators`. Memory grows with threads; `n_threads := 1` trades time for memory.
+- **Cancelling:** `fit_*` and `cross_validate_*` cannot be cancelled once sc is running; `shap` stops between batches.
 - **`shap`** holds the input table, as prediction does, plus one batch of attributions capped by `max_attributions`; fewer features is the way to go further.
-- **wasm** shares one 4 GiB memory with DuckDB and runs single-threaded, so expect a much lower ceiling than native. `n_threads` has no effect there; results are the same as native. `cross_validate_*` is not yet available there ([#315](https://github.com/the-miint/duckdb-miint/issues/315)).
+- **wasm** shares one 4 GiB memory with DuckDB and runs single-threaded, so expect a much lower ceiling than native. `threads` has no effect there; results are the same as native. `cross_validate_*` is not yet available there ([#315](https://github.com/the-miint/duckdb-miint/issues/315)).
 
 ### Citations
 

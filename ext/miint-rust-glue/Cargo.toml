@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Umbrella crate that bundles rype + sylph into a single staticlib so they
-# share one copy of the Rust standard library. Linking two independent Rust
+# Umbrella crate that bundles rype, sylph and sc into a single staticlib so
+# they share one copy of the Rust standard library. Linking two independent Rust
 # staticlibs into the same binary produces duplicate-symbol errors
 # (rust_eh_personality, std::panicking::EMPTY_PANIC, ...) — this crate is
 # the canonical fix per https://doc.rust-lang.org/reference/linkage.html
@@ -33,8 +33,9 @@ rype  = { path = "../rype",  default-features = false, features = ["arrow-ffi"] 
 sylph = { path = "../sylph", default-features = false, features = ["arrow-ffi"], optional = true }
 # sc-capi is the sc_* C-API (opaque handles + Arrow C Data Interface I/O). It
 # pulls sc-arrow and sc-core transitively. Its build.rs regenerates
-# ext/sc/include/sc.h via cbindgen on every build, so the header the C++ side
-# includes can never drift from the linked symbols.
+# ext/sc/include/sc.h via cbindgen whenever the C API's sources or the crate
+# version change, so the header the C++ side includes follows the linked
+# symbols.
 sc-capi = { path = "../sc/crates/sc-capi" }
 # Only for miint_rust_glue_init (src/lib.rs), which seeds the global pool that
 # rype and sc share. Already in the graph through both, so no new crate.

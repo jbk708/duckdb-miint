@@ -3,6 +3,7 @@
 #include "catalog_utils.hpp"
 #include "id_column_utils.hpp"
 #include "sc_common.hpp"
+#include "unifrac_function_common.hpp"
 #include "sc_coo_builder.hpp"
 #include "sc_rf_common.hpp"
 
@@ -23,6 +24,7 @@ namespace {
 // parsing -- lives in sc_rf_common.
 using sc_rf::ApplyDefaults;
 using sc_rf::ParseForestParameter;
+using sc_rf::RegisterTrainingParameters;
 using sc_rf::ResolveTargetColumn;
 using sc_rf::ScanTrainingInput;
 using sc_rf::ScTrainingInput;
@@ -33,7 +35,8 @@ constexpr int64_t kDefaultCvFolds = 5;
 
 struct ScCvData : public TableFunctionData, public ScTrainingInput {
 	bool classification = false;
-	int32_t n_threads = 0;
+	//! sc's thread count, resolved from `threads` at bind.
+	int32_t threads = 1;
 	sc_rf_params_t params {};
 };
 
@@ -92,12 +95,11 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 	bool n_folds_given = false;
 	bool cv_given = false;
 	params.cv = kDefaultCvFolds;
+	int32_t requested_threads = 0;
 	for (auto &kv : input.named_parameters) {
 		const auto &k = kv.first;
 		const auto &v = kv.second;
-		if (v.IsNull()) {
-			throw InvalidInputException("%s: named parameter '%s' must not be NULL", data->caller, k);
-		}
+		miint::RequireNotNull(k, v, data->caller);
 		if (ParseForestParameter(k, v, classification, data->caller, params)) {
 			continue;
 		}
@@ -114,10 +116,11 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 			}
 		} else if (StringUtil::CIEquals(k, "parameter_tuning")) {
 			params.parameter_tuning = v.GetValue<bool>();
-		} else if (StringUtil::CIEquals(k, "n_threads")) {
-			data->n_threads = miint::ParseNThreads(v, data->caller);
+		} else if (StringUtil::CIEquals(k, "threads")) {
+			requested_threads = v.GetValue<int32_t>();
 		}
 	}
+	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, data->caller);
 	if (n_folds_given && cv_given) {
 		throw InvalidInputException("%s: pass n_folds or cv, not both -- cv is the q2/sklearn spelling of n_folds",
 		                            data->caller);
@@ -187,7 +190,7 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 	}
 
 	miint::ScContext ctx;
-	miint::OpenScContext(context, bind.n_threads, bind.caller, ctx);
+	miint::OpenScContext(bind.threads, bind.caller, ctx);
 
 	sc_cv_result_t res {};
 	const auto st = sc_cross_validate(ctx.ptr, table->get(), targets.array(), targets.schema(), &bind.params, &res);
@@ -279,24 +282,10 @@ void ScCvExecute(ClientContext &context, TableFunctionInput &input, DataChunk &o
 
 TableFunction MakeCvFunction(const char *name, table_function_bind_t bind) {
 	TableFunction fn(name, {LogicalType::VARCHAR, LogicalType::VARCHAR}, ScCvExecute, bind, ScCvInitGlobal);
-	fn.named_parameters["target_column"] = LogicalType::VARCHAR;
+	RegisterTrainingParameters(fn);
 	fn.named_parameters["n_folds"] = LogicalType::BIGINT;
 	fn.named_parameters["cv"] = LogicalType::BIGINT;
 	fn.named_parameters["parameter_tuning"] = LogicalType::BOOLEAN;
-	fn.named_parameters["n_estimators"] = LogicalType::BIGINT;
-	fn.named_parameters["random_state"] = LogicalType::BIGINT;
-	fn.named_parameters["n_threads"] = LogicalType::INTEGER;
-	fn.named_parameters["max_depth"] = LogicalType::BIGINT;
-	fn.named_parameters["criterion"] = LogicalType::VARCHAR;
-	fn.named_parameters["min_weight_fraction_leaf"] = LogicalType::DOUBLE;
-	fn.named_parameters["min_impurity_decrease"] = LogicalType::DOUBLE;
-	fn.named_parameters["bootstrap"] = LogicalType::BOOLEAN;
-	// ANY for sklearn's tagged unions: an integer means a count, a float a
-	// fraction. See MakeFitFunction.
-	fn.named_parameters["max_features"] = LogicalType::ANY;
-	fn.named_parameters["min_samples_split"] = LogicalType::ANY;
-	fn.named_parameters["min_samples_leaf"] = LogicalType::ANY;
-	fn.named_parameters["max_samples"] = LogicalType::ANY;
 	return fn;
 }
 

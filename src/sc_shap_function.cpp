@@ -4,6 +4,7 @@
 #include "miint_log.hpp"
 #include "id_column_utils.hpp"
 #include "sc_common.hpp"
+#include "unifrac_function_common.hpp"
 #include "sc_coo_builder.hpp"
 
 #include "duckdb/common/string_util.hpp"
@@ -44,7 +45,8 @@ struct ScShapData : public TableFunctionData {
 	bool max_attributions_set = false;
 	//! Samples per batch; 0 means derive it from max_attributions.
 	int64_t batch_size = 0;
-	int32_t n_threads = 0;
+	//! sc's thread count, resolved from `threads` at bind.
+	int32_t threads = 1;
 	//! The data's id types. Its feature_id type equals the model's, which bind
 	//! enforces, so it also types the feature_id output.
 	miint::ScIdTypes id_types;
@@ -102,12 +104,11 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 	if (data->data_relation.empty() || data->model_relation.empty()) {
 		throw InvalidInputException("shap: data and model relation names must not be empty");
 	}
+	int32_t requested_threads = 0;
 	for (auto &kv : input.named_parameters) {
 		const auto &k = kv.first;
 		const auto &v = kv.second;
-		if (v.IsNull()) {
-			throw InvalidInputException("shap: named parameter '%s' must not be NULL", k);
-		}
+		miint::RequireNotNull(k, v, "shap");
 		if (StringUtil::CIEquals(k, "name")) {
 			data->model_name = v.GetValue<string>();
 		} else if (StringUtil::CIEquals(k, "predicted_class_only")) {
@@ -130,10 +131,11 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 			if (data->batch_size <= 0) {
 				throw InvalidInputException("shap: batch_size must be > 0 (got %lld)", (int64_t)data->batch_size);
 			}
-		} else if (StringUtil::CIEquals(k, "n_threads")) {
-			data->n_threads = miint::ParseNThreads(v, "shap");
+		} else if (StringUtil::CIEquals(k, "threads")) {
+			requested_threads = v.GetValue<int32_t>();
 		}
 	}
+	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, "shap");
 	if (data->batch_size > 0 && data->max_attributions_set) {
 		throw InvalidInputException("shap: pass batch_size or max_attributions, not both -- batch_size fixes the "
 		                            "samples per batch, max_attributions derives it from a memory budget");
@@ -142,7 +144,7 @@ unique_ptr<FunctionData> ScShapBind(ClientContext &context, TableFunctionBindInp
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, "shap");
 		const auto header = miint::ReadModelHeader(conn, data->model_relation, data->model_name, "shap", true);
-		data->classification = header.task == "classification";
+		data->classification = header.task == miint::kClassification;
 		miint::RequireModelFeatureIdType(header.feature_id_type, data->id_types.feature_id, "shap",
 		                                 data->model_relation, data->model_name, data->data_relation);
 	}
@@ -213,10 +215,10 @@ void SelectFeatures(const double *row, size_t n_features, int64_t top_k, std::ve
 void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState &gstate) {
 	auto conn = MakeReadOnlyHelperConnection(context);
 
-	miint::OpenScContext(context, bind.n_threads, "shap", gstate.ctx);
+	miint::OpenScContext(bind.threads, "shap", gstate.ctx);
 	miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "shap",
-	                             bind.classification ? "classification" : "regression", bind.id_types.feature_id,
-	                             gstate.ctx.ptr, gstate.model);
+	                             miint::TaskName(bind.classification), bind.id_types.feature_id, gstate.ctx.ptr,
+	                             gstate.model);
 
 	// A sample left with no known features still gets a full, additive
 	// explanation -- of an all-zero row. Nothing in the numbers says so.
@@ -378,6 +380,11 @@ void ScShapExecute(ClientContext &context, TableFunctionInput &input, DataChunk 
 				break;
 			}
 			if (gstate.cur_sample >= gstate.batch_first + gstate.batch_count) {
+				// One Execute can run many batches; each is a call into sc that
+				// cannot be stopped once begun, so check between them.
+				if (context.interrupted) {
+					throw InterruptException();
+				}
 				LoadBatch(bind, gstate, gstate.cur_sample);
 			}
 			// Output-major within a sample: [o0f0, o0f1, ..., o1f0, ...].
@@ -421,7 +428,7 @@ void ScShapFunction::Register(ExtensionLoader &loader) {
 	fn.named_parameters["top_k"] = LogicalType::BIGINT;
 	fn.named_parameters["max_attributions"] = LogicalType::BIGINT;
 	fn.named_parameters["batch_size"] = LogicalType::BIGINT;
-	fn.named_parameters["n_threads"] = LogicalType::INTEGER;
+	fn.named_parameters["threads"] = LogicalType::INTEGER;
 	loader.RegisterFunction(fn);
 }
 

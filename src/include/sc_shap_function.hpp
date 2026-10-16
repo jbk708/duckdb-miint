@@ -4,7 +4,7 @@
 
 namespace duckdb {
 
-//! shap(data, model[, name, predicted_class_only, top_k, max_attributions, batch_size, n_threads])
+//! shap(data, model[, name, predicted_class_only, top_k, max_attributions, batch_size, threads])
 //!   -> (sample_id, class, feature_id, shap_value, base_value, known_feature_fraction)
 //!
 //! Path-dependent TreeSHAP: how much each feature pushed one sample's prediction

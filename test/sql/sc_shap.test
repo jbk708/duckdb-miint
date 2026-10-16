@@ -490,9 +490,9 @@ SELECT * FROM shap('nf_counts', 'nf_bad');
 shap: non-finite attribution -inf for sample 's1', feature 'f1'; the model in 'nf_bad' is malformed
 
 statement error
-SELECT * FROM shap('shp_few', 'shp_models', name := 'reg', n_threads := -1);
+SELECT * FROM shap('shp_few', 'shp_models', name := 'reg', threads := -1);
 ----
-shap: n_threads must be >= 0 (0 = DuckDB's threads setting), got -1
+shap: threads must be >= 0 (got -1; use 0 to follow DuckDB's thread count)
 
 # Dropped cells are reported, and an all-zero sample is named as such: its
 # attributions still add up, but they explain a row of zeros.
@@ -505,5 +505,24 @@ CREATE TABLE shp_cov_out AS SELECT * FROM shap('shp_cov', 'shp_models', name := 
 query I
 SELECT bool_or(message LIKE 'shap: dropped 2 cell(s) from ''shp_cov''%1 sample(s) retained no features at all; their attributions explain an all-zero row%')
 FROM miint_warnings();
+----
+true
+
+# One split: every sample's whole attribution sits on the feature it splits on,
+# the one feature_importances credits, and every other feature gets zero. A swap
+# of feature labels between columns would move it.
+query II
+SELECT count(DISTINCT sample_id),
+       bool_and(feature_id = (SELECT feature_id FROM feature_importances('nf_model') WHERE importance = 1.0))
+FROM shap('nf_counts', 'nf_model') WHERE shap_value <> 0;
+----
+6	true
+
+# The thread count does not change the attributions.
+query I
+SELECT (SELECT md5(string_agg(sample_id || feature_id || shap_value::VARCHAR, ',' ORDER BY sample_id, feature_id))
+        FROM shap('shp_few', 'shp_models', name := 'reg', threads := 1))
+     = (SELECT md5(string_agg(sample_id || feature_id || shap_value::VARCHAR, ',' ORDER BY sample_id, feature_id))
+        FROM shap('shp_few', 'shp_models', name := 'reg', threads := 4));
 ----
 true

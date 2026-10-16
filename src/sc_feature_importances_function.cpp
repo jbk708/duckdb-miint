@@ -38,9 +38,7 @@ unique_ptr<FunctionData> ScImportancesBind(ClientContext &context, TableFunction
 		throw InvalidInputException("feature_importances: model relation name must not be empty");
 	}
 	for (auto &kv : input.named_parameters) {
-		if (kv.second.IsNull()) {
-			throw InvalidInputException("feature_importances: named parameter '%s' must not be NULL", kv.first);
-		}
+		miint::RequireNotNull(kv.first, kv.second, "feature_importances");
 		if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
@@ -69,7 +67,7 @@ void ScImportancesExecute(ClientContext &context, TableFunctionInput &input, Dat
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(context, 0, "feature_importances", ctx);
+		miint::OpenScContext(0, "feature_importances", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "feature_importances", "",
 		                             bind.feature_id_type, ctx.ptr, model);

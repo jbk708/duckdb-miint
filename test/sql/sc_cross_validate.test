@@ -340,12 +340,21 @@ SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', max_samples := 0
 max_samples is only meaningful with bootstrap := true
 
 statement error
-SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', n_threads := -1);
+SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', threads := -1);
 ----
-cross_validate_regressor: n_threads must be >= 0 (0 = DuckDB's threads setting), got -1
+cross_validate_regressor: threads must be >= 0 (got -1; use 0 to follow DuckDB's thread count)
 
 # Range checks run when the query is planned, as for fit.
 statement error
 SELECT * FROM cross_validate_regressor('cv_counts', 'cv_month', min_impurity_decrease := -0.5);
 ----
 cross_validate_regressor: min_impurity_decrease must be finite and >= 0 (got -0.5)
+
+# The thread count does not change the folds, the forests or the scores.
+query I
+SELECT (SELECT md5(string_agg(sample_id || prediction || fold_scores::VARCHAR || mean_score::VARCHAR, ',' ORDER BY sample_id))
+        FROM cross_validate_classifier('cv_counts', 'cv_stage', n_estimators := 10, n_folds := 3, random_state := 3, threads := 1))
+     = (SELECT md5(string_agg(sample_id || prediction || fold_scores::VARCHAR || mean_score::VARCHAR, ',' ORDER BY sample_id))
+        FROM cross_validate_classifier('cv_counts', 'cv_stage', n_estimators := 10, n_folds := 3, random_state := 3, threads := 4));
+----
+true

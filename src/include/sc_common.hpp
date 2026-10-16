@@ -106,20 +106,28 @@ void TakeArray(ArrowArray &src, ArrowSchema &src_schema, OwnedArrowArray &dst);
 //! could only hold an earlier, unrelated message.
 [[noreturn]] void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status);
 
-//! Open an sc context running on `n_threads`, or on DuckDB's `threads` setting
-//! when it is 0, as the extension's other multi-threaded functions do; throws
-//! as `caller` on failure.
+//! Open an sc context with a pool of `n_threads` threads, throwing as `caller`
+//! on failure. Callers that run sc in parallel pass the count bind resolved
+//! from `threads`; 0 builds no pool, for a context only used to load a model.
 //!
 //! `n_threads` is ignored under Emscripten. DuckDB-Wasm has one thread, the
 //! global pool is seeded on it at load (miint_rust_glue_init), and a dedicated
 //! pool would need threads it cannot spawn. sc's results are identical at any
 //! thread count, so only speed differs.
-void OpenScContext(duckdb::ClientContext &context, int32_t n_threads, const char *caller, ScContext &out);
+void OpenScContext(int32_t n_threads, const char *caller, ScContext &out);
 
-//! Parse `n_threads`: 0 for DuckDB's `threads` setting, or a count. sc reads
-//! any value <= 0 as "every core", so a negative one is refused rather than
-//! passed on.
-int32_t ParseNThreads(const duckdb::Value &v, const char *caller);
+//! The `task` values a fit writes into its model row and bind reads back.
+constexpr const char *kClassification = "classification";
+constexpr const char *kRegression = "regression";
+
+inline const char *TaskName(bool classification) {
+	return classification ? kClassification : kRegression;
+}
+
+//! Refuse a NULL named parameter. Omitting one means its default; a NULL would
+//! otherwise read as that default, or for `name` select the relation's only
+//! model.
+void RequireNotNull(const std::string &parameter, const duckdb::Value &v, const char *caller);
 
 //! What bind reads from a model row to type its output.
 struct ScModelHeader {

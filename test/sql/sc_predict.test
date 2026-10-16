@@ -340,6 +340,11 @@ SELECT * FROM predict('p_test', 'reg');
 ----
 so this call is ambiguous
 
+statement error
+SELECT * FROM predict('p_test', 'reg');
+----
+SELECT * FROM predict('counts', 'reg', name := 'my_model');
+
 # The name is a value, never SQL. Only the literal comes from the caller and it
 # is escaped, so a quote cannot start a new clause -- which is why `name :=` is
 # safe where a general `where :=` would not be.
@@ -359,9 +364,9 @@ predict: named parameter 'name' must not be NULL
 
 # 0 means one thread per core. A negative count is not a smaller version of that.
 statement error
-SELECT * FROM predict('p_test', 'p_model', n_threads := -1);
+SELECT * FROM predict('p_test', 'p_model', threads := -1);
 ----
-predict: n_threads must be >= 0 (0 = DuckDB's threads setting), got -1
+predict: threads must be >= 0 (got -1; use 0 to follow DuckDB's thread count)
 
 # --- dropped cells are reported, not just counted in known_feature_fraction ---
 

@@ -139,7 +139,8 @@ TEST_CASE("ScCooBuilder emits arrays sc will accept", "[sc_coo]") {
 		CHECK(std::string(e.schema->format) == e.format);
 		CHECK(e.array->null_count == 0);
 		CHECK(e.array->offset == 0);
-		CHECK(e.array->n_buffers == e.n_buffers);
+		// REQUIRE: buffers[0] is read below.
+		REQUIRE(e.array->n_buffers == e.n_buffers);
 		CHECK(e.array->n_children == 0);
 		CHECK(e.array->release != nullptr);
 		// No nulls anywhere, so the validity buffer is absent -- a NULL
@@ -410,7 +411,13 @@ TEST_CASE("ScCooBatcher cuts consecutive samples into standalone tables", "[sc_c
 		const auto rows = ReadInt64(t.get()->rows);
 		const auto cols = ReadInt64(t.get()->cols);
 		const auto vals = ReadFloat64(t.get()->vals);
+		REQUIRE(cols.size() == rows.size());
+		REQUIRE(vals.size() == rows.size());
 		for (size_t i = 0; i < rows.size(); i++) {
+			REQUIRE(rows[i] >= 0);
+			REQUIRE(static_cast<size_t>(rows[i]) < t.SampleIds().size());
+			REQUIRE(cols[i] >= 0);
+			REQUIRE(static_cast<size_t>(cols[i]) < t.FeatureIds().size());
 			out.emplace_back(t.SampleIds()[static_cast<size_t>(rows[i])], t.FeatureIds()[static_cast<size_t>(cols[i])],
 			                 vals[i]);
 		}

@@ -53,12 +53,24 @@ FROM fit_regressor('train_data', 'train_metadata', n_estimators := 10, random_st
 ----
 true
 
-# Same seed must give a byte-identical model. sc guarantees determinism, but only
-# if the row order reaching it is stable -- which is what the builder's sorted
-# dictionaries are for. A regression here means SQL row order leaked through.
+# Same seed, same model.
 query I
 SELECT (SELECT model_blob FROM fit_regressor('train_data','train_metadata', n_estimators := 10, random_state := 42, name := 'm3'))
      = (SELECT model_blob FROM fit_regressor('train_data','train_metadata', n_estimators := 10, random_state := 42, name := 'm4'));
+----
+true
+
+# The same cells arriving in another order give the same model too: the
+# builder sorts its dictionaries, so SQL row order cannot reach sc.
+statement ok
+CREATE TABLE train_data_shuffled AS SELECT * FROM train_data ORDER BY hash(feature_id || sample_id);
+
+statement ok
+CREATE TABLE train_metadata_shuffled AS SELECT * FROM train_metadata ORDER BY hash(sample_id);
+
+query I
+SELECT (SELECT model_blob FROM fit_regressor('train_data','train_metadata', n_estimators := 10, random_state := 42, name := 'm3'))
+     = (SELECT model_blob FROM fit_regressor('train_data_shuffled','train_metadata_shuffled', n_estimators := 10, random_state := 42, name := 'm3'));
 ----
 true
 
@@ -197,6 +209,17 @@ fit_regressor: reading data relation 'late_bad' failed
 statement ok
 RESET threads;
 
+# The targets are read before the counts, so a bad label fails without the count
+# scan: here the NULL label is reported, not the count table's own late error.
+statement ok
+CREATE TABLE late_bad_null_meta AS
+  SELECT CASE WHEN i = 3 THEN NULL ELSE 's' || i END AS sample_id, i::DOUBLE AS value FROM range(10) r(i);
+
+statement error
+SELECT * FROM fit_regressor('late_bad', 'late_bad_null_meta', name := 'm11d');
+----
+fit_regressor: NULL in metadata relation 'late_bad_null_meta'
+
 # A non-numeric target cannot be a regression label.
 statement error
 SELECT * FROM fit_regressor('train_data', 'class_metadata', name := 'm12');
@@ -275,21 +298,63 @@ no 'sample_id' column
 # Unset parameters take sklearn's RandomForest defaults, so an unparameterised
 # call matches what the same data would give in scikit-learn.
 
-# max_features / min_samples_* / max_samples are sklearn's tagged unions: an
-# integer means a count, a float means a fraction. SQL literal types already
-# carry that distinction, so the named parameters take ANY and dispatch on it.
-query I
-SELECT count(*) FROM (
-  SELECT model_blob FROM fit_classifier('train_data','class_metadata', max_features := 'sqrt',  random_state := 1, name := 'm14')
-  UNION ALL SELECT model_blob FROM fit_classifier('train_data','class_metadata', max_features := 'log2', random_state := 1, name := 'm15')
-  UNION ALL SELECT model_blob FROM fit_classifier('train_data','class_metadata', max_features := 'all',  random_state := 1, name := 'm16')
-  UNION ALL SELECT model_blob FROM fit_classifier('train_data','class_metadata', max_features := 0.5,    random_state := 1, name := 'm17')
-  UNION ALL SELECT model_blob FROM fit_classifier('train_data','class_metadata', max_features := 3,      random_state := 1, name := 'm18'));
-----
-5
-
 # A parameter that changes the fit must change the model, or it is being
-# silently dropped on the way to sc.
+# silently dropped on the way to sc. 64 features, so 'sqrt' (8), 'log2' (6), a
+# count, a fraction and 'all' each choose a different number of candidates.
+statement ok
+CREATE TABLE hp_counts AS
+  SELECT 's' || i AS sample_id, 'f' || j AS feature_id,
+         ((i * 31 + j * 17) % 23 + CASE WHEN j < 8 THEN (i % 3) * 5 ELSE 0 END)::DOUBLE AS value
+  FROM range(60) t(i), range(64) u(j);
+
+statement ok
+CREATE TABLE hp_meta AS SELECT 's' || i AS sample_id, 'c' || (i % 3) AS label FROM range(60) t(i);
+
+query TT
+WITH d AS (SELECT md5(model_blob) AS m FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, name := 'd'))
+SELECT p, m <> (SELECT m FROM d) FROM (
+            SELECT 'bootstrap' AS p, md5(model_blob) AS m FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, bootstrap := false, name := 'v')
+  UNION ALL SELECT 'criterion', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, criterion := 'entropy', name := 'v')
+  UNION ALL SELECT 'max_depth', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_depth := 2, name := 'v')
+  UNION ALL SELECT 'max_features all', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 'all', name := 'v')
+  UNION ALL SELECT 'max_features count', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 3, name := 'v')
+  UNION ALL SELECT 'max_features fraction', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 0.5, name := 'v')
+  UNION ALL SELECT 'max_features log2', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 'log2', name := 'v')
+  UNION ALL SELECT 'max_samples count', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 20, name := 'v')
+  UNION ALL SELECT 'max_samples fraction', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 0.5, name := 'v')
+  UNION ALL SELECT 'min_impurity_decrease', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, min_impurity_decrease := 0.05, name := 'v')
+  UNION ALL SELECT 'min_samples_leaf count', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, min_samples_leaf := 8, name := 'v')
+  UNION ALL SELECT 'min_samples_leaf fraction', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, min_samples_leaf := 0.2, name := 'v')
+  UNION ALL SELECT 'min_samples_split count', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, min_samples_split := 20, name := 'v')
+  UNION ALL SELECT 'min_samples_split fraction', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, min_samples_split := 0.4, name := 'v')
+  UNION ALL SELECT 'min_weight_fraction_leaf', md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, min_weight_fraction_leaf := 0.2, name := 'v')
+) ORDER BY p;
+----
+bootstrap	true
+criterion	true
+max_depth	true
+max_features all	true
+max_features count	true
+max_features fraction	true
+max_features log2	true
+max_samples count	true
+max_samples fraction	true
+min_impurity_decrease	true
+min_samples_leaf count	true
+min_samples_leaf fraction	true
+min_samples_split count	true
+min_samples_split fraction	true
+min_weight_fraction_leaf	true
+
+# The spellings sklearn's defaults go by are accepted too, and mean the default.
+query TT
+SELECT (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, name := 'd'))
+     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 'sqrt', name := 'd')),
+       (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, name := 'd'))
+     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 'none', name := 'd'));
+----
+true	true
+
 query I
 SELECT (SELECT model_blob FROM fit_classifier('train_data','class_metadata', random_state := 1, name := 'm19'))
      = (SELECT model_blob FROM fit_classifier('train_data','class_metadata', random_state := 1, max_depth := 1, name := 'm20'));
@@ -308,12 +373,19 @@ SELECT n_estimators FROM fit_classifier('train_data','class_metadata', n_estimat
 ----
 33
 
-statement ok
-SELECT * FROM fit_classifier('train_data','class_metadata', criterion := 'entropy',
-                                min_samples_split := 3, min_samples_leaf := 0.25,
-                                min_impurity_decrease := 0.001, max_samples := 0.5, name := 'm24');
-
 # --- bad hyperparameters fail at bind, before any scanning ---
+
+# A count or fraction must be written as a number; any other type would be read
+# as one, `true` as 1.0, "every feature".
+statement error
+EXPLAIN SELECT * FROM fit_classifier('train_data', 'class_metadata', max_features := true, name := 'mb');
+----
+fit_classifier: max_features must be a count or a fraction, got a BOOLEAN
+
+statement error
+EXPLAIN SELECT * FROM fit_classifier('train_data', 'class_metadata', min_samples_leaf := DATE '2020-01-01', name := 'mb');
+----
+fit_classifier: min_samples_leaf must be a count or a fraction, got a DATE
 
 statement error
 SELECT * FROM fit_classifier('train_data', 'class_metadata', max_features := 'banana', name := 'm25');
@@ -567,9 +639,9 @@ SELECT (SELECT count(DISTINCT feature_id) FROM gm_data),
 # proves the check happens at bind.
 
 statement error
-EXPLAIN SELECT * FROM fit_regressor('train_data', 'train_metadata', n_threads := -1, name := 'nt');
+EXPLAIN SELECT * FROM fit_regressor('train_data', 'train_metadata', threads := -1, name := 'nt');
 ----
-fit_regressor: n_threads must be >= 0 (0 = DuckDB's threads setting), got -1
+fit_regressor: threads must be >= 0 (got -1; use 0 to follow DuckDB's thread count)
 
 statement error
 EXPLAIN SELECT * FROM fit_regressor('train_data', 'train_metadata', min_weight_fraction_leaf := 0.6, name := 'w');
@@ -594,7 +666,7 @@ fit_classifier: min_impurity_decrease must be finite and >= 0 (got nan)
 # The edges are allowed.
 query I
 SELECT n_estimators FROM fit_regressor('train_data', 'train_metadata', n_estimators := 3, min_weight_fraction_leaf := 0.5,
-                                  min_impurity_decrease := 0.0, n_threads := 0, name := 'edges');
+                                  min_impurity_decrease := 0.0, threads := 0, name := 'edges');
 ----
 3
 
@@ -647,6 +719,67 @@ SELECT count(*) FROM cross_validate_classifier('odd counts', 'odd "meta"', n_fol
 ----
 6
 
+# A name that would end the statement if spliced in is one identifier too: each
+# call reads the relation it names, gives what the plain names give, and runs
+# nothing else.
+statement ok
+CREATE TABLE injection_victim AS SELECT 1 AS x;
+
+statement ok
+CREATE TABLE "train_data; DROP TABLE injection_victim; --" AS SELECT * FROM train_data;
+
+statement ok
+CREATE TABLE "class_metadata""; DROP TABLE injection_victim; --" AS SELECT * FROM class_metadata;
+
+statement ok
+CREATE TABLE "models; DROP TABLE injection_victim; --" AS
+  SELECT * FROM fit_classifier('train_data; DROP TABLE injection_victim; --',
+                               'class_metadata"; DROP TABLE injection_victim; --',
+                               n_estimators := 5, random_state := 1, name := 'evil');
+
+query III
+SELECT (SELECT md5(model_blob) FROM "models; DROP TABLE injection_victim; --")
+     = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 5, random_state := 1, name := 'evil')),
+       (SELECT count(*) FROM predict('train_data; DROP TABLE injection_victim; --', 'models; DROP TABLE injection_victim; --')),
+       (SELECT count(*) FROM feature_importances('models; DROP TABLE injection_victim; --'));
+----
+true	6	5
+
+query I
+SELECT count(*) FROM injection_victim;
+----
+1
+
+# target_column names a column, quoted like a relation, and the fit uses that
+# column: with two candidates, naming either gives the model a one-column
+# metadata of the same labels gives.
+statement ok
+CREATE TABLE two_targets AS
+  SELECT sample_id, CASE WHEN sample_id IN ('Sample1', 'Sample4') THEN 'x' ELSE 'y' END AS other, value AS "body site"
+  FROM class_metadata;
+
+statement ok
+CREATE TABLE body_site_only AS SELECT sample_id, "body site" FROM two_targets;
+
+statement ok
+CREATE TABLE other_only AS SELECT sample_id, other FROM two_targets;
+
+query III
+SELECT (SELECT md5(model_blob) FROM fit_classifier('train_data', 'two_targets', target_column := 'body site', n_estimators := 5, random_state := 1, name := 't'))
+     = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'body_site_only', n_estimators := 5, random_state := 1, name := 't')),
+       (SELECT md5(model_blob) FROM fit_classifier('train_data', 'two_targets', target_column := 'other', n_estimators := 5, random_state := 1, name := 't'))
+     = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'other_only', n_estimators := 5, random_state := 1, name := 't')),
+       (SELECT md5(model_blob) FROM fit_classifier('train_data', 'body_site_only', n_estimators := 5, random_state := 1, name := 't'))
+     = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'other_only', n_estimators := 5, random_state := 1, name := 't'));
+----
+true	true	false
+
+query I
+SELECT list(actual ORDER BY sample_id)
+FROM cross_validate_classifier('train_data', 'two_targets', target_column := 'body site', n_folds := 2, n_estimators := 5);
+----
+[gut, gut, gut, skin, skin, skin]
+
 # --- NULL ids and NULL metadata ---
 #
 # A NULL id or label is a broken join upstream, not a sample or class of its
@@ -684,15 +817,41 @@ SELECT * FROM fit_regressor('train_data', 'null_meta_sample', name := 'nms');
 ----
 fit_regressor: NULL in metadata relation 'null_meta_sample'
 
+# A NULL written as a literal reaches the scan as a constant vector rather than a
+# flat one with a validity mask; it is refused all the same.
+statement ok
+CREATE VIEW const_null_value AS SELECT sample_id, feature_id, NULL::DOUBLE AS value FROM train_data;
+
+statement error
+SELECT * FROM fit_regressor('const_null_value', 'train_metadata', name := 'cn');
+----
+fit_regressor: NULL in data relation 'const_null_value'
+
+statement ok
+CREATE VIEW const_null_sample AS SELECT NULL::VARCHAR AS sample_id, feature_id, value FROM train_data;
+
+statement error
+SELECT * FROM fit_regressor('const_null_sample', 'train_metadata', name := 'cn');
+----
+fit_regressor: NULL in data relation 'const_null_sample'
+
+statement ok
+CREATE VIEW const_null_label AS SELECT sample_id, NULL::VARCHAR AS value FROM class_metadata;
+
+statement error
+SELECT * FROM fit_classifier('train_data', 'const_null_label', name := 'cn');
+----
+fit_classifier: NULL in metadata relation 'const_null_label'
+
 # --- thread count does not change the model ---
 #
 # Bootstrap draws and feature subsampling are seeded per tree, so trees grown on
 # different threads come out the same; the docs promise byte-identical models.
 
 query II
-SELECT (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 40, random_state := 5, n_threads := 1, name := 't'))
-     = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 40, random_state := 5, n_threads := 4, name := 't')),
-       (SELECT md5(model_blob) FROM fit_regressor('train_data', 'train_metadata', n_estimators := 40, random_state := 5, n_threads := 1, name := 't'))
-     = (SELECT md5(model_blob) FROM fit_regressor('train_data', 'train_metadata', n_estimators := 40, random_state := 5, n_threads := 4, name := 't'));
+SELECT (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 40, random_state := 5, threads := 1, name := 't'))
+     = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 40, random_state := 5, threads := 4, name := 't')),
+       (SELECT md5(model_blob) FROM fit_regressor('train_data', 'train_metadata', n_estimators := 40, random_state := 5, threads := 1, name := 't'))
+     = (SELECT md5(model_blob) FROM fit_regressor('train_data', 'train_metadata', n_estimators := 40, random_state := 5, threads := 4, name := 't'));
 ----
 true	true

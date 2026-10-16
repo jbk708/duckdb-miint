@@ -96,6 +96,30 @@ SELECT DISTINCT typeof(feature_id) FROM feature_importances('models', name := 'u
 ----
 UUID
 
+query II
+SELECT DISTINCT typeof(sample_id), count(*) OVER () FROM predict('u_counts', 'models', name := 'u');
+----
+UUID	20
+
+query I
+SELECT DISTINCT typeof(sample_id) FROM predict_proba('u_counts', 'models', name := 'u');
+----
+UUID
+
+query I
+SELECT DISTINCT typeof(sample_id) FROM cross_validate_classifier('b_counts', 'b_meta', n_folds := 2, n_estimators := 5);
+----
+BIGINT
+
+# The regressor's path, with a numeric target.
+statement ok
+CREATE TABLE b_month AS SELECT sample_id, sample_id * 1.5 AS month FROM b_meta;
+
+query II
+SELECT DISTINCT typeof(sample_id), typeof(prediction) FROM cross_validate_regressor('b_counts', 'b_month', n_folds := 2, n_estimators := 5);
+----
+BIGINT	DOUBLE
+
 # The round trip is exact: every returned id joins back to the input natively.
 query I
 SELECT count(*) FROM shap('b_counts', 'models', name := 'b') s
@@ -103,6 +127,13 @@ SELECT count(*) FROM shap('b_counts', 'models', name := 'b') s
      OR s.feature_id NOT IN (SELECT feature_id FROM b_counts);
 ----
 0
+
+query II
+SELECT count(DISTINCT s.sample_id), count(*) FILTER (WHERE s.sample_id NOT IN (SELECT sample_id FROM u_counts)
+                                                     OR s.feature_id NOT IN (SELECT feature_id FROM u_counts))
+FROM shap('u_counts', 'models', name := 'u') s;
+----
+20	0
 
 query I
 SELECT count(*) FROM predict('u_counts', 'models', name := 'u') p SEMI JOIN u_meta USING (sample_id);

@@ -51,3 +51,10 @@ query I
 SELECT version FROM miint_versions() WHERE library = 'LBFGS++';
 ----
 0.4.0
+
+# sc_version() is the linked sc crate's own version, beside the git pin
+# miint_versions() reports for it.
+query I
+SELECT regexp_matches(sc_version(), '^[0-9]+\.[0-9]+\.[0-9]+');
+----
+true

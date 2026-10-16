@@ -158,6 +158,12 @@ SELECT * FROM predict_proba('pp_data', 'pp_reg', name := 'reg');
 ----
 is a regressor, which has no classes
 
+# The remedy carries the name over, so it runs on a table of several models.
+statement error
+SELECT * FROM predict_proba('pp_data', 'pp_reg', name := 'reg');
+----
+SELECT * FROM predict('pp_data', 'pp_reg', name := 'reg');
+
 statement error
 SELECT * FROM predict_proba('pp_models', 'pp_models', name := 'site');
 ----
@@ -186,6 +192,15 @@ SELECT * FROM predict_proba('pp_data', 'pp_binary', name := NULL);
 predict_proba: named parameter 'name' must not be NULL
 
 statement error
-SELECT * FROM predict_proba('pp_data', 'pp_binary', n_threads := -1);
+SELECT * FROM predict_proba('pp_data', 'pp_binary', threads := -1);
 ----
-predict_proba: n_threads must be >= 0 (0 = DuckDB's threads setting), got -1
+predict_proba: threads must be >= 0 (got -1; use 0 to follow DuckDB's thread count)
+
+# The thread count does not change the probabilities.
+query I
+SELECT (SELECT md5(string_agg(sample_id || class || probability::VARCHAR, ',' ORDER BY sample_id, class))
+        FROM predict_proba('pp_data', 'pp_models', name := 'site', threads := 1))
+     = (SELECT md5(string_agg(sample_id || class || probability::VARCHAR, ',' ORDER BY sample_id, class))
+        FROM predict_proba('pp_data', 'pp_models', name := 'site', threads := 4));
+----
+true

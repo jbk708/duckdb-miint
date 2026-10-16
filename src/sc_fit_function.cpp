@@ -3,6 +3,7 @@
 #include "catalog_utils.hpp"
 #include "sc_coo_builder.hpp"
 #include "sc_common.hpp"
+#include "unifrac_function_common.hpp"
 #include "sc_rf_common.hpp"
 
 #include "duckdb/common/string_util.hpp"
@@ -25,6 +26,7 @@ namespace {
 // forest-parameter parsing -- lives in sc_rf_common.
 using sc_rf::ApplyDefaults;
 using sc_rf::ParseForestParameter;
+using sc_rf::RegisterTrainingParameters;
 using sc_rf::ResolveTargetColumn;
 using sc_rf::ScanTrainingInput;
 using sc_rf::ScTrainingInput;
@@ -40,7 +42,8 @@ struct ScFitData : public TableFunctionData, public ScTrainingInput {
 	//! The algorithm, echoed into the output so a row says what produced it.
 	string model = "random_forest";
 	bool classification = false;
-	int32_t n_threads = 0;
+	//! sc's thread count, resolved from `threads` at bind.
+	int32_t threads = 1;
 	// Defaults are sklearn's RandomForest{Classifier,Regressor} defaults, so an
 	// unparameterised call matches what a user would get from scikit-learn.
 	// `criterion` and `max_features` differ by task, so they are resolved in
@@ -67,12 +70,11 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 
 	ApplyDefaults(data->params, classification);
 	auto &params = data->params;
+	int32_t requested_threads = 0;
 	for (auto &kv : input.named_parameters) {
 		const auto &k = kv.first;
 		const auto &v = kv.second;
-		if (v.IsNull()) {
-			throw InvalidInputException("%s: named parameter '%s' must not be NULL", data->caller, k);
-		}
+		miint::RequireNotNull(k, v, data->caller);
 		if (ParseForestParameter(k, v, classification, data->caller, params)) {
 			continue;
 		}
@@ -83,8 +85,8 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 			}
 		} else if (StringUtil::CIEquals(k, "target_column")) {
 			data->target_column = v.GetValue<string>();
-		} else if (StringUtil::CIEquals(k, "n_threads")) {
-			data->n_threads = miint::ParseNThreads(v, data->caller);
+		} else if (StringUtil::CIEquals(k, "threads")) {
+			requested_threads = v.GetValue<int32_t>();
 		} else if (StringUtil::CIEquals(k, "model")) {
 			const auto m = v.GetValue<string>();
 			if (!StringUtil::CIEquals(m, "random_forest")) {
@@ -93,6 +95,7 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 			data->model = "random_forest"; // normalised, so the column is stable
 		}
 	}
+	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, data->caller);
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->target_column = ResolveTargetColumn(conn, data->metadata_relation, data->target_column, data->caller);
@@ -184,7 +187,7 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	const sc_rf_params_t &params = bind.params;
 
 	miint::ScContext ctx;
-	miint::OpenScContext(context, bind.n_threads, bind.caller, ctx);
+	miint::OpenScContext(bind.threads, bind.caller, ctx);
 
 	// sc borrows the table and the targets for the call and frees neither; both
 	// are released here on scope exit. Fit the model and serialize it into a blob.
@@ -214,7 +217,7 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
 	output.SetValue(3, 0, Value::BIGINT(table->NumSamples()));
 	output.SetValue(4, 0, Value::BIGINT(table->NumFeatures()));
 	output.SetValue(5, 0, Value::BIGINT(params.n_estimators));
-	output.SetValue(6, 0, Value(bind.classification ? "classification" : "regression"));
+	output.SetValue(6, 0, Value(miint::TaskName(bind.classification)));
 	output.SetValue(7, 0, Value::BIGINT(static_cast<int64_t>(params.random_state)));
 	output.SetValue(8, 0, Value(bind.id_types.feature_id.ToString()));
 }
@@ -222,28 +225,10 @@ void ScFitExecute(ClientContext &context, TableFunctionInput &input, DataChunk &
  * Creates a new table function for fitting a model based on sc rf
  */
 TableFunction MakeFitFunction(const char *name, table_function_bind_t bind) {
-	// declare a variable named fn and initialize an instance of the TableFunction class with the constructor call. The
-	// TableFunction constructor takes the following parameters:
 	TableFunction fn(name, {LogicalType::VARCHAR, LogicalType::VARCHAR}, ScFitExecute, bind, ScFitInitGlobal);
+	RegisterTrainingParameters(fn);
 	fn.named_parameters["name"] = LogicalType::VARCHAR;
-	fn.named_parameters["target_column"] = LogicalType::VARCHAR;
-	fn.named_parameters["n_estimators"] = LogicalType::BIGINT;
-	fn.named_parameters["random_state"] = LogicalType::BIGINT;
-	fn.named_parameters["n_threads"] = LogicalType::INTEGER;
 	fn.named_parameters["model"] = LogicalType::VARCHAR;
-	fn.named_parameters["max_depth"] = LogicalType::BIGINT;
-	fn.named_parameters["criterion"] = LogicalType::VARCHAR;
-	fn.named_parameters["min_weight_fraction_leaf"] = LogicalType::DOUBLE;
-	fn.named_parameters["min_impurity_decrease"] = LogicalType::DOUBLE;
-	fn.named_parameters["bootstrap"] = LogicalType::BOOLEAN;
-	// ANY, not a fixed type: these are sklearn's tagged unions, where an integer
-	// means a count and a float means a fraction. SQL literal types carry that
-	// distinction already, so ParseMaxFeatures / ParseMinSamples / ParseMaxSamples
-	// dispatch on what the user wrote.
-	fn.named_parameters["max_features"] = LogicalType::ANY;
-	fn.named_parameters["min_samples_split"] = LogicalType::ANY;
-	fn.named_parameters["min_samples_leaf"] = LogicalType::ANY;
-	fn.named_parameters["max_samples"] = LogicalType::ANY;
 	return fn;
 }
 

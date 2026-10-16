@@ -6,7 +6,6 @@
 #include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 
 #include <cmath>
@@ -114,7 +113,15 @@ const double *OwnedArrowArray::FixedSizeListFloat64Data(const char *what, int64_
 	// offsets, so the outer array has only a validity buffer and the child holds
 	// length * width doubles back to back.
 	RequirePlain(array_, what);
+	if (schema_.n_children != 1 || schema_.children == nullptr || schema_.children[0] == nullptr) {
+		throw InternalException("%s: fixed size list schema must have exactly one child, got %lld", what,
+		                        (int64_t)schema_.n_children);
+	}
+	RequireFormat(*schema_.children[0], "g", what);
 	const ArrowArray &child = *array_.children[0];
+	if (child.n_buffers != 2) {
+		throw InternalException("%s: Float64 child has %lld buffers, expected 2", what, (int64_t)child.n_buffers);
+	}
 	RequirePlain(child, what, true);
 	const auto total = static_cast<size_t>(array_.length * width);
 	if (static_cast<size_t>(child.length) < total) {
@@ -149,22 +156,17 @@ void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status) {
 	throw InvalidInputException("%s: sc error %d%s%s", what, static_cast<int>(status), msg ? ": " : "", msg ? msg : "");
 }
 
-int32_t ParseNThreads(const duckdb::Value &v, const char *caller) {
-	const auto n = v.GetValue<int32_t>();
-	if (n < 0) {
-		throw InvalidInputException("%s: n_threads must be >= 0 (0 = DuckDB's threads setting), got %d", caller, n);
+void RequireNotNull(const std::string &parameter, const duckdb::Value &v, const char *caller) {
+	if (v.IsNull()) {
+		throw InvalidInputException("%s: named parameter '%s' must not be NULL", caller, parameter);
 	}
-	return n;
 }
 
-void OpenScContext(duckdb::ClientContext &context, int32_t n_threads, const char *caller, ScContext &out) {
+void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 	sc_config_t config {};
 #ifndef __EMSCRIPTEN__
-	config.n_threads =
-	    n_threads > 0 ? n_threads
-	                  : duckdb::NumericCast<int32_t>(duckdb::TaskScheduler::GetScheduler(context).NumberOfThreads());
+	config.n_threads = n_threads;
 #else
-	(void)context;
 	(void)n_threads;
 #endif
 	if (auto st = sc_context_new(&config, &out.ptr); st != SC_OK) {
@@ -173,10 +175,12 @@ void OpenScContext(duckdb::ClientContext &context, int32_t n_threads, const char
 	}
 }
 
-//! One place for every "which model did you mean" failure, so the three cases
-//! read the same wherever they are raised.
+//! One place for every "which model did you mean" failure, so the four cases
+//! read the same wherever they are raised. `takes_data` says whether the
+//! caller's first argument is a data relation, which shapes the call the
+//! remedy shows.
 [[noreturn]] void RejectModelSelection(const char *caller, const std::string &relation, const std::string &name,
-                                       int64_t rows) {
+                                       int64_t rows, bool takes_data) {
 	if (!name.empty() && rows == 0) {
 		throw InvalidInputException("%s: No model named '%s' in relation '%s'.\n\n"
 		                            "Remedy:\n"
@@ -203,9 +207,10 @@ void OpenScContext(duckdb::ClientContext &context, int32_t n_threads, const char
 	throw InvalidInputException("%s: Relation '%s' holds %lld models, so this call is ambiguous.\n\n"
 	                            "Remedy:\n"
 	                            "  Say which one, by the name it was fit with:\n"
-	                            "    SELECT name, task, n_estimators FROM %s;         -- see what is there\n"
-	                            "    ... FROM %s(..., '%s', name := 'my_model');      -- then pick one",
-	                            caller, relation, (int64_t)rows, relation, caller, relation);
+	                            "    SELECT name, task, n_estimators FROM %s;  -- see what is there\n"
+	                            "    SELECT * FROM %s(%s'%s', name := 'my_model');  -- then pick one",
+	                            caller, relation, (int64_t)rows, relation, caller, takes_data ? "'counts', " : "",
+	                            relation);
 }
 
 std::string ModelNameFilter(const std::string &name) {
@@ -290,13 +295,13 @@ ScModelHeader ReadModelHeader(duckdb::Connection &conn, const std::string &relat
 		}
 	}
 	if (rows != 1) {
-		RejectModelSelection(caller, relation, name, rows);
+		RejectModelSelection(caller, relation, name, rows, with_task);
 	}
 
 	ScModelHeader header;
 	if (with_task) {
 		header.task = task.IsNull() ? "" : task.ToString();
-		if (header.task != "classification" && header.task != "regression") {
+		if (header.task != kClassification && header.task != kRegression) {
 			throw InvalidInputException("%s: model relation '%s' has task '%s'; expected 'classification' or "
 			                            "'regression'",
 			                            caller, relation, header.task);
@@ -404,7 +409,7 @@ void ScanCooRelation(duckdb::ClientContext &context, duckdb::Connection &conn, c
 		return chunk;
 	};
 	// UnifiedVectorFormat rather than Vector::GetValue: GetValue builds a
-	// heap-allocating Value per cell, which dominates a 13M-cell scan, while
+	// heap-allocating Value per cell, while
 	// these string_t views are read in place and ScCooBuilder::Append copies an
 	// id only the first time it sees it. Unified rather than flat because a
 	// column may arrive constant- or dictionary-encoded.
@@ -569,7 +574,7 @@ void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation
 	// is no basis for choosing -- and zero usually means an upstream filter ate
 	// it, which is worth saying rather than failing later inside sc.
 	if (rows != 1) {
-		RejectModelSelection(caller, relation, name, rows);
+		RejectModelSelection(caller, relation, name, rows, !task.empty());
 	}
 	if (blob.IsNull()) {
 		throw InvalidInputException("%s: model relation '%s' has a NULL model", caller, relation);

@@ -135,6 +135,11 @@ SELECT * FROM model_features('mf_models');
 so this call is ambiguous
 
 statement error
+SELECT * FROM model_features('mf_models');
+----
+SELECT * FROM model_features('mf_models', name := 'my_model');
+
+statement error
 SELECT * FROM model_features('mf_models', name := 'nope');
 ----
 No model named 'nope'

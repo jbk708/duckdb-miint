@@ -37,9 +37,7 @@ unique_ptr<FunctionData> ScModelFeaturesBind(ClientContext &context, TableFuncti
 		throw InvalidInputException("model_features: model relation name must not be empty");
 	}
 	for (auto &kv : input.named_parameters) {
-		if (kv.second.IsNull()) {
-			throw InvalidInputException("model_features: named parameter '%s' must not be NULL", kv.first);
-		}
+		miint::RequireNotNull(kv.first, kv.second, "model_features");
 		if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
@@ -71,7 +69,7 @@ void ScModelFeaturesExecute(ClientContext &context, TableFunctionInput &input, D
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(context, 0, "model_features", ctx);
+		miint::OpenScContext(0, "model_features", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "model_features", "",
 		                             bind.feature_id_type, ctx.ptr, model);

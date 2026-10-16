@@ -4,9 +4,11 @@
 #include "miint_log.hpp"
 #include "id_column_utils.hpp"
 #include "sc_common.hpp"
+#include "unifrac_function_common.hpp"
 #include "sc_coo_builder.hpp"
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/main/connection.hpp"
 
 #include <string>
@@ -20,7 +22,8 @@ struct ScProbaData : public TableFunctionData {
 	string data_relation;
 	string model_relation;
 	string model_name;
-	int32_t n_threads = 0;
+	//! sc's thread count, resolved from `threads` at bind.
+	int32_t threads = 1;
 	miint::ScIdTypes id_types;
 };
 
@@ -45,30 +48,33 @@ unique_ptr<FunctionData> ScProbaBind(ClientContext &context, TableFunctionBindIn
 	if (data->data_relation.empty() || data->model_relation.empty()) {
 		throw InvalidInputException("predict_proba: data and model relation names must not be empty");
 	}
+	int32_t requested_threads = 0;
 	for (auto &kv : input.named_parameters) {
-		if (kv.second.IsNull()) {
-			throw InvalidInputException("predict_proba: named parameter '%s' must not be NULL", kv.first);
-		}
-		if (StringUtil::CIEquals(kv.first, "n_threads")) {
-			data->n_threads = miint::ParseNThreads(kv.second, "predict_proba");
+		miint::RequireNotNull(kv.first, kv.second, "predict_proba");
+		if (StringUtil::CIEquals(kv.first, "threads")) {
+			requested_threads = kv.second.GetValue<int32_t>();
 		} else if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
 	}
 
+	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, "predict_proba");
 	// Reject a regressor at bind, before any scanning. sc would refuse too, but
 	// only after the whole COO had been marshalled.
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, "predict_proba");
 		const auto header = miint::ReadModelHeader(conn, data->model_relation, data->model_name, "predict_proba", true);
-		if (header.task != "classification") {
-			throw InvalidInputException("predict_proba: The model in '%s' is a regressor, which has no classes to give "
-			                            "probabilities over.\n\n"
-			                            "Remedy:\n"
-			                            "  Use predict for a regressor -- it returns the predicted value directly:\n"
-			                            "    SELECT * FROM predict('%s', '%s');",
-			                            data->model_relation, data->data_relation, data->model_relation);
+		if (header.task != miint::kClassification) {
+			throw InvalidInputException(
+			    "predict_proba: The model in '%s' is a regressor, which has no classes to give "
+			    "probabilities over.\n\n"
+			    "Remedy:\n"
+			    "  Use predict for a regressor -- it returns the predicted value directly:\n"
+			    "    SELECT * FROM predict('%s', '%s'%s);",
+			    data->model_relation, data->data_relation, data->model_relation,
+			    data->model_name.empty() ? ""
+			                             : (", name := " + KeywordHelper::WriteQuoted(data->model_name, '\'')).c_str());
 		}
 		miint::RequireModelFeatureIdType(header.feature_id_type, data->id_types.feature_id, "predict_proba",
 		                                 data->model_relation, data->model_name, data->data_relation);
@@ -92,10 +98,10 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(context, bind.n_threads, "predict_proba", ctx);
+		miint::OpenScContext(bind.threads, "predict_proba", ctx);
 		miint::ScModel model;
-		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict_proba", "classification",
-		                             bind.id_types.feature_id, ctx.ptr, model);
+		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict_proba",
+		                             miint::kClassification, bind.id_types.feature_id, ctx.ptr, model);
 
 		auto table = miint::ScanForModel(context, conn, model, bind.data_relation, "predict_proba",
 		                                 " and are predicted from an all-zero row");
@@ -139,7 +145,7 @@ void ScProbaExecute(ClientContext &context, TableFunctionInput &input, DataChunk
 void ScPredictProbaFunction::Register(ExtensionLoader &loader) {
 	TableFunction fn("predict_proba", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ScProbaExecute, ScProbaBind,
 	                 ScProbaInitGlobal);
-	fn.named_parameters["n_threads"] = LogicalType::INTEGER;
+	fn.named_parameters["threads"] = LogicalType::INTEGER;
 	fn.named_parameters["name"] = LogicalType::VARCHAR;
 	loader.RegisterFunction(fn);
 }

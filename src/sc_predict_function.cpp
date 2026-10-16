@@ -3,6 +3,7 @@
 #include "catalog_utils.hpp"
 #include "id_column_utils.hpp"
 #include "sc_common.hpp"
+#include "unifrac_function_common.hpp"
 #include "sc_coo_builder.hpp"
 #include "miint_log.hpp"
 
@@ -22,7 +23,8 @@ struct ScPredictData : public TableFunctionData {
 	//! Empty selects the whole relation, which must then be one row.
 	string model_name;
 	bool classification = false;
-	int32_t n_threads = 0;
+	//! sc's thread count, resolved from `threads` at bind.
+	int32_t threads = 1;
 	miint::ScIdTypes id_types;
 };
 
@@ -47,23 +49,23 @@ unique_ptr<FunctionData> ScPredictBind(ClientContext &context, TableFunctionBind
 	if (data->data_relation.empty() || data->model_relation.empty()) {
 		throw InvalidInputException("predict: data and model relation names must not be empty");
 	}
+	int32_t requested_threads = 0;
 	for (auto &kv : input.named_parameters) {
-		if (kv.second.IsNull()) {
-			throw InvalidInputException("predict: named parameter '%s' must not be NULL", kv.first);
-		}
-		if (StringUtil::CIEquals(kv.first, "n_threads")) {
-			data->n_threads = miint::ParseNThreads(kv.second, "predict");
+		miint::RequireNotNull(kv.first, kv.second, "predict");
+		if (StringUtil::CIEquals(kv.first, "threads")) {
+			requested_threads = kv.second.GetValue<int32_t>();
 		} else if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
 	}
+	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, "predict");
 	// The model knows its own task; ask it rather than making the caller assert
 	// one. This is why the prediction column can be typed at all.
 	{
 		auto conn = MakeReadOnlyHelperConnection(context);
 		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, "predict");
 		const auto header = miint::ReadModelHeader(conn, data->model_relation, data->model_name, "predict", true);
-		data->classification = header.task == "classification";
+		data->classification = header.task == miint::kClassification;
 		miint::RequireModelFeatureIdType(header.feature_id_type, data->id_types.feature_id, "predict",
 		                                 data->model_relation, data->model_name, data->data_relation);
 	}
@@ -89,11 +91,10 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(context, bind.n_threads, "predict", ctx);
+		miint::OpenScContext(bind.threads, "predict", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict",
-		                             bind.classification ? "classification" : "regression", bind.id_types.feature_id,
-		                             ctx.ptr, model);
+		                             miint::TaskName(bind.classification), bind.id_types.feature_id, ctx.ptr, model);
 
 		auto table = miint::ScanForModel(context, conn, model, bind.data_relation, "predict",
 		                                 " and are predicted from an all-zero row");
@@ -117,7 +118,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 			throw InvalidInputException(
 			    "predict: model relation '%s' says task '%s', but the stored model is a %s; the task column "
 			    "and the model blob do not match",
-			    bind.model_relation, bind.classification ? "classification" : "regression",
+			    bind.model_relation, miint::TaskName(bind.classification),
 			    model_is_classifier ? "classifier" : "regressor");
 		}
 		if (bind.classification) {
@@ -155,7 +156,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 void ScPredictFunction::Register(ExtensionLoader &loader) {
 	TableFunction fn("predict", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ScPredictExecute, ScPredictBind,
 	                 ScPredictInitGlobal);
-	fn.named_parameters["n_threads"] = LogicalType::INTEGER;
+	fn.named_parameters["threads"] = LogicalType::INTEGER;
 	fn.named_parameters["name"] = LogicalType::VARCHAR;
 	loader.RegisterFunction(fn);
 }

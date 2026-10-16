@@ -1,5 +1,5 @@
 # name: test/sql/sc_model_relation_reads.test
-# description: a model relation that changes between planning and execution is an error
+# description: each relation is read once; a model relation that changes between planning and execution is an error
 # group: [sql]
 
 require miint
@@ -132,3 +132,82 @@ query I
 SELECT count(*) FROM predict('d', 'reg', name := 'clf');
 ----
 12
+
+# --- data and metadata are each read once ---
+#
+# Bind probes them with LIMIT 0, which reads no row, and execution reads them
+# once. A second read of a view could return different rows. Each view below
+# draws one sequence value per row it returns, so a call's draws count its reads:
+# d has 60 cells, the metadata 12 rows.
+
+statement ok
+CREATE SEQUENCE fit_cells;
+
+statement ok
+CREATE VIEW fit_d AS SELECT sample_id, feature_id, value + 0 * nextval('fit_cells') AS value FROM d;
+
+statement ok
+CREATE SEQUENCE fit_rows;
+
+statement ok
+CREATE VIEW fit_months AS SELECT sample_id, month + 0 * nextval('fit_rows') AS month FROM months;
+
+statement ok
+CREATE TABLE once_model AS SELECT * FROM fit_regressor('fit_d', 'fit_months', n_estimators := 5, name := 'once');
+
+query II
+SELECT nextval('fit_cells') - 1, nextval('fit_rows') - 1;
+----
+60	12
+
+statement ok
+CREATE SEQUENCE cv_cells;
+
+statement ok
+CREATE VIEW cv_d AS SELECT sample_id, feature_id, value + 0 * nextval('cv_cells') AS value FROM d;
+
+statement ok
+CREATE SEQUENCE cv_rows;
+
+statement ok
+CREATE VIEW cv_labels AS SELECT sample_id, label || repeat('', nextval('cv_rows')::INTEGER * 0) AS label FROM labels;
+
+statement ok
+CREATE TABLE once_cv AS SELECT * FROM cross_validate_classifier('cv_d', 'cv_labels', n_folds := 2, n_estimators := 5);
+
+query II
+SELECT nextval('cv_cells') - 1, nextval('cv_rows') - 1;
+----
+60	12
+
+statement ok
+CREATE SEQUENCE predict_cells;
+
+statement ok
+CREATE VIEW predict_d AS SELECT sample_id, feature_id, value + 0 * nextval('predict_cells') AS value FROM d;
+
+statement ok
+CREATE TABLE once_predict AS SELECT * FROM predict('predict_d', 'once_model');
+
+statement ok
+CREATE SEQUENCE proba_cells;
+
+statement ok
+CREATE VIEW proba_d AS SELECT sample_id, feature_id, value + 0 * nextval('proba_cells') AS value FROM d;
+
+statement ok
+CREATE TABLE once_proba AS SELECT * FROM predict_proba('proba_d', 'reg', name := 'clf');
+
+statement ok
+CREATE SEQUENCE shap_cells;
+
+statement ok
+CREATE VIEW shap_d AS SELECT sample_id, feature_id, value + 0 * nextval('shap_cells') AS value FROM d;
+
+statement ok
+CREATE TABLE once_shap AS SELECT * FROM shap('shap_d', 'reg', name := 'clf');
+
+query III
+SELECT nextval('predict_cells') - 1, nextval('proba_cells') - 1, nextval('shap_cells') - 1;
+----
+60	60	60

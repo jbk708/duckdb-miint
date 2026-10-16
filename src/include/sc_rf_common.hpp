@@ -64,6 +64,11 @@ void ParseCriterion(const Value &v, bool classification, const char *caller, sc_
 bool ParseForestParameter(const std::string &k, const Value &v, bool classification, const char *caller,
                           sc_rf_params_t &params);
 
+//! Register the named parameters fit and cross-validation share: the training
+//! input's and the forest's. One list, so neither function can refuse a
+//! parameter the other accepts.
+void RegisterTrainingParameters(TableFunction &fn);
+
 //! Checks that span forest parameters, run once all of them are parsed.
 void ValidateForestParameters(const sc_rf_params_t &params, const char *caller);
 
@@ -85,7 +90,7 @@ std::unordered_map<std::string, T> ScanTargets(Connection &conn, const ScTrainin
 	const char *cast = std::is_same<T, double>::value ? "DOUBLE" : "VARCHAR";
 	const auto q = KeywordHelper::WriteOptionallyQuoted(bind.metadata_relation);
 	const auto col = KeywordHelper::WriteOptionallyQuoted(bind.target_column);
-	auto result = conn.Query("SELECT sample_id, " + col + "::" + cast + " FROM " + q);
+	auto result = conn.Query(std::string("SELECT ") + kSampleIdColumn + ", " + col + "::" + cast + " FROM " + q);
 	if (result->HasError()) {
 		throw InvalidInputException("%s: metadata relation '%s' must expose (sample_id, %s) castable to %s: %s",
 		                            bind.caller, bind.metadata_relation, bind.target_column, cast, result->GetError());
@@ -187,6 +192,10 @@ void RequireSameSamples(const std::vector<std::string> &data_samples, const std:
 template <class T>
 std::unique_ptr<miint::ScCooTable> ScanTrainingInput(ClientContext &context, Connection &conn,
                                                      const ScTrainingInput &bind, std::vector<T> &targets) {
+	// The metadata first: it is one row per sample, so a bad target fails before
+	// the count scan rather than after it.
+	const auto by_sample = ScanTargets<T>(conn, bind);
+
 	miint::ScCooBuilder builder;
 	miint::ScanCooRelation(context, conn, bind.data_relation, bind.caller, builder);
 	if (builder.NumNonZeros() == 0) {
@@ -194,7 +203,6 @@ std::unique_ptr<miint::ScCooTable> ScanTrainingInput(ClientContext &context, Con
 	}
 	miint::RequireNoDuplicateCells(builder, bind.caller, bind.data_relation);
 
-	const auto by_sample = ScanTargets<T>(conn, bind);
 	auto table = builder.Finalize();
 	RequireSameSamples(table->SampleIds(), by_sample, bind);
 	targets.clear();
