@@ -71,7 +71,8 @@ bool EqualsLowercase(std::string_view s, std::string_view word) {
 	return true;
 }
 
-// [-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?, or a sign then nan, inf or infinity in any case.
+// [-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?, or an optional sign then nan, inf or infinity in
+// any case.
 // The specification's grammar stops at the first form, but htslib parses floats with strtod,
 // which accepts the named ones, and tools write them. strtod's nan(chars) and hex floats are
 // not accepted.

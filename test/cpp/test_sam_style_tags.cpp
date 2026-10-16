@@ -82,10 +82,8 @@ TEST_CASE("A value that does not match its declared type is an error", "[sam_sty
 }
 
 TEST_CASE("A float may be nan or an infinity, as htslib reads one", "[sam_style_tags]") {
-	// The SAM specification's float grammar has no nan or inf, but htslib parses f values and
-	// B:f elements with strtod, which accepts them, and tools write them. read_alignments reads
-	// them through htslib; refusing them here would fail a whole scan on such a file. Values
-	// stay text, and DuckDB casts each of these forms to DOUBLE.
+	// Each form htslib's strtod reads as nan or an infinity, in f values and B:f elements (why:
+	// IsFloat). The value is kept as written.
 	for (const char *value : {"nan", "NaN", "-nan", "inf", "-inf", "+Inf", "INF", "infinity", "-Infinity"}) {
 		INFO(value);
 		CHECK(Parse({std::string("de:f:") + value}) == Pairs {{"de", value}});

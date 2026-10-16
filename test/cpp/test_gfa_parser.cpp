@@ -132,7 +132,11 @@ TEST_CASE("GfaParser rejects malformed records with a message naming the defect"
 	}
 	SECTION("a GFA 2 header") {
 		// GFA 2 redefines S and adds record types; reading it as GFA 1 would mislabel fields.
-		CHECK_THROWS_WITH(parser.Parse("H\tVN:Z:2.0", record), ContainsSubstring("GFA 2"));
+		for (const char *version : {"2", "2.0", "2.1"}) {
+			CAPTURE(version);
+			CHECK_THROWS_WITH(parser.Parse(std::string("H\tVN:Z:") + version, record),
+			                  ContainsSubstring("GFA 2 is not supported"));
+		}
 	}
 	SECTION("a header naming any version other than GFA 1") {
 		// Only GFA 1's layout is known; any other declared version is refused, not guessed at.

@@ -120,18 +120,27 @@ FROM read_gfa('data/gfa/spec_example.gfa') WHERE line_number IN (7, 11) ORDER BY
 7	L	0
 11	x	NULL
 
-# A float tag may be nan or an infinity, as htslib reads one (a depth over no reads, say).
-# Values stay text, and casting them gives the float they name.
+# A float tag may be nan or an infinity, in each form htslib reads (why: IsFloat in
+# src/sam_style_tags.cpp). The value stays as written, and every form casts to the float it
+# names, so tags['DP']::DOUBLE works on them.
 statement ok
-COPY (SELECT * FROM (VALUES (E'S\ts1\t*\tDP:f:nan\tDP2:f:-inf\tDP3:f:Infinity')) t(line))
+COPY (SELECT printf(E'S\ts%d\t*\tDP:f:%s', i, v) FROM (VALUES (1, 'nan'), (2, 'NaN'), (3, '-nan'), (4, 'inf'),
+      (5, '-inf'), (6, '+Inf'), (7, 'INF'), (8, 'infinity'), (9, '-Infinity')) t(i, v) ORDER BY i)
 TO '__TEST_DIR__/nonfinite.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
 
-query TTTTTT
-SELECT tags['DP'], tags['DP2'], tags['DP3'],
-       isnan(tags['DP']::DOUBLE), tags['DP2']::DOUBLE = '-inf'::DOUBLE, tags['DP3']::DOUBLE = 'inf'::DOUBLE
-FROM read_gfa('__TEST_DIR__/nonfinite.gfa');
+query TTTT
+SELECT tags['DP'], isnan(tags['DP']::DOUBLE), isinf(tags['DP']::DOUBLE), tags['DP']::DOUBLE < 0
+FROM read_gfa('__TEST_DIR__/nonfinite.gfa') ORDER BY line_number;
 ----
-nan	-inf	Infinity	true	true	true
+nan	true	false	false
+NaN	true	false	false
+-nan	true	false	false
+inf	false	true	false
+-inf	false	true	true
++Inf	false	true	false
+INF	false	true	false
+infinity	false	true	false
+-Infinity	false	true	true
 
 # --- Real assembler output ---
 

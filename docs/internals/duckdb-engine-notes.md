@@ -208,7 +208,7 @@ text form is not.
 **Validation in a table macro goes in one CASE in a filtering clause.** Two engine behaviours
 decide this. The terms of `cond AND check` need not run in the order written: `filter_pushdown`
 rebuilds the conjunction, and over both a table function and a native table has put `check`
-first, so a cast or `error()` that `cond` was meant to guard runs on rows `cond` excludes
+first (observed on DuckDB v1.5.5), so a cast or `error()` that `cond` was meant to guard runs on rows `cond` excludes
 (`reorder_filter`, below, is not what moves it). A CASE tests its WHENs in order. And a check
 written in the SELECT list is pruned when the query does not select that column, while a
 WHERE, HAVING or QUALIFY clause is evaluated whichever columns the query selects. So a macro

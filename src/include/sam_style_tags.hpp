@@ -20,7 +20,8 @@ enum class TagSyntax {
 	// type in A/i/f/Z/J/H/B and a value valid for that type. The type and value are what
 	// matter, so the name follows one rule for every producer: any identifier
 	// ([A-Za-z_][A-Za-z0-9_]*), not only the specifications' two characters. Real
-	// assemblers write longer ones (myloasm: MEDIAN_DP1).
+	// assemblers write longer ones (myloasm: MEDIAN_DP1). An f value may also be nan or an
+	// infinity, as htslib reads one (IsFloat in sam_style_tags.cpp).
 	Typed,
 	// Additionally accept an untyped key:value field, which some PAF writers emit
 	// (myloasm writes `shared_mini:284`). A field that has the typed shape is still
