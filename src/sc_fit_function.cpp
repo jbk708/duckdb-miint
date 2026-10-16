@@ -93,6 +93,8 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 				throw InvalidInputException("%s: model must be 'random_forest' (got '%s')", data->caller, m);
 			}
 			data->model = "random_forest"; // normalised, so the column is stable
+		} else {
+			throw InternalException("%s: named parameter '%s' is registered but not read", data->caller, k);
 		}
 	}
 	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, data->caller);

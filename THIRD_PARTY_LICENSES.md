@@ -966,12 +966,16 @@ archive as rype and sylph. Used by `fit_classifier`, `fit_regressor`,
 `cross_validate_regressor`, `shap`, `feature_importances`, `model_features`
 and `sc_version`. Reported as the `sc` row in `miint_versions()`.
 
-- Repository: https://github.com/the-miint/sc (pinned at the submodule SHA in `.gitmodules` / `git submodule status ext/sc`)
+- Repository: https://github.com/the-miint/sc (pinned at the submodule SHA that `git submodule status ext/sc` reports)
 - License: BSD 3-Clause. The text ships at `ext/sc/LICENSE` and is reproduced below.
 - sc's crates.io dependencies, and the retained q2-sample-classifier notice
   for the fixture data under `ext/sc/oracle/fixtures/` that
-  `test/sql/sc_oracle_ecam.test` reads, are catalogued in
-  `ext/sc/THIRD_PARTY_LICENSES.md`.
+  `test/sql/sc_oracle_ecam.test`, `test/sql/sc_shap.test` and
+  `test/sql/sc_cross_validate.test` read, are catalogued in
+  `ext/sc/THIRD_PARTY_LICENSES.md`. That catalogue labels the `sc-arrow` /
+  `sc-capi` stack "never wasm" because sc's own WASM artifact does not include
+  it; miint links `sc-capi` into its WASM extension as well, so those crates
+  ship in both of miint's builds.
 
 ### BSD 3-Clause License
 

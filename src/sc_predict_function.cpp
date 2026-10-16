@@ -3,7 +3,6 @@
 #include "catalog_utils.hpp"
 #include "id_column_utils.hpp"
 #include "sc_common.hpp"
-#include "unifrac_function_common.hpp"
 #include "sc_coo_builder.hpp"
 #include "miint_log.hpp"
 
@@ -23,8 +22,6 @@ struct ScPredictData : public TableFunctionData {
 	//! Empty selects the whole relation, which must then be one row.
 	string model_name;
 	bool classification = false;
-	//! sc's thread count, resolved from `threads` at bind.
-	int32_t threads = 1;
 	miint::ScIdTypes id_types;
 };
 
@@ -49,16 +46,12 @@ unique_ptr<FunctionData> ScPredictBind(ClientContext &context, TableFunctionBind
 	if (data->data_relation.empty() || data->model_relation.empty()) {
 		throw InvalidInputException("predict: data and model relation names must not be empty");
 	}
-	int32_t requested_threads = 0;
 	for (auto &kv : input.named_parameters) {
 		miint::RequireNotNull(kv.first, kv.second, "predict");
-		if (StringUtil::CIEquals(kv.first, "threads")) {
-			requested_threads = kv.second.GetValue<int32_t>();
-		} else if (StringUtil::CIEquals(kv.first, "name")) {
+		if (StringUtil::CIEquals(kv.first, "name")) {
 			data->model_name = kv.second.GetValue<string>();
 		}
 	}
-	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, "predict");
 	// The model knows its own task; ask it rather than making the caller assert
 	// one. This is why the prediction column can be typed at all.
 	{
@@ -91,7 +84,8 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		auto conn = MakeReadOnlyHelperConnection(context);
 
 		miint::ScContext ctx;
-		miint::OpenScContext(bind.threads, "predict", ctx);
+		// sc predicts serially, so the context needs no pool.
+		miint::OpenScContext(0, "predict", ctx);
 		miint::ScModel model;
 		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict",
 		                             miint::TaskName(bind.classification), bind.id_types.feature_id, ctx.ptr, model);
@@ -110,7 +104,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		// numbers. Checking it here turns an Arrow format mismatch -- which
 		// would surface as "expected 'g', got 'u'" -- into advice.
 		// The bound return type came from the relation's `task` column; this is
-		// what sc actually produced. A disagreement means the column does not
+		// what sc produced. A disagreement means the column does not
 		// describe the blob beside it -- a hand-assembled model table.
 		const char *fmt = pred.Format();
 		const bool model_is_classifier = fmt && std::string(fmt) == "u";
@@ -156,7 +150,6 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 void ScPredictFunction::Register(ExtensionLoader &loader) {
 	TableFunction fn("predict", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ScPredictExecute, ScPredictBind,
 	                 ScPredictInitGlobal);
-	fn.named_parameters["threads"] = LogicalType::INTEGER;
 	fn.named_parameters["name"] = LogicalType::VARCHAR;
 	loader.RegisterFunction(fn);
 }

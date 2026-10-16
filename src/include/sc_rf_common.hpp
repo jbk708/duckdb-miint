@@ -28,7 +28,7 @@ constexpr const char *kSampleIdColumn = "sample_id";
 //! take this instead of either function's own bind data, which inherits it.
 //!
 //! `caller` is the SQL function's name, so an error names the function the user
-//! actually called.
+//! called.
 struct ScTrainingInput {
 	string data_relation;
 	string metadata_relation;
@@ -130,9 +130,8 @@ void RequireSameSamples(const std::vector<std::string> &data_samples, const std:
 			unlabelled.push_back(s);
 		}
 	}
-	// undated = un-data'd: Sample is in Metadata, but missing from Data
-	// in other words, which targets were missing from the target mapping above
-	std::vector<std::string> undated;
+	// uncounted: samples the metadata labels that have no counts.
+	std::vector<std::string> uncounted;
 	if (targets.size() + unlabelled.size() != data_samples.size()) {
 		std::unordered_map<std::string, bool> present;
 		for (const auto &s : data_samples) {
@@ -140,11 +139,11 @@ void RequireSameSamples(const std::vector<std::string> &data_samples, const std:
 		}
 		for (const auto &kv : targets) {
 			if (present.find(kv.first) == present.end()) {
-				undated.push_back(kv.first);
+				uncounted.push_back(kv.first);
 			}
 		}
 	}
-	if (unlabelled.empty() && undated.empty()) {
+	if (unlabelled.empty() && uncounted.empty()) {
 		return;
 	}
 
@@ -167,9 +166,9 @@ void RequireSameSamples(const std::vector<std::string> &data_samples, const std:
 		    StringUtil::Format("\n  %llu sample(s) in '%s' with no %s: %s", (uint64_t)unlabelled.size(),
 		                       bind.data_relation.c_str(), bind.target_column.c_str(), sample_list(unlabelled).c_str());
 	}
-	if (!undated.empty()) {
-		msg += StringUtil::Format("\n  %llu sample(s) in '%s' with no data: %s", (uint64_t)undated.size(),
-		                          bind.metadata_relation.c_str(), sample_list(undated).c_str());
+	if (!uncounted.empty()) {
+		msg += StringUtil::Format("\n  %llu sample(s) in '%s' with no data: %s", (uint64_t)uncounted.size(),
+		                          bind.metadata_relation.c_str(), sample_list(uncounted).c_str());
 	}
 	msg += StringUtil::Format(
 	    "\n\nRemedy:\n"

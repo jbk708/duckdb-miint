@@ -16,17 +16,20 @@ namespace {
 // Read an Arrow Int64 array's data buffer. buffers[1] is the data buffer --
 // buffers[0] is validity, which these arrays never have.
 std::vector<int64_t> ReadInt64(const ArrowArray &a) {
+	REQUIRE(a.n_buffers == 2);
 	const auto *p = static_cast<const int64_t *>(a.buffers[1]);
 	return std::vector<int64_t>(p, p + a.length);
 }
 
 std::vector<double> ReadFloat64(const ArrowArray &a) {
+	REQUIRE(a.n_buffers == 2);
 	const auto *p = static_cast<const double *>(a.buffers[1]);
 	return std::vector<double>(p, p + a.length);
 }
 
 // Utf8 is [validity, offsets, data]; row i is data[offsets[i] .. offsets[i+1]].
 std::vector<std::string> ReadUtf8(const ArrowArray &a) {
+	REQUIRE(a.n_buffers == 3);
 	const auto *offsets = static_cast<const int32_t *>(a.buffers[1]);
 	const auto *chars = static_cast<const char *>(a.buffers[2]);
 	std::vector<std::string> out;
@@ -186,7 +189,7 @@ TEST_CASE("ScCooBuilder offsets count bytes, not characters", "[sc_coo]") {
 }
 
 TEST_CASE("ScCooBuilder rejects an empty table", "[sc_coo]") {
-	// sc's from_coo errors on a 0-row or 0-column matrix, so there is no valid
+	// sc refuses a 0-row or 0-column matrix, so there is no valid
 	// table to hand back. Fail here rather than build one sc will refuse.
 	ScCooBuilder builder;
 	CHECK(builder.Finalize() == nullptr);
@@ -335,7 +338,7 @@ TEST_CASE("ScCooBuilder drops features the model never saw", "[sc_coo]") {
 TEST_CASE("ScCooBuilder keeps a sample whose features are all unknown", "[sc_coo]") {
 	// Such a sample has no cells at all, but it is still in the data and still
 	// deserves a prediction -- from an all-zero row, which in a sparse matrix
-	// is the truthful representation of "none of the model's features were
+	// is the faithful representation of "none of the model's features were
 	// observed here". Dropping it would silently shorten the output.
 	ScCooBuilder builder;
 	builder.SetFeatureVocabulary({"a", "b"});

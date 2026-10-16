@@ -130,8 +130,8 @@ void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::s
 	bag->buffers[0] = nullptr;
 	bag->buffers[1] = bag->offsets.data();
 	// An all-empty-string column allocates nothing; a NULL data buffer with
-	// every offset at 0 is well-formed, and sc reads no data pointer for a
-	// zero-length string.
+	// every offset at 0 is well-formed, and sc reads no data pointer when the
+	// column's total byte length is 0.
 	bag->buffers[2] = bag->chars.empty() ? nullptr : bag->chars.data();
 	InitArray(array, static_cast<int64_t>(values.size()), 3, bag.release());
 	InitSchema(schema, "u");
@@ -320,8 +320,8 @@ DuplicateReport ScCooBuilder::FindDuplicateCells(size_t max_examples) const {
 }
 
 std::unique_ptr<ScCooTable> ScCooBuilder::Finalize() {
-	// sc rejects a 0 x N or N x 0 matrix (`from_coo`: "dimensions must be > 0"),
-	// so an empty input has no representable table. Say so here rather than
+	// sc rejects a 0 x N or N x 0 matrix ("dimensions must be > 0"), so an
+	// empty input has no representable table. Say so here rather than
 	// building one sc will refuse.
 	if (sample_ids_.empty() || feature_ids_.empty()) {
 		return nullptr;

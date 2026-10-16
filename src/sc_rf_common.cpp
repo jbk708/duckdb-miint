@@ -50,39 +50,24 @@ int64_t ParseNEstimators(const Value &v, const char *caller) {
 //! sklearn's int/float distinction decides the tagged unions --
 //! `max_features=10` means ten features, `max_features=0.3` means thirty
 //! percent -- and SQL's literal types carry exactly that information, so the
-//! named parameters take ANY and dispatch on what the user actually wrote.
+//! named parameters take ANY and dispatch on what the user wrote.
 bool IsIntegerValue(const Value &v) {
-	switch (v.type().id()) {
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::HUGEINT:
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-	case LogicalTypeId::UHUGEINT:
-		return true;
-	default:
-		return false;
-	}
+	return v.type().IsIntegral();
 }
 
 //! Read a fraction, which must be written as one. GetValue<double> converts
 //! other types too -- `true` reads as 1.0 -- so they are refused rather than
 //! taken for a number.
-double ReadFraction(const Value &v, const char *name, const char *caller) {
-	switch (v.type().id()) {
-	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::DECIMAL:
+double ReadFraction(const Value &v, const char *name, const char *accepted, const char *caller) {
+	if (v.type().IsFloating() || v.type().id() == LogicalTypeId::DECIMAL) {
 		return v.GetValue<double>();
-	default:
-		throw InvalidInputException("%s: %s must be a count or a fraction, got a %s", caller, name,
-		                            v.type().ToString());
 	}
+	throw InvalidInputException("%s: %s must be %s, got a %s", caller, name, accepted, v.type().ToString());
 }
+
+constexpr const char *kMaxFeaturesAccepted =
+    "'sqrt', 'log2', 'all', 'none', a fraction in (0, 1], or a positive integer";
+constexpr const char *kMaxSamplesAccepted = "'all', 'none', a fraction in (0, 1], or a positive integer";
 
 void ParseMaxFeatures(const Value &v, const char *caller, sc_max_features_t &out) {
 	if (v.type().id() == LogicalTypeId::VARCHAR) {
@@ -94,9 +79,7 @@ void ParseMaxFeatures(const Value &v, const char *caller, sc_max_features_t &out
 		} else if (StringUtil::CIEquals(s, "all") || StringUtil::CIEquals(s, "none")) {
 			out.kind = SC_MAX_FEATURES_ALL;
 		} else {
-			throw InvalidInputException("%s: max_features must be 'sqrt', 'log2', 'all', a fraction in (0, 1], "
-			                            "or a positive integer (got '%s')",
-			                            caller, s);
+			throw InvalidInputException("%s: max_features must be %s (got '%s')", caller, kMaxFeaturesAccepted, s);
 		}
 		return;
 	}
@@ -109,7 +92,7 @@ void ParseMaxFeatures(const Value &v, const char *caller, sc_max_features_t &out
 		out.count = static_cast<uint64_t>(n);
 		return;
 	}
-	const auto f = ReadFraction(v, "max_features", caller);
+	const auto f = ReadFraction(v, "max_features", kMaxFeaturesAccepted, caller);
 	if (!(f > 0.0 && f <= 1.0)) {
 		throw InvalidInputException("%s: max_features fraction must be in (0, 1] (got %g)", caller, f);
 	}
@@ -128,7 +111,7 @@ void ParseMinSamples(const Value &v, const char *name, uint64_t min_count, const
 		out.count = static_cast<uint64_t>(n);
 		return;
 	}
-	const auto f = ReadFraction(v, name, caller);
+	const auto f = ReadFraction(v, name, "a count or a fraction", caller);
 	if (!(f > 0.0 && f <= 1.0)) {
 		throw InvalidInputException("%s: %s fraction must be in (0, 1] (got %g)", caller, name, f);
 	}
@@ -140,9 +123,7 @@ void ParseMaxSamples(const Value &v, const char *caller, sc_max_samples_t &out) 
 	if (v.type().id() == LogicalTypeId::VARCHAR) {
 		const auto s = v.GetValue<string>();
 		if (!StringUtil::CIEquals(s, "all") && !StringUtil::CIEquals(s, "none")) {
-			throw InvalidInputException("%s: max_samples must be 'all', a fraction in (0, 1], or a positive "
-			                            "integer (got '%s')",
-			                            caller, s);
+			throw InvalidInputException("%s: max_samples must be %s (got '%s')", caller, kMaxSamplesAccepted, s);
 		}
 		out.kind = SC_MAX_SAMPLES_ALL;
 		return;
@@ -156,7 +137,7 @@ void ParseMaxSamples(const Value &v, const char *caller, sc_max_samples_t &out) 
 		out.count = static_cast<uint64_t>(n);
 		return;
 	}
-	const auto f = ReadFraction(v, "max_samples", caller);
+	const auto f = ReadFraction(v, "max_samples", kMaxSamplesAccepted, caller);
 	if (!(f > 0.0 && f <= 1.0)) {
 		throw InvalidInputException("%s: max_samples fraction must be in (0, 1] (got %g)", caller, f);
 	}
@@ -256,10 +237,9 @@ void ValidateForestParameters(const sc_rf_params_t &params, const char *caller) 
 //! Work out which metadata column holds the target.
 //!
 //! With one candidate there is nothing to choose, so choose it -- `(sample_id,
-//! month)` needs no configuration. With several the answer is genuinely unknown,
-//! and guessing would train on the wrong variable without any error: a
-//! `(sample_id, age, bmi, delivery_mode)` table has three equally plausible
-//! targets and picking one silently would be the worst outcome.
+//! month)` needs no configuration. With several the answer is unknown, and
+//! guessing would train on the wrong variable without any error: a
+//! `(sample_id, age, bmi, delivery_mode)` table has three plausible targets.
 //!
 //! A named column is checked here too, so a typo fails when the query is
 //! planned rather than after the data has been scanned.

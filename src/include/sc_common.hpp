@@ -37,11 +37,10 @@ struct ScModel {
 
 //! An Arrow array sc exported to us, released on destruction.
 //!
-//! Note the ownership direction, which is the reverse of `ScCooBuilder`'s. sc's
-//! *imports* borrow -- it reads our buffers in place and never releases them --
-//! but its *exports* move: `to_ffi` installs a release callback and the consumer
-//! must invoke it exactly once. Skip it and the buffers leak; call it twice and
-//! it is a double free.
+//! Ownership runs the other way from `ScCooBuilder`'s. sc's *imports* borrow --
+//! it reads our buffers in place and never releases them -- but its *exports*
+//! move: each carries a release callback the consumer must invoke exactly once.
+//! Skip it and the buffers leak; call it twice and it is a double free.
 class OwnedArrowArray {
 public:
 	OwnedArrowArray() = default;
@@ -107,7 +106,9 @@ void TakeArray(ArrowArray &src, ArrowSchema &src_schema, OwnedArrowArray &dst);
 
 //! Open an sc context with a pool of `n_threads` threads, throwing as `caller`
 //! on failure. Callers that run sc in parallel pass the count bind resolved
-//! from `threads`; 0 builds no pool, for a context only used to load a model.
+//! from `threads`. 0 builds no pool: a parallel call on such a context runs on
+//! rayon's global pool, sized to the machine, so only a caller that runs
+//! nothing in parallel passes 0.
 //!
 //! `n_threads` is ignored under Emscripten. DuckDB-Wasm has one thread, the
 //! global pool is seeded on it at load (miint_rust_glue_init), and a dedicated
@@ -123,9 +124,8 @@ inline const char *TaskName(bool classification) {
 	return classification ? kClassification : kRegression;
 }
 
-//! Refuse a NULL named parameter. Omitting one means its default; a NULL would
-//! otherwise read as that default, or for `name` select the relation's only
-//! model.
+//! Refuse a NULL named parameter: a NULL is refused, not read as a value.
+//! Omitting a parameter means its default.
 void RequireNotNull(const std::string &parameter, const duckdb::Value &v, const char *caller);
 
 //! What bind reads from a model row to type its output.
@@ -141,9 +141,9 @@ struct ScModelHeader {
 //!
 //! A table function must declare its return types at bind time, and a
 //! prediction column is VARCHAR for a classifier and DOUBLE for a regressor.
-//! The model already knows which it is -- sc's `sc_predict` dispatches on
-//! `forest.task()` -- but sc exposes no C accessor for it, so the fit writes it
-//! into the model relation and this reads it back. Deciding the schema from the
+//! The model already knows which it is -- sc's prediction dispatches on it --
+//! but sc exposes no C accessor for it, so the fit writes it into the model
+//! relation and this reads it back. Deciding the schema from the
 //! data is the same thing `read_csv` does when it sniffs a file.
 ScModelHeader ReadModelHeader(duckdb::Connection &conn, const std::string &relation, const std::string &name,
                               const char *caller, bool with_task);

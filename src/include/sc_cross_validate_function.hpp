@@ -9,21 +9,22 @@ namespace duckdb {
 //!   -> (sample_id, prediction, actual, [probabilities, classes,] metric,
 //!       mean_score, std_score, fold_scores)
 //!
-//! How well does this model generalise to samples it has never seen?
+//! How well does this recipe -- these forest parameters on this data --
+//! generalise to samples it has never seen?
 //!
-//! The samples are shuffled once and cut into `cv` folds. Each fold is
+//! The samples are shuffled once and cut into `n_folds` folds. Each fold is
 //! held out in turn while a forest is fit on the rest and used to predict it, so
 //! every sample ends up with exactly one prediction from a model that never saw
 //! it -- an out-of-fold (OOF) prediction. Folds are stratified for a classifier
 //! (each fold keeps the class proportions, so no fold can miss a class) and
-//! plain for a regressor, matching q2 and sklearn.
+//! plain for a regressor, matching q2 and scikit-learn.
 //!
 //! `actual` is the target the fold was scored against, carried through so the
 //! result scores itself: a confusion matrix, a residual, or an accuracy needs no
 //! join back to the metadata relation.
 //!
 //! The per-fold forests are scored and discarded: this measures the recipe, not
-//! a model. Fit the model you will actually use with fit_* on all the data.
+//! a model. Fit the model you will use with fit_* on all the data.
 //!
 //! `probabilities` is the OOF probability of each class, and `classes` names
 //! them: both are lists in the same order on every row, so `probabilities[i]` is
@@ -44,7 +45,7 @@ namespace duckdb {
 //!
 //! Scoring is the mean of the per-fold scores, not a pooled score over all
 //! predictions. They differ whenever folds are unequal in size, and the
-//! fold-mean is what sklearn's cross_val_score reports.
+//! fold-mean is what scikit-learn's cross_val_score reports.
 //!
 //! `parameter_tuning := true` searches the built-in hyperparameter grid inside
 //! each training fold and refits with the winner (q2's `parameter_tuning`). The

@@ -128,7 +128,8 @@ true
 
 # Also true of any forest. On its training samples it must beat predicting the
 # mean: a forest that learned nothing scores near the mean predictor's squared
-# error, and this one scores 0.31 of it, so the bound is half.
+# error, and this one scores 0.31 of it (random_state 1, the pinned sc), so the
+# bound is half.
 query I
 SELECT sum((p.prediction - m.value::DOUBLE) ^ 2)
      < 0.5 * (SELECT sum((value::DOUBLE - (SELECT avg(value::DOUBLE) FROM p_rmeta)) ^ 2) FROM p_rmeta)
@@ -362,11 +363,11 @@ SELECT * FROM predict('p_test', 'p_model', name := NULL);
 ----
 predict: named parameter 'name' must not be NULL
 
-# 0 means one thread per core. A negative count is not a smaller version of that.
+# predict runs serially in sc, so it takes no thread count.
 statement error
-SELECT * FROM predict('p_test', 'p_model', threads := -1);
+SELECT * FROM predict('p_test', 'p_model', threads := 2);
 ----
-predict: threads must be >= 0 (got -1; use 0 to follow DuckDB's thread count)
+Invalid named parameter "threads" for function predict
 
 # --- dropped cells are reported, not just counted in known_feature_fraction ---
 

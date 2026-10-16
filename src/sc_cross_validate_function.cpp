@@ -89,9 +89,9 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 
 	ApplyDefaults(data->params, classification);
 	auto &params = data->params;
-	// `cv` is what q2, sklearn's cross_val_score and sc's own C struct call this,
-	// so it keeps working; `n_folds` says what the number actually is. Accepting
-	// both but never silently resolving a disagreement.
+	// `n_folds` says what the number is; `cv` is the name q2-sample-classifier,
+	// scikit-learn's cross_val_score and sc's C struct use. Both are accepted, and
+	// giving both is an error rather than a silent choice.
 	bool n_folds_given = false;
 	bool cv_given = false;
 	params.cv = kDefaultCvFolds;
@@ -118,6 +118,8 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 			params.parameter_tuning = v.GetValue<bool>();
 		} else if (StringUtil::CIEquals(k, "threads")) {
 			requested_threads = v.GetValue<int32_t>();
+		} else {
+			throw InternalException("%s: named parameter '%s' is registered but not read", data->caller, k);
 		}
 	}
 	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, data->caller);

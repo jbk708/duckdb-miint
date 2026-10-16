@@ -95,9 +95,9 @@ FROM f;
 true	true
 
 # A fold score is an accuracy, in [0, 1]. The 0.5 floor sits below the 0.57
-# that predicting the majority class (72 of 126 early) scores, so it catches
-# scrambled labels without depending on this seed: this run's folds score
-# 0.88 to 0.92.
+# that predicting the majority class (72 of 126 early) scores, so it fails only
+# a model worse than that guess; with random_state 42 and the pinned sc the
+# folds score 0.88 to 0.92.
 query II
 WITH f AS (SELECT unnest(fold_scores) AS s FROM cvc LIMIT 5)
 SELECT bool_and(s >= 0.0 AND s <= 1.0), min(s) > 0.5 FROM f;
@@ -107,7 +107,8 @@ true	true
 # Scoring the OOF predictions directly is close to, but not the same as, the
 # reported mean: mean_score averages the folds, and 126 does not divide into 5
 # equal ones, so the folds carry slightly different weight. The 0.8 floor is
-# well above the majority class's 0.57; this run scores 0.90.
+# well above the majority class's 0.57; with random_state 42 and the pinned sc
+# the OOF accuracy is 0.90.
 query II
 SELECT abs(avg(CASE WHEN c.prediction = s.stage THEN 1.0 ELSE 0.0 END) - any_value(c.mean_score)) < 0.02,
        avg(CASE WHEN c.prediction = s.stage THEN 1.0 ELSE 0.0 END) > 0.8
@@ -356,9 +357,9 @@ cross_validate_regressor: min_impurity_decrease must be finite and >= 0 (got -0.
 
 # The thread count does not change the folds, the forests or the scores.
 query I
-SELECT (SELECT md5(string_agg(sample_id || prediction || fold_scores::VARCHAR || mean_score::VARCHAR, ',' ORDER BY sample_id))
+SELECT (SELECT md5(string_agg(sample_id || prediction || probabilities::VARCHAR || fold_scores::VARCHAR || mean_score::VARCHAR, ',' ORDER BY sample_id))
         FROM cross_validate_classifier('cv_counts', 'cv_stage', n_estimators := 10, n_folds := 3, random_state := 3, threads := 1))
-     = (SELECT md5(string_agg(sample_id || prediction || fold_scores::VARCHAR || mean_score::VARCHAR, ',' ORDER BY sample_id))
+     = (SELECT md5(string_agg(sample_id || prediction || probabilities::VARCHAR || fold_scores::VARCHAR || mean_score::VARCHAR, ',' ORDER BY sample_id))
         FROM cross_validate_classifier('cv_counts', 'cv_stage', n_estimators := 10, n_folds := 3, random_state := 3, threads := 4));
 ----
 true

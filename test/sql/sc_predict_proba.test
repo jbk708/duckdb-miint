@@ -193,15 +193,6 @@ SELECT * FROM predict_proba('pp_data', 'pp_binary', name := NULL);
 predict_proba: named parameter 'name' must not be NULL
 
 statement error
-SELECT * FROM predict_proba('pp_data', 'pp_binary', threads := -1);
+SELECT * FROM predict_proba('pp_data', 'pp_binary', threads := 2);
 ----
-predict_proba: threads must be >= 0 (got -1; use 0 to follow DuckDB's thread count)
-
-# The thread count does not change the probabilities.
-query I
-SELECT (SELECT md5(string_agg(sample_id || class || probability::VARCHAR, ',' ORDER BY sample_id, class))
-        FROM predict_proba('pp_data', 'pp_models', name := 'site', threads := 1))
-     = (SELECT md5(string_agg(sample_id || class || probability::VARCHAR, ',' ORDER BY sample_id, class))
-        FROM predict_proba('pp_data', 'pp_models', name := 'site', threads := 4));
-----
-true
+Invalid named parameter "threads" for function predict_proba

@@ -52,7 +52,7 @@ public:
 	//! of the model's vocabulary is always tiny in sparse data -- a sample
 	//! legitimately carries a handful of 200k features -- so it would flag
 	//! everything. This ratio instead answers "how much of what I observed here
-	//! can the model actually use", where a low value means the model is being
+	//! can the model use", where a low value means the model is being
 	//! applied to different data: another reference database, another pipeline,
 	//! another 16S region.
 	//!
@@ -139,7 +139,9 @@ struct DuplicateReport {
 //! Both dictionaries are sorted, so a given set of ids always produces the same
 //! integer encoding whatever order the rows arrive in, and the same seed gives
 //! the same model. It also matches the reference pipeline sc's own fixtures
-//! were generated with, which sorts both axes.
+//! were generated with, which sorts both axes. The exception is a fixed
+//! vocabulary (SetFeatureVocabulary): the feature dictionary is then the
+//! model's own order.
 class ScCooBuilder {
 public:
 	//! Ids are copied on first sight and interned thereafter.
@@ -147,9 +149,9 @@ public:
 	//! With a fixed vocabulary (see [`SetFeatureVocabulary`]) a feature the
 	//! model never saw is dropped and counted. The sample is interned either
 	//! way, so a sample whose every feature was dropped still gets a row -- an
-	//! all-zero one, which is the truthful representation of "none of the
-	//! model's features were observed here" and is what lets it still receive a
-	//! prediction rather than silently vanishing from the output.
+	//! all-zero one, which represents "none of the model's features were
+	//! observed here" and is what lets it still receive a prediction rather than
+	//! silently vanishing from the output.
 	void Append(std::string_view sample_id, std::string_view feature_id, double value);
 
 	//! Encode features against a model's training vocabulary instead of
@@ -175,9 +177,9 @@ public:
 
 	//! Cells dropped because their feature is not in the fixed vocabulary.
 	//!
-	//! Worth surfacing: a prediction table sharing almost no features with the
+	//! Callers report it: a prediction table sharing almost no features with the
 	//! model still yields confident predictions from a near-empty matrix, and
-	//! nothing else in the pipeline will say so.
+	//! nothing else in the pipeline says so.
 	size_t DroppedCells() const {
 		return dropped_cells_;
 	}
@@ -189,8 +191,9 @@ public:
 	//!
 	//! Costs one temporary `uint64` per stored cell, freed on return, plus an
 	//! O(n log n) sort over a packed (row, col) key, rather than a hash set's
-	//! allocation per entry. The wasm build shares one linear memory between
-	//! DuckDB and this extension.
+	//! allocation per entry. The wasm build shares one 4 GiB linear memory
+	//! between DuckDB and this extension, so the temporary competes with
+	//! DuckDB's own memory there.
 	//!
 	//! Safe to call before [`Finalize`]; it reads the interned indices and does
 	//! not modify them.

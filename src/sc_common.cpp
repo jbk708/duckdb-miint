@@ -175,26 +175,29 @@ void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 	}
 }
 
-//! One place for every "which model did you mean" failure, so the four cases
-//! read the same wherever they are raised. `takes_data` says whether the
-//! caller's first argument is a data relation, which shapes the call the
-//! remedy shows.
+//! One place for every "which model did you mean" failure, so they read the same
+//! wherever they are raised. `takes_data` says whether the caller's first
+//! argument is a data relation, which shapes the call the remedy shows.
 [[noreturn]] void RejectModelSelection(const char *caller, const std::string &relation, const std::string &name,
                                        int64_t rows, bool takes_data) {
+	// The remedies are SQL to run, so every value they splice is quoted: the
+	// relation as an identifier after FROM, as a string literal in a call.
+	const auto from = duckdb::KeywordHelper::WriteOptionallyQuoted(relation);
+	const auto arg = duckdb::KeywordHelper::WriteQuoted(relation, '\'');
 	if (!name.empty() && rows == 0) {
 		throw InvalidInputException("%s: No model named '%s' in relation '%s'.\n\n"
 		                            "Remedy:\n"
 		                            "  List what the relation holds, then use one of those names:\n"
 		                            "    SELECT name, task, n_estimators FROM %s;",
-		                            caller, name, relation, relation);
+		                            caller, name, relation, from);
 	}
 	if (!name.empty()) {
 		throw InvalidInputException(
 		    "%s: Relation '%s' holds %lld models named '%s'; a name has to identify exactly one.\n\n"
 		    "Remedy:\n"
 		    "  Inspect the duplicates and drop or rename all but one:\n"
-		    "    SELECT name, task, n_estimators, random_state FROM %s WHERE name = '%s';",
-		    caller, relation, (int64_t)rows, name, relation, name);
+		    "    SELECT name, task, n_estimators, random_state FROM %s WHERE name = %s;",
+		    caller, relation, (int64_t)rows, name, from, duckdb::KeywordHelper::WriteQuoted(name, '\''));
 	}
 	if (rows == 0) {
 		throw InvalidInputException(
@@ -208,9 +211,8 @@ void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 	                            "Remedy:\n"
 	                            "  Say which one, by the name it was fit with:\n"
 	                            "    SELECT name, task, n_estimators FROM %s;  -- see what is there\n"
-	                            "    SELECT * FROM %s(%s'%s', name := 'my_model');  -- then pick one",
-	                            caller, relation, (int64_t)rows, relation, caller, takes_data ? "'counts', " : "",
-	                            relation);
+	                            "    SELECT * FROM %s(%s%s, name := 'my_model');  -- then pick one",
+	                            caller, relation, (int64_t)rows, from, caller, takes_data ? "'counts', " : "", arg);
 }
 
 std::string ModelNameFilter(const std::string &name) {
@@ -294,6 +296,8 @@ ScModelHeader ReadModelHeader(duckdb::Connection &conn, const std::string &relat
 			}
 		}
 	}
+	// The callers that read a task are exactly the ones whose first argument is
+	// a data relation, which shapes the remedy's example call.
 	if (rows != 1) {
 		RejectModelSelection(caller, relation, name, rows, with_task);
 	}
@@ -302,9 +306,8 @@ ScModelHeader ReadModelHeader(duckdb::Connection &conn, const std::string &relat
 	if (with_task) {
 		header.task = task.IsNull() ? "" : task.ToString();
 		if (header.task != kClassification && header.task != kRegression) {
-			throw InvalidInputException("%s: model relation '%s' has task '%s'; expected 'classification' or "
-			                            "'regression'",
-			                            caller, relation, header.task);
+			throw InvalidInputException("%s: model relation '%s' has task '%s'; expected '%s' or '%s'", caller,
+			                            relation, header.task, kClassification, kRegression);
 		}
 	}
 	const auto type_name = type.IsNull() ? std::string() : type.ToString();
@@ -467,7 +470,7 @@ void RequireNoDuplicateCells(const ScCooBuilder &builder, const char *caller, co
 		msg += duckdb::StringUtil::Format("\n  %s / %s  x%llu  values: %s", c.sample_id, c.feature_id,
 		                                  (uint64_t)c.count, values);
 	}
-	msg += "\nIdentical values suggest a join fanout (deduplicate); differing values suggest repeat "
+	msg += "\nIdentical values suggest a join that duplicated rows (deduplicate); differing values suggest repeat "
 	       "measurements (aggregate deliberately).";
 	throw InvalidInputException(msg);
 }
@@ -570,12 +573,11 @@ void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation
 			}
 		}
 	}
-	// A name, or a relation holding one model, selects exactly one row. More than
-	// one is ambiguous -- there is no basis for choosing -- and zero usually means
-	// an upstream filter ate it, which is worth saying rather than failing later
-	// inside sc.
+	// Bind found exactly one row, so another count means the relation changed.
 	if (rows != 1) {
-		RejectModelSelection(caller, relation, name, rows, !task.empty());
+		throw InvalidInputException("%s: model relation '%s' changed between planning and execution: it selected "
+		                            "one model, now %lld",
+		                            caller, relation, (int64_t)rows);
 	}
 	if (blob.IsNull()) {
 		throw InvalidInputException("%s: model relation '%s' has a NULL model", caller, relation);

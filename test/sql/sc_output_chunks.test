@@ -43,34 +43,39 @@ FROM (SELECT sample_id, class, probability, sum(probability) OVER (PARTITION BY 
 ----
 7500	7500	2500	true
 
-# Where one class has the highest probability, it is the predicted class, so the
-# rows of a sample split across chunks still belong together. Samples with a tie
-# at the top are left out: predict breaks it by class order, which this does not
-# reproduce.
+# The class with the highest probability is the predicted class, a tie going
+# to the first class in text order as predict breaks it, so the rows of a
+# sample split across chunks still belong together.
 query II
-WITH pr AS (SELECT sample_id, class, probability, max(probability) OVER (PARTITION BY sample_id) AS best
-            FROM predict_proba('many_samples', 'three_class')),
-     top AS (SELECT sample_id, any_value(class) AS class FROM pr WHERE probability = best
-             GROUP BY sample_id HAVING count(*) = 1)
+WITH top AS (SELECT sample_id, class
+             FROM (SELECT sample_id, class,
+                          row_number() OVER (PARTITION BY sample_id ORDER BY probability DESC, class) AS rn
+                   FROM predict_proba('many_samples', 'three_class'))
+             WHERE rn = 1)
 SELECT count(*), count(*) FILTER (WHERE p.prediction <> top.class)
 FROM top JOIN predict('many_samples', 'three_class') p USING (sample_id);
 ----
-2308	0
+2500	0
 
-# One out-of-fold row per sample.
+# One out-of-fold row per sample, carrying that sample's own label.
 statement ok
 CREATE TABLE many_labels AS SELECT 'q' || i AS sample_id, 'c' || (i % 3) AS label FROM range(2500) t(i);
 
-query II
-SELECT count(*), count(DISTINCT sample_id)
-FROM cross_validate_classifier('many_samples', 'many_labels', n_folds := 2, n_estimators := 3, random_state := 1);
+query III
+SELECT count(*), count(DISTINCT c.sample_id), count(*) FILTER (WHERE c.actual <> m.label)
+FROM cross_validate_classifier('many_samples', 'many_labels', n_folds := 2, n_estimators := 3, random_state := 1) c
+JOIN many_labels m USING (sample_id);
 ----
-2500	2500
+2500	2500	0
 
-# One row per model feature, in column order.
+# One row per model feature, in column order. Every feature before the chunk
+# boundary is constant, so a forest can split only on the last 50: their
+# importances sum to 1, and an importance emitted against the wrong feature
+# moves weight off them.
 statement ok
 CREATE TABLE wide_counts AS
-  SELECT 's' || i AS sample_id, 'g' || lpad(j::VARCHAR, 4, '0') AS feature_id, ((i * 3 + j) % 7 + 1)::DOUBLE AS value
+  SELECT 's' || i AS sample_id, 'g' || lpad(j::VARCHAR, 4, '0') AS feature_id,
+         (CASE WHEN j >= 2050 THEN (i * 3 + j) % 7 + 1 + (i % 2) * 5 ELSE 1 END)::DOUBLE AS value
   FROM range(20) t(i), range(2100) u(j);
 
 statement ok
@@ -80,14 +85,15 @@ statement ok
 CREATE TABLE wide_model AS
   SELECT * FROM fit_classifier('wide_counts', 'wide_labels', n_estimators := 3, random_state := 1, name := 'w');
 
-query IIII
-SELECT count(*), count(DISTINCT feature_id), min(column_index), max(column_index)
+query III
+SELECT count(*), count(DISTINCT feature_id), bool_and(feature_id = 'g' || lpad(column_index::VARCHAR, 4, '0'))
 FROM model_features('wide_model');
 ----
-2100	2100	0	2099
+2100	2100	true
 
 query III
-SELECT count(*), count(DISTINCT feature_id), abs(sum(importance) - 1.0) < 1e-9
+SELECT count(*), count(DISTINCT feature_id),
+       abs(sum(importance) FILTER (WHERE feature_id >= 'g2050') - 1.0) < 1e-9
 FROM feature_importances('wide_model');
 ----
 2100	2100	true

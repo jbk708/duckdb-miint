@@ -508,15 +508,23 @@ FROM miint_warnings();
 ----
 true
 
-# One split: every sample's whole attribution sits on the feature it splits on,
-# the one feature_importances credits, and every other feature gets zero. A swap
-# of feature labels between columns would move it.
+# One split on the only feature that varies: every sample's whole attribution
+# sits on that feature and the constant one gets zero. A swap of feature labels
+# between columns would move it.
+statement ok
+CREATE TABLE split_counts AS
+  SELECT 's' || i AS sample_id, 'f' || j AS feature_id, (CASE WHEN j = 1 THEN i ELSE 1 END)::DOUBLE AS value
+  FROM range(1, 7) t(i), range(1, 3) u(j);
+
+statement ok
+CREATE TABLE split_model AS
+  SELECT * FROM fit_regressor('split_counts', 'nf_meta', n_estimators := 1, max_depth := 1, bootstrap := false, name := 's');
+
 query II
-SELECT count(DISTINCT sample_id),
-       bool_and(feature_id = (SELECT feature_id FROM feature_importances('nf_model') WHERE importance = 1.0))
-FROM shap('nf_counts', 'nf_model') WHERE shap_value <> 0;
+SELECT count(DISTINCT sample_id), list(DISTINCT feature_id)
+FROM shap('split_counts', 'split_model') WHERE shap_value <> 0;
 ----
-6	true
+6	[f1]
 
 # The thread count does not change the attributions.
 query I

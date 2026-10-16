@@ -2,7 +2,7 @@
 
 Predict a sample's metadata from its feature table: which body site a sample came from, how old the infant was, whether a treatment took. A random forest is trained on a `(sample_id, feature_id, value)` count table plus one label per sample, stored in a DuckDB table, and then used to predict, to score itself by cross-validation, and to explain individual predictions.
 
-These functions are powered by [sc](https://github.com/the-miint/sc), a Rust reimplementation of the random forest and nested cross-validation in [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier) (QIIME 2's sample classifier, "q2" below), plus path-dependent TreeSHAP, which computes exact SHAP feature attributions for tree ensembles, to explain predictions. Defaults match scikit-learn's `RandomForestClassifier` / `RandomForestRegressor`, except that `random_state` defaults to 0 rather than unseeded, so a fit is reproducible.
+These functions are powered by [sc](https://github.com/the-miint/sc), a Rust reimplementation of the random forest and nested cross-validation in [q2-sample-classifier](https://github.com/qiime2/q2-sample-classifier) (QIIME 2's sample classifier, "q2" below), plus SHAP (SHapley Additive exPlanations) feature attributions, computed exactly for tree ensembles with path-dependent TreeSHAP, to explain predictions. Defaults match scikit-learn's `RandomForestClassifier` / `RandomForestRegressor`, except that `random_state` defaults to 0 rather than unseeded, so a fit is reproducible.
 
 ## Get started
 
@@ -35,7 +35,7 @@ SELECT * FROM predict('new_counts', 'models', name := 'site');
 
 ### Input tables
 
-The **count table** is the long-form `(sample_id, feature_id, value)` relation that [`read_biom`](reading.md#biom) and [`woltka_ogu`](profiling.md) produce. Absent cells are zero. NULLs are an error rather than a zero, because a NULL means a broken join upstream. Duplicate `(sample_id, feature_id)` cells are also an error rather than a silent sum; the message shows their values, since identical values suggest a join fanout and differing ones repeat measurements.
+The **count table** is the long-form `(sample_id, feature_id, value)` relation that [`read_biom`](reading.md#biom) and [`woltka_ogu`](profiling.md) produce. Absent cells are zero. NULLs are an error rather than a zero, because a NULL means a broken join upstream. Duplicate `(sample_id, feature_id)` cells are also an error rather than a silent sum; the message shows their values, since identical values suggest a join that duplicated rows and differing ones repeat measurements.
 
 `sample_id` and `feature_id` may be VARCHAR, BIGINT or UUID; any other type is an error naming the cast to write. Ids come back as the type they went in as, so results join to typed tables without a cast. They are ordered by their text, not their value: a BIGINT `10` sorts before `2`, and rows come back in that order. An outer `ORDER BY` restores numeric order.
 
@@ -76,7 +76,7 @@ SELECT * FROM fit_classifier('counts', 'meta', name := 'site', n_estimators := 5
 | `n_estimators` | 100 | trees, at most 100,000 |
 | `random_state` | 0 | seed |
 | `threads` | 0 | 0 = DuckDB's `threads` setting, otherwise a count; ignored in DuckDB-Wasm, which has one |
-| `max_depth` | unbounded | `<= 0` is sklearn's `None` |
+| `max_depth` | unbounded | `<= 0` is scikit-learn's `None` |
 | `criterion` | `gini` / `squared_error` | classifier: `'gini'` or `'entropy'`; regressor: `'squared_error'` |
 | `max_features` | `sqrt` / `all` | features each split may consider: `'sqrt'`, `'log2'`, `'all'` (or `'none'`), a fraction in (0, 1], or an integer count |
 | `min_samples_split` | 2 | an integer count >= 2, or a fraction in (0, 1] |
@@ -85,7 +85,7 @@ SELECT * FROM fit_classifier('counts', 'meta', name := 'site', n_estimators := 5
 | `bootstrap` | true | |
 | `max_samples` | all | each tree's bootstrap sample: `'all'` (or `'none'`), a fraction in (0, 1], or a positive count; only with `bootstrap := true` |
 
-As in sklearn, integer versus float matters: `max_features := 10` means ten features, `0.3` means thirty percent.
+As in scikit-learn, integer versus float matters: `max_features := 10` means ten features, `0.3` means thirty percent.
 
 `max_features` is not a filter on the table. At every split of every tree, a fresh random set of that many candidate features is drawn and the best split among them is taken. That randomness decorrelates the trees, which is where a forest's advantage comes from; `'all'` removes it.
 
@@ -102,7 +102,6 @@ SELECT * FROM predict_proba('new_counts', 'models', name := 'site');
 | parameter | default | |
 |---|---|---|
 | `name` | | the model to use; required when the model relation holds more than one |
-| `threads` | 0 | as at fit |
 
 `prediction` is VARCHAR for a classifier and DOUBLE for a regressor, read from the model's `task` when the query is planned. A wrong model name, or `predict_proba` on a regressor, therefore fails before any data is read. A forest's probability is the mean of its trees' leaf class proportions, not a calibrated posterior.
 
@@ -118,7 +117,7 @@ SELECT DISTINCT metric, mean_score, std_score, fold_scores FROM cv;
 | parameter | default | |
 |---|---|---|
 | `target_column` | auto | as at fit |
-| `n_folds` | 5 | at least 2; also accepted as `cv` |
+| `n_folds` | 5 | at least 2; also accepted as `cv`, q2's and scikit-learn's name for it (not both) |
 | `parameter_tuning` | false | see below |
 | `n_estimators`, `random_state`, `threads` and every forest parameter from [Fitting](#fitting) | as at fit | the recipe each fold's forest is fit with |
 
@@ -130,12 +129,11 @@ SELECT DISTINCT metric, mean_score, std_score, fold_scores FROM cv;
 | `mean_score`, `std_score` | over the per-fold scores |
 | `fold_scores` | each fold's score |
 
-**`mean_score` is the generalization estimate**: cross-validated accuracy, or MSE, where `sqrt(mean_score)` is an RMSE in the target's units. It averages folds, not samples, as sklearn does.
+**`mean_score` is the generalization estimate**: cross-validated accuracy, or MSE, where `sqrt(mean_score)` is an RMSE in the target's units. It averages folds, not samples, as scikit-learn does.
 
 - `std_score` is computed with `ddof=0` (population standard deviation) to match `q2-sample-classifier`.
 - **The per-fold forests are discarded.** This measures the recipe, not a model; fit the model you will use with `fit_classifier` or `fit_regressor` on all the data.
 - **The four summary columns repeat on every row.** `SELECT DISTINCT` recovers the single summary row.
-- **`n_folds` is also accepted as `cv`**, q2's and sklearn's name for it; passing both is an error.
 - **`parameter_tuning := true`** runs a randomized search inside each training fold, so the held-out fold stays unseen. Each training fold scores 20 candidate settings with an inner `n_folds`-fold cross-validation, so it costs about 20 × `n_folds`² extra fits (500 at five folds). The chosen parameters are not returned.
 
 ```sql
@@ -159,7 +157,7 @@ SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
 | `name` | | as at prediction |
 | `predicted_class_only` | true | with two classes the other is an exact mirror; with three or more, `false` also explains the other classes |
 | `top_k` | off | keep the k strongest features per sample, or per sample and class with `predicted_class_only := false`, split evenly between those pushing toward the prediction and against it |
-| `max_attributions` | 10,000,000 | attributions one batch may hold (samples × classes × features, 8 bytes each, so ~80 MB) |
+| `max_attributions` | 10,000,000 | attributions one batch may hold (samples × classes × features, 8 bytes each, so ~80 MB); a sample that alone needs more runs by itself, above the cap, with a warning |
 | `batch_size` | derived | samples per batch, overriding `max_attributions`; passing both is an error |
 | `threads` | 0 | as at fit |
 
@@ -167,7 +165,7 @@ SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
 - **Absent features get attributions too.** A feature the model knows but the sample lacks is a zero, and a zero can push a prediction as hard as a large count; the absence of adult taxa is evidence of an infant.
 - **`top_k` shrinks the output, not the computation**, since every attribution is computed before the strongest are picked.
 - **Rows come out in waterfall order**: `sample_id` (as text; see [Input tables](#input-tables)), `class`, then `shap_value` descending.
-- **Attributions are computed one batch at a time**, and a batch holds at most `max_attributions` of them (8 bytes each: 80 MB at the default), so by construction 20,000 samples need no more attribution memory than 2,000. The input table is held in full, as at prediction.
+- **Attributions are computed one batch at a time**, sized by `max_attributions`, so 20,000 samples need no more attribution memory than 2,000. The exception is a sample whose classes × features exceed the cap: it runs alone, above it, with a warning.
 
 ### Feature importances
 
@@ -212,8 +210,8 @@ CREATE VIEW common AS
 ```
 
 - **Cancelling:** `fit_*` and `cross_validate_*` cannot be cancelled once sc is running; `shap` stops between batches.
-- **`shap`** holds the input table, as prediction does, plus one batch of attributions capped by `max_attributions`; fewer features is the way to go further.
-- **wasm** shares one 4 GiB memory with DuckDB and runs single-threaded, so expect a much lower ceiling than native. `threads` has no effect there; results are the same as native. `cross_validate_*` is not yet available there ([#315](https://github.com/the-miint/duckdb-miint/issues/315)).
+- **`shap`** holds the input table in full, as prediction does, plus one batch of attributions (see `max_attributions` under [Explaining a prediction](#explaining-a-prediction)); fewer features is the way to go further.
+- **DuckDB-Wasm** gives DuckDB and the extension one 4 GiB memory and one thread, so expect a much lower ceiling than native. `threads` has no effect there; results are the same as native. `cross_validate_*` is not available in DuckDB-Wasm ([#315](https://github.com/the-miint/duckdb-miint/issues/315)).
 
 ### Citations
 

@@ -234,7 +234,7 @@ model must be 'random_forest'
 #
 # Omitted, the target is the metadata relation's single non-sample_id column --
 # `(sample_id, month)` needs no configuration at all. With several candidates
-# the answer is genuinely unknown, and guessing would train on the wrong
+# the answer is unknown, and guessing would train on the wrong
 # variable with no error anywhere, so it asks.
 
 statement ok
@@ -245,7 +245,7 @@ SELECT n_samples, task FROM fit_regressor('train_data', 'meta_wide', n_estimator
 ----
 6	regression
 
-# The auto-selected column is the one actually used, not merely accepted.
+# The auto-selected column is the one used, not merely accepted.
 query I
 SELECT (SELECT model_blob FROM fit_regressor('train_data','meta_wide', n_estimators := 5, random_state := 3, name := 'a'))
      = (SELECT model_blob FROM fit_regressor('train_data','meta_wide', n_estimators := 5, random_state := 3,
@@ -296,9 +296,8 @@ no 'sample_id' column
 # Unset parameters take sklearn's RandomForest defaults, so an unparameterised
 # call matches what the same data would give in scikit-learn.
 
-# A parameter that changes the fit must change the model, or it is being
-# silently dropped on the way to sc. 64 features, so 'sqrt' (8), 'log2' (6), a
-# count, a fraction and 'all' each choose a different number of candidates.
+# Every parameter reaches sc. The model blob records the parameters it was fit
+# with, so a value dropped on the way leaves it equal to the default fit's.
 statement ok
 CREATE TABLE hp_counts AS
   SELECT 's' || i AS sample_id, 'f' || j AS feature_id,
@@ -344,14 +343,23 @@ min_samples_split count	true
 min_samples_split fraction	true
 min_weight_fraction_leaf	true
 
-# The spellings sklearn's defaults go by are accepted too, and mean the default.
-query TT
+# The spellings scikit-learn's defaults go by are accepted too, and mean the
+# default: 'sqrt' features for a classifier, 'all' for a regressor, and every
+# sample. A count in any integer type is a count.
+statement ok
+CREATE TABLE hp_num AS SELECT 's' || i AS sample_id, (i % 7)::DOUBLE AS v FROM range(60) t(i);
+
+query TTTT
 SELECT (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, name := 'd'))
      = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 'sqrt', name := 'd')),
+       (SELECT md5(model_blob) FROM fit_regressor('hp_counts', 'hp_num', n_estimators := 8, random_state := 1, name := 'd'))
+     = (SELECT md5(model_blob) FROM fit_regressor('hp_counts', 'hp_num', n_estimators := 8, random_state := 1, max_features := 'all', name := 'd')),
        (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, name := 'd'))
-     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 'none', name := 'd'));
+     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 'none', name := 'd')),
+       (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 3::UHUGEINT, name := 'd'))
+     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 3, name := 'd'));
 ----
-true	true
+true	true	true	true
 
 query I
 SELECT (SELECT model_blob FROM fit_classifier('train_data','class_metadata', random_state := 1, name := 'm19'))
@@ -365,7 +373,7 @@ SELECT (SELECT model_blob FROM fit_classifier('train_data','class_metadata', ran
 ----
 false
 
-# n_estimators reports what sc was actually given, not the default.
+# n_estimators reports what sc was given, not the default.
 query I
 SELECT n_estimators FROM fit_classifier('train_data','class_metadata', n_estimators := 33, name := 'm23');
 ----
@@ -378,7 +386,7 @@ SELECT n_estimators FROM fit_classifier('train_data','class_metadata', n_estimat
 statement error
 EXPLAIN SELECT * FROM fit_classifier('train_data', 'class_metadata', max_features := true, name := 'mb');
 ----
-fit_classifier: max_features must be a count or a fraction, got a BOOLEAN
+fit_classifier: max_features must be 'sqrt', 'log2', 'all', 'none', a fraction in (0, 1], or a positive integer, got a BOOLEAN
 
 statement error
 EXPLAIN SELECT * FROM fit_classifier('train_data', 'class_metadata', min_samples_leaf := DATE '2020-01-01', name := 'mb');
@@ -416,7 +424,7 @@ SELECT n_estimators FROM fit_classifier('train_data', 'class_metadata', n_estima
 100000
 
 # The criterion has to match the task; sc would reject this too, but catching it
-# here names the function the user actually called.
+# here names the function the user called.
 statement error
 SELECT * FROM fit_classifier('train_data', 'class_metadata', criterion := 'squared_error', name := 'm28');
 ----
@@ -435,9 +443,8 @@ only meaningful with bootstrap
 
 # --- random_state round-trips ---
 #
-# The seed is echoed back so a model row can reproduce itself. That is only
-# worth anything if feeding it to a refit gives the same model, which is what
-# these assert -- otherwise the column is a comment that looks like a fact.
+# The seed is echoed back so a model row can reproduce itself, which holds only
+# if feeding it to a refit gives the same model. These assert that.
 
 statement ok
 CREATE TABLE seeded AS
@@ -568,11 +575,10 @@ SELECT * FROM fit_regressor('train_data', 'train_metadata', name := '');
 ----
 fit_regressor: name must not be empty; every model needs one
 
-# --- the whole flow, as it is actually written ---
+# --- the whole flow: split, fit, store, apply ---
 #
-# A model has to land in a table before sc_predict_* can read it back, so this
-# exercises the pattern end to end: split in SQL, fit, store, verify. Every
-# earlier test calls the function inline, which is not how anyone uses it.
+# A model lands in a table before predict reads it back. The earlier tests call
+# fit inline; this one stores the model first, as a pipeline does.
 
 statement ok
 CREATE TABLE gm_to_train AS SELECT unnest(['Sample1','Sample2','Sample3','Sample4']) AS sample_id;
@@ -593,7 +599,7 @@ CREATE TABLE month_model AS
                                  n_estimators := 25, random_state := 1234, name := 'm42');
 
 # One row, and the counts reflect the split rather than the whole file: 4 of the
-# 6 samples, and only the features those 4 actually carry.
+# 6 samples, and only the features those 4 carry.
 query I
 SELECT count(*) FROM month_model;
 ----
@@ -605,7 +611,7 @@ SELECT n_samples, n_features, n_estimators, task FROM month_model;
 4	5	25	regression
 
 # The blob survives being stored in a table and read back -- byte-identical to a
-# fresh fit under the same seed. This is the round trip sc_predict_* depends on.
+# fresh fit under the same seed. This is the round trip predict depends on.
 query I
 SELECT (SELECT model_blob FROM month_model)
      = (SELECT model_blob FROM fit_regressor('gm_data', 'gm_metadata', model := 'random_forest',
@@ -724,22 +730,22 @@ statement ok
 CREATE TABLE injection_victim AS SELECT 1 AS x;
 
 statement ok
-CREATE TABLE "train_data; DROP TABLE injection_victim; --" AS SELECT * FROM train_data;
+CREATE TABLE "train_data""; DROP TABLE injection_victim; --" AS SELECT * FROM train_data;
 
 statement ok
 CREATE TABLE "class_metadata""; DROP TABLE injection_victim; --" AS SELECT * FROM class_metadata;
 
 statement ok
-CREATE TABLE "models; DROP TABLE injection_victim; --" AS
-  SELECT * FROM fit_classifier('train_data; DROP TABLE injection_victim; --',
+CREATE TABLE "models""; DROP TABLE injection_victim; --" AS
+  SELECT * FROM fit_classifier('train_data"; DROP TABLE injection_victim; --',
                                'class_metadata"; DROP TABLE injection_victim; --',
                                n_estimators := 5, random_state := 1, name := 'evil');
 
 query III
-SELECT (SELECT md5(model_blob) FROM "models; DROP TABLE injection_victim; --")
+SELECT (SELECT md5(model_blob) FROM "models""; DROP TABLE injection_victim; --")
      = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'class_metadata', n_estimators := 5, random_state := 1, name := 'evil')),
-       (SELECT count(*) FROM predict('train_data; DROP TABLE injection_victim; --', 'models; DROP TABLE injection_victim; --')),
-       (SELECT count(*) FROM feature_importances('models; DROP TABLE injection_victim; --'));
+       (SELECT count(*) FROM predict('train_data"; DROP TABLE injection_victim; --', 'models"; DROP TABLE injection_victim; --')),
+       (SELECT count(*) FROM feature_importances('models"; DROP TABLE injection_victim; --'));
 ----
 true	6	5
 
@@ -749,21 +755,21 @@ SELECT count(*) FROM injection_victim;
 1
 
 # target_column names a column, quoted like a relation, and the fit uses that
-# column: with two candidates, naming either gives the model a one-column
-# metadata of the same labels gives.
+# column: with two candidates, naming either gives the same model as a
+# metadata holding only that column.
 statement ok
 CREATE TABLE two_targets AS
-  SELECT sample_id, CASE WHEN sample_id IN ('Sample1', 'Sample4') THEN 'x' ELSE 'y' END AS other, value AS "body site"
+  SELECT sample_id, CASE WHEN sample_id IN ('Sample1', 'Sample4') THEN 'x' ELSE 'y' END AS other, value AS "body ""site"""
   FROM class_metadata;
 
 statement ok
-CREATE TABLE body_site_only AS SELECT sample_id, "body site" FROM two_targets;
+CREATE TABLE body_site_only AS SELECT sample_id, "body ""site""" FROM two_targets;
 
 statement ok
 CREATE TABLE other_only AS SELECT sample_id, other FROM two_targets;
 
 query III
-SELECT (SELECT md5(model_blob) FROM fit_classifier('train_data', 'two_targets', target_column := 'body site', n_estimators := 5, random_state := 1, name := 't'))
+SELECT (SELECT md5(model_blob) FROM fit_classifier('train_data', 'two_targets', target_column := 'body "site"', n_estimators := 5, random_state := 1, name := 't'))
      = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'body_site_only', n_estimators := 5, random_state := 1, name := 't')),
        (SELECT md5(model_blob) FROM fit_classifier('train_data', 'two_targets', target_column := 'other', n_estimators := 5, random_state := 1, name := 't'))
      = (SELECT md5(model_blob) FROM fit_classifier('train_data', 'other_only', n_estimators := 5, random_state := 1, name := 't')),
@@ -774,7 +780,7 @@ true	true	false
 
 query I
 SELECT list(actual ORDER BY sample_id)
-FROM cross_validate_classifier('train_data', 'two_targets', target_column := 'body site', n_folds := 2, n_estimators := 5);
+FROM cross_validate_classifier('train_data', 'two_targets', target_column := 'body "site"', n_folds := 2, n_estimators := 5);
 ----
 [gut, gut, gut, skin, skin, skin]
 
@@ -815,8 +821,7 @@ SELECT * FROM fit_regressor('train_data', 'null_meta_sample', name := 'nms');
 ----
 fit_regressor: NULL in metadata relation 'null_meta_sample'
 
-# A NULL written as a literal reaches the scan as a constant vector rather than a
-# flat one with a validity mask; it is refused all the same.
+# A NULL written as a literal in a view is refused too.
 statement ok
 CREATE VIEW const_null_value AS SELECT sample_id, feature_id, NULL::DOUBLE AS value FROM train_data;
 

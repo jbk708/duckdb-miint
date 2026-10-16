@@ -65,7 +65,7 @@ SELECT bool_and(importance >= 0.0) FROM feature_importances('fi_model');
 true
 
 # The labels are the model's training vocabulary, so they must match the
-# features the model was actually fit on -- not whatever the data table happens
+# features the model was fit on -- not whatever the data table happens
 # to contain now.
 query I
 SELECT list_sort(list(feature_id)) FROM feature_importances('fi_model');
@@ -237,7 +237,7 @@ SELECT count(*) FROM feature_importances('fi_reg', name := 'reg');
 5
 
 # Different models in one table give different importances, so the name is
-# actually selecting rather than just permitting the call.
+# selecting rather than just permitting the call.
 query I
 SELECT (SELECT list(importance ORDER BY feature_id) FROM feature_importances('fi_reg', name := 'clf'))
      = (SELECT list(importance ORDER BY feature_id) FROM feature_importances('fi_reg', name := 'reg'));
