@@ -76,15 +76,13 @@ def main():
     # "Storage"). unittest runs on_init whenever it opens a database, with __TEST_DIR__
     # expanded to the process's own directory; temp_directory is database-wide. It also runs
     # it on `reconnect`, so a test that spills and then reconnects fails here alone: DuckDB
-    # refuses to move a temp directory in use. No test does.
+    # refuses to move a temp directory in use.
     sql_env = dict(os.environ)
     sql_env["DUCKDB_TEST_ON_INIT"] = ";".join(
         filter(None, [os.environ.get("DUCKDB_TEST_ON_INIT"), "SET temp_directory='__TEST_DIR__/spill'"])
     )
-    # Under the load these workers make, rype's rayon workers overflow their default 2 MiB
-    # stack (the-miint/RYpe#28), which the serial pass never reaches; at 4 MiB a parallel
-    # run fails only where a serial one would. A caller's own value wins. Drop this once
-    # RYpe#28 is fixed.
+    # The load these workers make can overflow rype's rayon stacks (docs/testing.md,
+    # the-miint/RYpe#28). A caller's own value wins. Drop this once RYpe#28 is fixed.
     sql_env.setdefault("RUST_MIN_STACK", "4194304")
 
     # -w NoTests: a name that matches nothing fails instead of passing as "No tests ran".

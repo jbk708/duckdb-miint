@@ -4,10 +4,12 @@
 # fail the run on any failure it can see, and report what the serial pass reports; each
 # scenario says which part of that it pins and why.
 #
-# Each scenario runs the real unittest binary against a throwaway test root (unittest's
+# Scenarios run the real unittest binary against a throwaway test root (unittest's
 # --test-dir) holding generated .test files, so no fixture sits under this repository's
-# test/ for the main pass to pick up. The C++ test binary is a stub. The root is removed
-# when all scenarios pass and kept otherwise.
+# test/ for the serial pass to pick up. Three use a unittest stub for what the real one
+# cannot be made to do: die partway through its listing, and report the environment its
+# job saw. The C++ test binary is always a stub. The root is removed when all scenarios
+# pass and kept otherwise.
 #
 # Usage: bash test/shell/run_tests_parallel.sh [script-under-test]
 
@@ -140,7 +142,7 @@ invoke "$CPP_OK" --unittest "$UNITTEST_STACK"
 ok=0
 [[ $EXIT -eq 0 ]] && ran_once ok stack.test && ok=1
 report "SQL jobs run with a 4 MiB Rust thread stack" \
-    "rype's rayon workers overflow the default 2 MiB under this load alone (the-miint/RYpe#28), failing a run the serial pass passes" "$ok"
+    "the load these workers make is enough for rype's rayon workers to overflow Rust's default 2 MiB stack (the-miint/RYpe#28)" "$ok"
 
 export RUST_MIN_STACK=8388608 EXPECT_RUST_MIN_STACK=8388608
 invoke "$CPP_OK" --unittest "$UNITTEST_STACK"
