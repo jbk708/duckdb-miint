@@ -206,18 +206,25 @@ whose text round trip is exact, and keeps the cast for FLOAT, DOUBLE and DECIMAL
 text form is not.
 
 **Validation in a table macro goes in one CASE in a filtering clause.** Two engine behaviours
-decide this. The terms of `cond AND check` need not run in the order written: `filter_pushdown`
-rebuilds the conjunction, and over both a table function and a native table has put `check`
-first (observed on DuckDB v1.5.5), so a cast or `error()` that `cond` was meant to guard runs on rows `cond` excludes
-(`reorder_filter`, below, is not what moves it). A CASE tests its WHENs in order. And a check
-written in the SELECT list is pruned when the query does not select that column, while a
-WHERE, HAVING or QUALIFY clause is evaluated whichever columns the query selects. So a macro
-raises its errors as `WHERE CASE WHEN <excluded> THEN FALSE WHEN <bad> THEN error(...) ELSE
-TRUE END` (or the same CASE in HAVING or QUALIFY), with any cast placed after the WHEN that
-proves it safe. The check still sees only the rows that reach it. A query that stops early,
-such as one with `LIMIT`, does not read the rest of the file, and the same pushdown can put a
-caller's own filter ahead of the macro's CASE (`WHERE seqid LIKE 'ctg1%'` over `read_gff`
-did), so a malformed record either one skips raises nothing.
+decide this. The terms of `cond AND check` need not run in the order written:
+`filter_pushdown` rebuilds the conjunction, and over both a table function and a native table
+has put `check` first (observed on DuckDB v1.5.5), so a cast or `error()` that `cond` was
+meant to guard runs on rows `cond` excludes (`reorder_filter`, below, is not what moves it).
+A CASE tests its WHENs in order. And a check written in the SELECT list is pruned when the
+query does not select that column, while a WHERE, HAVING or QUALIFY clause is evaluated
+whichever columns the query selects. So a macro raises its errors as `WHERE CASE WHEN
+<excluded> THEN FALSE WHEN <bad> THEN error(...) ELSE TRUE END` (or the same CASE in HAVING
+or QUALIFY), with any cast placed after the WHEN that proves it safe.
+
+The check still sees only the rows that reach it. A query that stops early, such as one with
+`LIMIT`, does not read the rest of the file. And the same pushdown can put a caller's own
+filter ahead of the macro's CASE, so a malformed record that filter excludes raises nothing:
+`read_gff` did this under `WHERE type IN (...)`. To close that gap, compute the check once
+as a column in a subquery (`... END AS keep`), wrap every output column in
+`CASE WHEN keep THEN ... END`, and keep `WHERE keep` for a query that reads no column. A
+filter on any column then has to evaluate the check to evaluate the column. `read_gff` does
+this; on a 2-million-line file its queries ran within run-to-run noise of the ungated macro
+(three runs each).
 
 Passes worth knowing about for our workloads:
 - `late_materialization` — keeps rows narrow through the heavy operators, then joins wide

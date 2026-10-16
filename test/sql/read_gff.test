@@ -308,9 +308,9 @@ SELECT COUNT(*) FROM read_gff('data/gff/withfasta.gff') WHERE source IS NULL OR 
 #
 # A line with only SOME of the 8 mandatory fields is a broken GFF line, not FASTA content,
 # and is not silently droppable: dropping it would trade one silent wrong answer for
-# another. Note the check lives in the macro's WHERE clause, not a projection -- DuckDB
-# prunes unused projections, so a check in a SELECT expression would NOT fire for
-# `SELECT type FROM read_gff(...)`, which is exactly the shape the issue reported.
+# another. The check must fire whichever columns are selected or filtered on, including
+# `SELECT type FROM read_gff(...)`, the shape the issue reported: DuckDB prunes a projection
+# the query does not use, and can apply a caller's filter before the macro's own WHERE.
 statement error
 SELECT COUNT(*) FROM read_gff('data/gff/malformed.gff');
 ----
@@ -341,6 +341,36 @@ statement error
 SELECT COUNT(*) FROM read_gff('data/gff/malformed.gff') WHERE position > 1000000;
 ----
 malformed GFF feature line
+
+# The optimizer does put some predicates ahead of the check: an IN list did, and so did a
+# filter on the attributes map. Whatever the predicate, it has to read a column, and every
+# column is gated on the check, so the check runs on each row the predicate reads.
+statement error
+SELECT COUNT(*) FROM read_gff('data/gff/malformed.gff') WHERE type IN ('gene', 'mRNA');
+----
+malformed GFF feature line
+
+# A download cut off mid-line leaves a last line with a seqid and a source and nothing else.
+# Counting features that have an ID must not quietly leave it out.
+statement ok
+COPY (SELECT * FROM (VALUES (E'##gff-version 3'), (E'ctg1\tprodigal\tCDS\t1\t50\t.\t+\t0\tID=c1'),
+                            (E'ctg1\tprodigal')) t(line))
+TO '__TEST_DIR__/truncated.gff' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT COUNT(*) FROM read_gff('__TEST_DIR__/truncated.gff') WHERE attributes['ID'] IS NOT NULL;
+----
+malformed GFF feature line
+
+# A filter that selects other contigs still reads the malformed line, so it still raises.
+statement ok
+COPY (SELECT * FROM (VALUES (E'ctg1\tsrc\tgene\t1\t50\t.\t+\t.\tID=g1'), (E'ctg2\tsrc\tgene\t1')) t(line))
+TO '__TEST_DIR__/broken_ctg2.gff' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT COUNT(*) FROM read_gff('__TEST_DIR__/broken_ctg2.gff') WHERE seqid LIKE 'ctg1%';
+----
+malformed GFF feature line (expected 9 tab-separated fields, found fewer): ctg2
 
 # --- Composition with genome_coverage (issue #196) ---
 #

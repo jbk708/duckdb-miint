@@ -39,11 +39,16 @@ const std::string PARSE_GFF_ATTRIBUTES = // NOLINT
 
 const std::string READ_GFF = // NOLINT
     "CREATE OR REPLACE MACRO read_gff(path) AS TABLE "
+    // Every column is gated on `keep`, the line check below, so a query that reads any column,
+    // to return it or to filter on it, runs the check on that row; `WHERE keep` covers a
+    // query that reads none (COUNT(*)). Without the gate the optimizer can apply a caller's
+    // filter first and drop a malformed line unchecked: `WHERE type IN (...)` did (issue
+    // #186; docs/internals/duckdb-engine-notes.md, "Validation in a table macro").
     "SELECT "
-    "   column0 AS seqid, "
-    "   column1 AS source, "
-    "   column2 AS type, "
-    "   column3::INTEGER AS position, "
+    "   CASE WHEN keep THEN column0 END AS seqid, "
+    "   CASE WHEN keep THEN column1 END AS source, "
+    "   CASE WHEN keep THEN column2 END AS type, "
+    "   CASE WHEN keep THEN column3::INTEGER END AS position, "
     // GFF3's `end` is 1-based CLOSED; miint's project-wide convention is 1-based HALF-OPEN
     // [position, stop_position), as used by read_alignments, align_*, alignment_slice,
     // compute_coverage_depth and genome_coverage. Normalize on read (+1) so `stop_position`
@@ -51,22 +56,43 @@ const std::string READ_GFF = // NOLINT
     // the column NAME, so composing it with any of those silently dropped the interval's
     // last base -- genome_coverage's SUM(stop - start) under-counted every feature by one.
     // The raw GFF `end` is recoverable as `stop_position - 1` (issue #196).
-    "   column4::INTEGER + 1 AS stop_position, "
-    "   CASE  "
-    "     WHEN column5 = '.' THEN NULL  "
-    "     ELSE column5::DOUBLE  "
-    "   END AS score, "
-    "   CASE  "
-    "     WHEN column6 = '.' THEN NULL  "
-    "     ELSE column6  "
-    "   END AS strand, "
-    "   CASE  "
-    "     WHEN column7 = '.' THEN NULL  "
-    "     ELSE column7::INTEGER  "
-    "   END AS phase, "
-    "   parse_gff_attributes(column8) AS attributes "
-    "FROM read_csv(path, "
-    " delim = '\t', "
+    "   CASE WHEN keep THEN column4::INTEGER + 1 END AS stop_position, "
+    "   CASE WHEN keep THEN CASE WHEN column5 = '.' THEN NULL ELSE column5::DOUBLE END END AS score, "
+    "   CASE WHEN keep THEN CASE WHEN column6 = '.' THEN NULL ELSE column6 END END AS strand, "
+    "   CASE WHEN keep THEN CASE WHEN column7 = '.' THEN NULL ELSE column7::INTEGER END END AS phase, "
+    "   CASE WHEN keep THEN parse_gff_attributes(column8) END AS attributes "
+    "FROM ( "
+    "  SELECT *, "
+    "    CASE "
+    // An empty seqid parses as NULL; such a line is dropped, as the WHERE clause before this
+    // CASE dropped it (column0 NOT LIKE '##%' is NULL there).
+    "        WHEN column0 IS NULL OR column0 LIKE '##%' THEN FALSE "
+    // A FASTA header line, checked before the field counts because its description may itself
+    // contain tabs (e.g. ">ctg1<TAB>some description"), which would otherwise populate
+    // column1 and trip the malformed-feature branch below on a perfectly valid file. '>' is
+    // not a legal GFF3 seqid character, so this prefix identifies FASTA unambiguously.
+    "        WHEN column0 LIKE '>%' THEN FALSE "
+    // The GFF3 sequence section (issue #186). Everything after a ##FASTA directive is
+    // FASTA, and prokka/bakta ALWAYS append the genome -- so this is the common case. Those
+    // lines contain no tabs, so with null_padding every mandatory field after column0
+    // parses as NULL. Dropped silently: appended FASTA is expected file content.
+    "        WHEN column1 IS NULL AND column2 IS NULL AND column3 IS NULL "
+    "         AND column4 IS NULL AND column5 IS NULL AND column6 IS NULL "
+    "         AND column7 IS NULL THEN FALSE "
+    // Some-but-not-all mandatory fields present is a different thing -- a broken feature
+    // line -- and is raised rather than dropped, so we don't trade one silent wrong answer
+    // for another. column8 (attributes) is deliberately NOT required: a legitimate line may
+    // end with an empty attributes field, which also parses as NULL, so keying off it would
+    // reject real prokka output.
+    "        WHEN column1 IS NULL OR column2 IS NULL OR column3 IS NULL "
+    "          OR column4 IS NULL OR column5 IS NULL OR column6 IS NULL "
+    "          OR column7 IS NULL "
+    "        THEN error(printf('read_gff: malformed GFF feature line "
+    "(expected 9 tab-separated fields, found fewer): %s', column0)) "
+    "        ELSE TRUE "
+    "    END AS keep "
+    "  FROM read_csv(path, "
+    "   delim = '\t', "
     "   header = false, "
     "   columns = { "
     "     'column0': 'VARCHAR', "
@@ -82,38 +108,9 @@ const std::string READ_GFF = // NOLINT
     "   comment = '#', "
     "   skip = 0, "
     "   null_padding = true "
-    " ) "
-    "WHERE column0 NOT LIKE '##%' "
-    // The GFF3 sequence section (issue #186). Everything after a ##FASTA directive is
-    // FASTA, and prokka/bakta ALWAYS append the genome -- so this is the common case. Those
-    // lines contain no tabs, so with null_padding every mandatory field after column0
-    // parses as NULL. Dropped silently: appended FASTA is expected file content.
-    //
-    // Some-but-not-all mandatory fields present is a different thing -- a broken feature
-    // line -- and is raised rather than dropped, so we don't trade one silent wrong answer
-    // for another. column8 (attributes) is deliberately NOT required: a legitimate line may
-    // end with an empty attributes field, which also parses as NULL, so keying off it would
-    // reject real prokka output.
-    //
-    // This MUST live in the WHERE clause, not a projection: DuckDB prunes unused
-    // projections, so a check inside a SELECT expression would not fire for
-    // `SELECT type FROM read_gff(...)` -- the very shape the issue reported.
-    "  AND CASE "
-    // A FASTA header line, checked FIRST because its description may itself contain tabs
-    // (e.g. ">ctg1<TAB>some description"), which would otherwise populate column1 and trip
-    // the malformed-feature branch below on a perfectly valid file. '>' is not a legal GFF3
-    // seqid character, so this prefix identifies FASTA unambiguously.
-    "        WHEN column0 LIKE '>%' THEN FALSE "
-    "        WHEN column1 IS NULL AND column2 IS NULL AND column3 IS NULL "
-    "         AND column4 IS NULL AND column5 IS NULL AND column6 IS NULL "
-    "         AND column7 IS NULL THEN FALSE "
-    "        WHEN column1 IS NULL OR column2 IS NULL OR column3 IS NULL "
-    "          OR column4 IS NULL OR column5 IS NULL OR column6 IS NULL "
-    "          OR column7 IS NULL "
-    "        THEN error(printf('read_gff: malformed GFF feature line "
-    "(expected 9 tab-separated fields, found fewer): %s', column0)) "
-    "        ELSE TRUE "
-    "      END; ";
+    "  ) "
+    ") "
+    "WHERE keep; ";
 
 // read_gfa_segments(path) / read_gfa_links(path)
 //
