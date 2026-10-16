@@ -10,7 +10,7 @@
 # SKB_ARROW_COMPILED is run_tests.sh's compile-time gate, not a runtime-binary
 # check: the guard fires in Bind, before skb-arrow is located.
 #
-# Covers: skb_mantel
+# Covers: skb_ancombc, skb_mantel
 #
 
 require miint
@@ -26,3 +26,13 @@ statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM skb_mantel('nope', 'c');
 ----
 skb_mantel: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM skb_ancombc('c', 'nope', 'g');
+----
+skb_ancombc: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM skb_ancombc('nope', 'c', 'g');
+----
+skb_ancombc: 'c' is a common table expression

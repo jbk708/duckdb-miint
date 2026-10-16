@@ -15,11 +15,14 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
+#include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/function/table/arrow.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_context.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
@@ -33,6 +36,8 @@ namespace {
 namespace sk = ::duckdb::miint::skb_arrow;
 namespace gb = ::duckdb::miint::gpl_boundary;
 using unifrac_internal::ProbeDistanceTableIdType;
+using unifrac_internal::ProbeFeatureTableIdType;
+using unifrac_internal::ResolveSampleIdOutputType;
 using unifrac_internal::ResolveThreadsParameter;
 
 // Rows per Arrow record batch sent to skb-arrow, and so between interrupt checks.
@@ -67,6 +72,9 @@ struct SkbArrowCallData : public TableFunctionData {
 	std::vector<std::pair<std::string, Value>> params;
 	int threads = 1;
 	vector<string> output_names;
+	// The output's types as skb-arrow sends them, and as the function returns
+	// them; they differ where an ID returns to the input's type.
+	vector<LogicalType> wire_types;
 	vector<LogicalType> output_types;
 
 	unique_ptr<FunctionData> Copy() const override {
@@ -77,7 +85,8 @@ struct SkbArrowCallData : public TableFunctionData {
 		const auto &other = other_p.Cast<SkbArrowCallData>();
 		if (function != other.function || capability != other.capability || schema_version != other.schema_version ||
 		    inputs != other.inputs || threads != other.threads || output_names != other.output_names ||
-		    output_types != other.output_types || params.size() != other.params.size()) {
+		    wire_types != other.wire_types || output_types != other.output_types ||
+		    params.size() != other.params.size()) {
 			return false;
 		}
 		for (idx_t i = 0; i < params.size(); i++) {
@@ -160,6 +169,14 @@ sk::Params ToParams(const std::vector<std::pair<std::string, Value>> &params) {
 		case LogicalTypeId::VARCHAR:
 			out.SetString(name, StringValue::Get(value));
 			break;
+		case LogicalTypeId::LIST: {
+			std::vector<std::string> items;
+			for (const auto &item : ListValue::GetChildren(value)) {
+				items.push_back(StringValue::Get(item));
+			}
+			out.SetStrings(name, std::move(items));
+			break;
+		}
 		default:
 			throw NotImplementedException("skb-arrow param '%s' of type %s", name, value.type().ToString());
 		}
@@ -229,10 +246,10 @@ void ReadOutputSegment(ClientContext &context, const SkbArrowCallData &data, con
 	decoder.GetSchema(&schema.arrow_schema);
 	ArrowTableSchema table;
 	ArrowTableFunction::PopulateArrowTableSchema(context, table, schema.arrow_schema);
-	if (table.GetNames() != data.output_names || table.GetTypes() != data.output_types) {
+	if (table.GetNames() != data.output_names || table.GetTypes() != data.wire_types) {
 		throw sk::Error("host_incompatible", data.capability + " returned (" +
 		                                         DescribeColumns(table.GetNames(), table.GetTypes()) + "), not (" +
-		                                         DescribeColumns(data.output_names, data.output_types) + ")");
+		                                         DescribeColumns(data.output_names, data.wire_types) + ")");
 	}
 	const auto &columns = table.GetColumns();
 	while (true) {
@@ -244,7 +261,7 @@ void ReadOutputSegment(ClientContext &context, const SkbArrowCallData &data, con
 		for (idx_t offset = 0; offset < length; offset += STANDARD_VECTOR_SIZE) {
 			const idx_t n = MinValue<idx_t>(STANDARD_VECTOR_SIZE, length - offset);
 			DataChunk chunk;
-			chunk.Initialize(context, data.output_types);
+			chunk.Initialize(context, data.wire_types);
 			chunk.SetChildCardinality(n);
 			// As DuckDB's own Arrow scan (ArrowTableFunction::ArrowToDuckDB) converts a column.
 			for (idx_t c = 0; c < data.output_types.size(); c++) {
@@ -269,7 +286,21 @@ void ReadOutputSegment(ClientContext &context, const SkbArrowCallData &data, con
 				}
 				FlatVector::SetSize(chunk.data[c], count_t(n));
 			}
-			out.Append(chunk);
+			if (data.wire_types == data.output_types) {
+				out.Append(chunk);
+				continue;
+			}
+			DataChunk cast;
+			cast.Initialize(context, data.output_types);
+			cast.SetChildCardinality(n);
+			for (idx_t c = 0; c < data.output_types.size(); c++) {
+				if (data.wire_types[c] == data.output_types[c]) {
+					cast.data[c].Reference(chunk.data[c]);
+				} else {
+					VectorOperations::Cast(context, chunk.data[c], cast.data[c], n);
+				}
+			}
+			out.Append(cast);
 		}
 	}
 }
@@ -339,11 +370,23 @@ void ReadNamedParams(ClientContext &context, TableFunctionBindInput &input, SkbA
 	int32_t threads = 0;
 	for (const auto &kv : input.named_parameters) {
 		const auto name = StringUtil::Lower(kv.first.GetIdentifierName());
+		const Value &value = kv.second;
 		if (name == "threads") {
-			threads = kv.second.IsNull() ? 0 : kv.second.GetValue<int32_t>();
-		} else {
-			data.params.emplace_back(name, kv.second);
+			threads = value.IsNull() ? 0 : value.GetValue<int32_t>();
+			continue;
 		}
+		// NaN and Infinity aren't JSON, and a null would mean "the default".
+		if (value.type().id() == LogicalTypeId::DOUBLE && !value.IsNull() && !std::isfinite(DoubleValue::Get(value))) {
+			throw BinderException(data.function + ": " + name + " must be finite (got " + value.ToString() + ")");
+		}
+		if (value.type().id() == LogicalTypeId::LIST && !value.IsNull()) {
+			for (const auto &item : ListValue::GetChildren(value)) {
+				if (item.IsNull()) {
+					throw BinderException(data.function + ": " + name + " must not contain NULL");
+				}
+			}
+		}
+		data.params.emplace_back(name, value);
 	}
 	std::sort(data.params.begin(), data.params.end(),
 	          [](const std::pair<std::string, Value> &a, const std::pair<std::string, Value> &b) {
@@ -353,12 +396,12 @@ void ReadNamedParams(ClientContext &context, TableFunctionBindInput &input, SkbA
 }
 
 // =============================================================================
-// skb_mantel
+// Inputs: miint's relations as skb-arrow's tables
 // =============================================================================
 
 // skb-arrow takes integer or string IDs. Integers of up to 64 bits go as
 // BIGINT; anything else (UUID, HUGEINT, ...) as text.
-const char *IdWireType(const LogicalType &type) {
+LogicalType IdWireType(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:
 	case LogicalTypeId::SMALLINT:
@@ -368,9 +411,9 @@ const char *IdWireType(const LogicalType &type) {
 	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::UBIGINT:
-		return "BIGINT";
+		return LogicalType::BIGINT;
 	default:
-		return "VARCHAR";
+		return LogicalType::VARCHAR;
 	}
 }
 
@@ -388,11 +431,123 @@ SkbArrowInput DistanceInput(ClientContext &context, const std::string &function,
 			id_type = columns.types[i];
 		}
 	}
-	const std::string id = IdWireType(id_type);
+	const std::string id = IdWireType(id_type).ToString();
 	return {table, relation,
 	        "SELECT sample_a::" + id + " AS id_a, sample_b::" + id + " AS id_b, distance::DOUBLE AS distance FROM " +
 	            SQLIdentifier::ToString(relation)};
 }
+
+// miint's long (sample_id, feature_id, value) feature table, as skb-arrow's.
+// `feature_id_type` receives the feature_id column's own type.
+SkbArrowInput FeatureTableInput(ClientContext &context, const std::string &function, const std::string &relation,
+                                LogicalType &feature_id_type) {
+	// Columns and castability.
+	ProbeFeatureTableIdType(context, relation, function);
+	LogicalType sample_id_type = LogicalType::VARCHAR;
+	const auto columns = GetTableOrViewColumns(context, relation, "feature-table");
+	for (idx_t i = 0; i < columns.names.size(); i++) {
+		const auto name = StringUtil::Lower(columns.names[i]);
+		if (name == "sample_id") {
+			sample_id_type = columns.types[i];
+		} else if (name == "feature_id") {
+			feature_id_type = columns.types[i];
+		}
+	}
+	return {"table", relation,
+	        "SELECT sample_id::" + IdWireType(sample_id_type).ToString() +
+	            " AS sample_id, feature_id::" + IdWireType(feature_id_type).ToString() +
+	            " AS feature_id, value::DOUBLE AS value FROM " + SQLIdentifier::ToString(relation)};
+}
+
+// The type a metadata covariate is sent as. skb-arrow takes booleans, integers,
+// floating point and strings; DECIMAL and HUGEINT go as DOUBLE. ENUM is
+// refused: nanoarrow's IPC writer can't send a dictionary, and text would
+// quietly move the reference level from the ENUM's first to the alphabetical first.
+std::string CovariateWireType(const std::string &function, const std::string &column, const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::VARCHAR:
+		// Its own type, without any alias or collation.
+		return LogicalType(type.id()).ToString();
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UHUGEINT:
+		return "DOUBLE";
+	case LogicalTypeId::ENUM:
+		throw BinderException(function + ": metadata column '" + column +
+		                      "' is an ENUM, which skb-arrow can't take; cast it to VARCHAR in a view (" + column +
+		                      "::VARCHAR AS " + column +
+		                      "). Its reference level then becomes the alphabetically first, not the ENUM's first");
+	default:
+		throw BinderException(function + ": metadata column '" + column + "' is " + type.ToString() +
+		                      "; a covariate must be BOOLEAN, an integer, FLOAT, DOUBLE, DECIMAL or VARCHAR");
+	}
+}
+
+// The names in `formula`: the metadata columns it can mean. skb-arrow parses
+// the formula itself; this only picks which columns to send, so a column the
+// formula doesn't name never matters, whatever its type.
+std::set<std::string> FormulaNames(const std::string &formula) {
+	std::set<std::string> names;
+	std::string name;
+	for (const char c : formula) {
+		const auto u = static_cast<unsigned char>(c);
+		// Python identifiers: ASCII letters, digits and '_', and any non-ASCII.
+		if ((u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z') || (u >= '0' && u <= '9') || u == '_' || u >= 0x80) {
+			name += c;
+		} else if (!name.empty()) {
+			names.insert(name);
+			name.clear();
+		}
+	}
+	if (!name.empty()) {
+		names.insert(name);
+	}
+	return names;
+}
+
+// miint's wide metadata (sample_id, then a column per covariate), as
+// skb-arrow's: sample_id plus the columns `formula` or `grouping` name.
+SkbArrowInput MetadataInput(ClientContext &context, const std::string &function, const std::string &relation,
+                            const std::string &formula, const std::string &grouping) {
+	auto wanted = FormulaNames(formula);
+	if (!grouping.empty()) {
+		wanted.insert(grouping);
+	}
+	const auto columns = GetTableOrViewColumns(context, relation, function + ": metadata table");
+	const LogicalType *sample_id_type = nullptr;
+	std::string covariates;
+	for (idx_t i = 0; i < columns.names.size(); i++) {
+		const std::string &column = columns.names[i];
+		if (StringUtil::Lower(column) == "sample_id") {
+			sample_id_type = &columns.types[i];
+		} else if (wanted.count(column)) {
+			const auto quoted = SQLIdentifier::ToString(column);
+			covariates +=
+			    ", " + quoted + "::" + CovariateWireType(function, column, columns.types[i]) + " AS " + quoted;
+		}
+	}
+	if (!sample_id_type) {
+		throw BinderException(function + ": metadata '" + relation + "' has no sample_id column");
+	}
+	return {"metadata", relation,
+	        "SELECT sample_id::" + IdWireType(*sample_id_type).ToString() + " AS sample_id" + covariates + " FROM " +
+	            SQLIdentifier::ToString(relation)};
+}
+
+// =============================================================================
+// skb_mantel
+// =============================================================================
 
 unique_ptr<FunctionData> SkbMantelBind(ClientContext &context, TableFunctionBindInput &input,
                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
@@ -410,6 +565,49 @@ unique_ptr<FunctionData> SkbMantelBind(ClientContext &context, TableFunctionBind
 	ReadNamedParams(context, input, *data);
 	data->output_names = {"statistic", "pvalue", "n"};
 	data->output_types = {LogicalType::DOUBLE, LogicalType::DOUBLE, LogicalType::BIGINT};
+	data->wire_types = data->output_types;
+	return_types = data->output_types;
+	for (const auto &name : data->output_names) {
+		names.emplace_back(name);
+	}
+	return std::move(data);
+}
+
+// =============================================================================
+// skb_ancombc
+// =============================================================================
+
+unique_ptr<FunctionData> SkbAncombcBind(ClientContext &context, TableFunctionBindInput &input,
+                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
+	auto data = make_uniq<SkbArrowCallData>();
+	data->function = "skb_ancombc";
+	data->capability = "ancombc";
+	data->schema_version = 1;
+	const std::string table = input.inputs[0].GetValue<string>();
+	const std::string metadata = input.inputs[1].GetValue<string>();
+	const std::string formula = input.inputs[2].GetValue<string>();
+	RejectCTERelationName(input, table);
+	RejectCTERelationName(input, metadata);
+	data->params.emplace_back("formula", Value(formula));
+	ReadNamedParams(context, input, *data);
+	std::string grouping;
+	for (const auto &param : data->params) {
+		if (param.first == "grouping" && !param.second.IsNull()) {
+			grouping = StringValue::Get(param.second);
+		}
+	}
+	LogicalType feature_id_type = LogicalType::VARCHAR;
+	data->inputs.push_back(FeatureTableInput(context, data->function, table, feature_id_type));
+	data->inputs.push_back(MetadataInput(context, data->function, metadata, formula, grouping));
+
+	data->output_names = {"feature_id", "test", "term", "lfc", "se", "w", "pvalue", "qvalue", "signif"};
+	data->wire_types = {IdWireType(feature_id_type), LogicalType::VARCHAR, LogicalType::VARCHAR,
+	                    LogicalType::DOUBLE,         LogicalType::DOUBLE,  LogicalType::DOUBLE,
+	                    LogicalType::DOUBLE,         LogicalType::DOUBLE,  LogicalType::BOOLEAN};
+	// feature_id returns as miint's id convention: BIGINT and UUID mirrored,
+	// anything else VARCHAR.
+	data->output_types = data->wire_types;
+	data->output_types[0] = ResolveSampleIdOutputType(feature_id_type);
 	return_types = data->output_types;
 	for (const auto &name : data->output_names) {
 		names.emplace_back(name);
@@ -428,6 +626,20 @@ void RegisterSkbArrowFunctions(ExtensionLoader &loader) {
 	AddNamedParameter(mantel, "seed", LogicalType::BIGINT);
 	AddNamedParameter(mantel, "threads", LogicalType::INTEGER);
 	loader.RegisterFunction(mantel);
+
+	TableFunction ancombc("skb_ancombc", {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                      SkbArrowExecute, SkbAncombcBind, SkbArrowInitGlobal);
+	AddNamedParameter(ancombc, "grouping", LogicalType::VARCHAR);
+	AddNamedParameter(ancombc, "posthoc", LogicalType::LIST(LogicalType::VARCHAR));
+	AddNamedParameter(ancombc, "pseudocount", LogicalType::DOUBLE);
+	AddNamedParameter(ancombc, "max_iter", LogicalType::BIGINT);
+	AddNamedParameter(ancombc, "tol", LogicalType::DOUBLE);
+	AddNamedParameter(ancombc, "alpha", LogicalType::DOUBLE);
+	AddNamedParameter(ancombc, "p_adjust", LogicalType::VARCHAR);
+	AddNamedParameter(ancombc, "bootstraps", LogicalType::BIGINT);
+	AddNamedParameter(ancombc, "seed", LogicalType::BIGINT);
+	AddNamedParameter(ancombc, "threads", LogicalType::INTEGER);
+	loader.RegisterFunction(ancombc);
 }
 
 } // namespace duckdb
