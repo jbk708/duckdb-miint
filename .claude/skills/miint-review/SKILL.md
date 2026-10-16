@@ -93,8 +93,9 @@ Then apply the fixes and run what the change touches: rebuild (`bash build.sh`),
 changed or affected SQL test file (`./build/release/test/unittest test/sql/<file>.test`),
 the C++ tests for a changed module (`./build/release/extension/miint/tests "[<tag>]"`),
 and `make format-check` in the pinned environment (`CLAUDE.md`, "Formatting"). Run
-`bash run_tests.sh` before the last round. Fix test failures before the next round, so
-it reads code that passes. Commit the fixes before the next round: a reviewer reads
+`MIINT_TEST_JOBS=8 bash run_tests.sh` (the same tests on eight workers) before the last
+round. Fix test failures before the next round, so it reads code that passes. Commit
+the fixes before the next round: a reviewer reads
 `git diff <base>...HEAD`, so a fix left in the working tree is invisible to it. A test
 the handoff lists as skipped in CI is run here, or recorded under "Not probed" with the
 reason.

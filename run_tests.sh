@@ -617,8 +617,22 @@ if [ -f "$SMR_ORACLE_GZ" ] && [ -f "$SMR_ORACLE_SHA" ]; then
     fi
 fi
 
-make test
-./build/release/extension/miint/tests
+# MIINT_TEST_JOBS=N runs the SQL files and the C++ tests on N parallel workers
+# (test/scripts/run_tests_parallel.py) instead of one after another. The same tests run
+# either way. Unset, as in CI, it is 1: the serial pass below, unchanged.
+MIINT_TEST_JOBS="${MIINT_TEST_JOBS:-1}"
+case "$MIINT_TEST_JOBS" in
+    '' | *[!0-9]* | 0)
+        echo "ERROR: MIINT_TEST_JOBS must be a positive integer, got '$MIINT_TEST_JOBS'" >&2
+        exit 1
+        ;;
+esac
+if [ "$MIINT_TEST_JOBS" -gt 1 ]; then
+    python3 test/scripts/run_tests_parallel.py --jobs "$MIINT_TEST_JOBS"
+else
+    make test
+    ./build/release/extension/miint/tests
+fi
 
 # read_fastx_fd_release.test must run under a low RLIMIT_NOFILE: it asserts that one scan
 # over many paths holds descriptors proportional to thread count, not to path count, and

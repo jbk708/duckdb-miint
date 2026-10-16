@@ -122,6 +122,7 @@ If a test produces an **incorrect expected value**: DO NOT change the expected v
 
 ```bash
 bash run_tests.sh                                                 # all SQL tests
+MIINT_TEST_JOBS=8 bash run_tests.sh                               # the same, on 8 parallel workers
 ./build/release/extension/miint/tests                             # C++ unit tests
 ./build/release/test/unittest "test/sql/read_alignments.test"     # single SQL test
 ./build/release/test/unittest "[alignment]"                       # tests matching a pattern

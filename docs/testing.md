@@ -18,6 +18,9 @@ The primary testing mechanism for user-facing functionality uses DuckDB's SQL lo
 # Run all tests (SQL, C++, and shell)
 bash run_tests.sh
 
+# The same tests, with the SQL files and the C++ tests on 8 parallel workers
+MIINT_TEST_JOBS=8 bash run_tests.sh
+
 # Run all SQL tests
 make test
 
@@ -27,6 +30,8 @@ make test
 # Run tests matching a pattern
 ./build/release/test/unittest "[alignment]"
 ```
+
+`MIINT_TEST_JOBS=N` runs the files `make test` runs, each in its own `unittest` process, alongside the C++ test binary (`test/scripts/run_tests_parallel.py`). It prints a line per file as each finishes, then the output of every file that failed, and reports skips per reason as the serial pass does. On a 32-core machine, 8 workers take the whole script from about 4m40s to about 1m15s. CI leaves it unset and runs the serial pass. Because files run at the same time, a test that writes outside `__TEST_DIR__` must use a path no other test file reads or writes.
 
 `build/release/duckdb`, `test/unittest`, `extension/miint/tests` and the loadable `miint.duckdb_extension` are separate build targets, so after an incremental `ninja` of one of them the others can be stale. Rebuild every binary you probe with, e.g. `ninja -C build/release duckdb test/unittest extension/miint/tests`.
 
