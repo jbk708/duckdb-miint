@@ -24,10 +24,19 @@ CPP_JOB = "C++ tests"
 SKIP_HEADER = "Skipped tests for the following reasons:"
 
 
-def run(name, cmd, env=None):
+def run(name, cmd, env, timeout):
+    """(name, exit status or None if the job timed out, output, seconds)."""
     start = time.monotonic()
-    proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
-    return name, proc.returncode, proc.stdout.decode(errors="replace"), time.monotonic() - start
+    try:
+        proc = subprocess.run(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=timeout
+        )
+        code, output = proc.returncode, proc.stdout
+    except subprocess.TimeoutExpired as expired:
+        # run() has already killed the job. A deadlocked test (#318) would otherwise stall
+        # the whole run with nothing printed.
+        code, output = None, expired.stdout or b""
+    return name, code, output.decode(errors="replace"), time.monotonic() - start
 
 
 def skip_reasons(output):
@@ -49,11 +58,14 @@ def main():
     parser.add_argument("--jobs", type=int, required=True, help="worker processes")
     parser.add_argument("--unittest", required=True, help="DuckDB's unittest binary")
     parser.add_argument("--cpp-tests", required=True, help="miint's Catch2 test binary")
+    parser.add_argument(
+        "--timeout", type=int, default=600, help="seconds a job may run before it is killed and fails (default 600)"
+    )
     parser.add_argument("--test-dir", help="passed to unittest, which registers the .test files under DIR/test")
     parser.add_argument("spec", nargs="?", default="test/*", help="unittest test spec (default: test/*, as make test)")
     args = parser.parse_args()
-    if args.jobs < 1:
-        parser.error("--jobs must be at least 1")
+    if args.jobs < 1 or args.timeout < 1:
+        parser.error("--jobs and --timeout must be at least 1")
 
     unittest = [args.unittest] + (["--test-dir", args.test_dir] if args.test_dir else [])
     listing = subprocess.run(
@@ -95,11 +107,12 @@ def main():
     assertions = 0
     cpp_summary = ""
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = [pool.submit(run, name, cmd, env) for name, cmd, env in jobs]
+        futures = [pool.submit(run, name, cmd, env, args.timeout) for name, cmd, env in jobs]
         try:
             for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 name, code, output, seconds = future.result()
-                # A signal is a negative return code, so test for nonzero, not positive.
+                # A signal is a negative return code and a timeout is None, so test for
+                # nonzero, not positive.
                 if code != 0:
                     status = "FAIL"
                     failed.append((name, code, output))
@@ -123,7 +136,8 @@ def main():
             raise
 
     for name, code, output in failed:
-        print(f"\n==== FAILED: {name} (exit {code}) ====\n{output}")
+        reason = f"exit {code}" if code is not None else f"timed out after {args.timeout}s"
+        print(f"\n==== FAILED: {name} ({reason}) ====\n{output}")
     print(
         f"\nSQL test files: {statuses['ok']} passed, {statuses['skip']} skipped, {statuses['FAIL']} failed"
         f" ({assertions} assertions)"

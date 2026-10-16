@@ -38,6 +38,11 @@ printf '#!/bin/sh\nkill -KILL $$\n' > "$CPP_KILLED"
 # A unittest whose listing dies after one name, as a crash partway through would.
 UNITTEST_DIES="$TMP_ROOT/bin/unittest_dies"
 printf '#!/bin/sh\necho test/sql/listed.test\nkill -KILL $$\n' > "$UNITTEST_DIES"
+# A C++ binary that hangs, as a deadlocked test does; it records its pid so the scenario can
+# check it was killed.
+CPP_HANGS="$TMP_ROOT/bin/cpp_hangs"
+printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$TMP_ROOT/cpp_hangs.pid" > "$CPP_HANGS"
+chmod +x "$CPP_HANGS"
 # A unittest that lists one file and passes it only if the job sees EXPECT_RUST_MIN_STACK.
 UNITTEST_STACK="$TMP_ROOT/bin/unittest_stack"
 printf '#!/bin/sh\ncase "$*" in *--list-test-names-only*) echo test/sql/stack.test; exit 1 ;; esac\necho "RUST_MIN_STACK=${RUST_MIN_STACK-unset}"\n[ "${RUST_MIN_STACK-}" = "$EXPECT_RUST_MIN_STACK" ]\n' \
@@ -125,6 +130,18 @@ ok=0
     ran_once ok a.test && ran_once ok b.test && ran_once ok c.test && ok=1
 report "a C++ binary killed by a signal fails the run, and the queued files still run" \
     "a signal is a negative exit status in Python, which a check for a positive one passes; and one failure must not hide the rest" "$ok"
+
+root hang
+for f in a b; do pass_test > "$ROOT/test/sql/$f.test"; done
+started=$SECONDS
+invoke "$CPP_HANGS" --timeout 2
+elapsed=$((SECONDS - started))
+ok=0
+[[ $EXIT -ne 0 && $elapsed -lt 20 && "$OUT" == *"C++ tests (timed out after 2s)"* ]] &&
+    grep -qE '^\[[0-9]+/[0-9]+\] +FAIL .*C\+\+ tests' <<< "$OUT" && ran_once ok a.test && ran_once ok b.test &&
+    ! kill -0 "$(cat "$TMP_ROOT/cpp_hangs.pid")" 2> /dev/null && ok=1
+report "a job past the timeout is killed and fails the run, and the others still run" \
+    "a deadlocked test otherwise stalls the run with no output, and a job left running holds the box" "$ok"
 
 root spill_dir
 printf "query I\nSELECT current_setting('temp_directory') = '__TEST_DIR__/spill';\n----\ntrue\n" \
