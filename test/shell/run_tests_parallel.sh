@@ -36,7 +36,11 @@ printf '#!/bin/sh\nkill -KILL $$\n' > "$CPP_KILLED"
 # A unittest whose listing dies after one name, as a crash partway through would.
 UNITTEST_DIES="$TMP_ROOT/bin/unittest_dies"
 printf '#!/bin/sh\necho test/sql/listed.test\nkill -KILL $$\n' > "$UNITTEST_DIES"
-chmod +x "$CPP_OK" "$CPP_KILLED" "$UNITTEST_DIES"
+# A unittest that lists one file and passes it only if the job sees EXPECT_RUST_MIN_STACK.
+UNITTEST_STACK="$TMP_ROOT/bin/unittest_stack"
+printf '#!/bin/sh\ncase "$*" in *--list-test-names-only*) echo test/sql/stack.test; exit 1 ;; esac\necho "RUST_MIN_STACK=${RUST_MIN_STACK-unset}"\n[ "${RUST_MIN_STACK-}" = "$EXPECT_RUST_MIN_STACK" ]\n' \
+    > "$UNITTEST_STACK"
+chmod +x "$CPP_OK" "$CPP_KILLED" "$UNITTEST_DIES" "$UNITTEST_STACK"
 
 pass_test() { printf 'query I\nSELECT 1;\n----\n1\n'; }
 fail_test() { printf 'query I\nSELECT 1;\n----\n2\n'; }
@@ -128,6 +132,23 @@ ok=0
 [[ $EXIT -eq 0 ]] && ran_once ok spill.test && ok=1
 report "each SQL process spills into its own test directory" \
     "workers share a working directory, and two DuckDB processes spilling to its .tmp overwrite and delete each other's files" "$ok"
+
+root rust_stack
+unset RUST_MIN_STACK
+export EXPECT_RUST_MIN_STACK=4194304
+invoke "$CPP_OK" --unittest "$UNITTEST_STACK"
+ok=0
+[[ $EXIT -eq 0 ]] && ran_once ok stack.test && ok=1
+report "SQL jobs run with a 4 MiB Rust thread stack" \
+    "rype's rayon workers overflow the default 2 MiB under this load alone (the-miint/RYpe#28), failing a run the serial pass passes" "$ok"
+
+export RUST_MIN_STACK=8388608 EXPECT_RUST_MIN_STACK=8388608
+invoke "$CPP_OK" --unittest "$UNITTEST_STACK"
+unset RUST_MIN_STACK EXPECT_RUST_MIN_STACK
+ok=0
+[[ $EXIT -eq 0 ]] && ran_once ok stack.test && ok=1
+report "a caller's own RUST_MIN_STACK wins" \
+    "a run probing the stack size, such as one checking whether RYpe#28 is fixed, must get the value it set" "$ok"
 
 root odd_name
 pass_test > "$ROOT/test/sql/fine.test"
