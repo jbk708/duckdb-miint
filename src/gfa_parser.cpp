@@ -84,11 +84,11 @@ bool GfaParser::Parse(std::string_view line, GfaRecord &record) {
 	record.has_tags = true;
 
 	// Only GFA 1's record layout is known, so a header naming any other version, anything but
-	// "1" or "1.<minor>", is refused.
+	// "1" or a value starting "1.", is refused. GFA 2 ("2" or "2.") gets its own message.
 	if (record.record_type == "H") {
 		for (const auto &tag : record.tags) {
 			if (tag.key == "VN" && tag.value != "1" && tag.value.rfind("1.", 0) != 0) {
-				const bool gfa2 = !tag.value.empty() && tag.value[0] == '2';
+				const bool gfa2 = tag.value == "2" || tag.value.rfind("2.", 0) == 0;
 				throw std::runtime_error(std::string(gfa2 ? "GFA 2 is not supported" : "only GFA 1 is supported") +
 				                         " (the header declares VN:Z:" + tag.value + ")");
 			}

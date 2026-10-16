@@ -124,8 +124,9 @@ TEST_CASE("GfaParser rejects malformed records with a message naming the defect"
 	}
 	SECTION("a header naming any version other than GFA 1") {
 		// Only GFA 1's layout is known; any other declared version is refused, not guessed at.
-		// GFA 1 is "1" or "1.<minor>", so a version that merely starts with 1 is not it.
-		for (const char *version : {"3.0", "abc", "10.0", "1abc", ""}) {
+		// GFA 1 is "1" or "1.<minor>", so a version that merely starts with 1 is not it, and one
+		// that merely starts with 2 is not GFA 2.
+		for (const char *version : {"3.0", "abc", "10.0", "1abc", "", "20.0"}) {
 			CAPTURE(version);
 			CHECK_THROWS_WITH(parser.Parse(std::string("H\tVN:Z:") + version, record),
 			                  ContainsSubstring("only GFA 1 is supported") &&
