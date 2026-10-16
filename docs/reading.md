@@ -1214,7 +1214,7 @@ SELECT parse_gff_attributes('ID=gene1;Name=TEST1;biotype=protein_coding');
 - Phase: Indicates position within codon (0, 1, or 2) for CDS features
 - Comment lines starting with '##' are filtered out (metadata/directives)
 - The 9th column (attributes) may be empty; a feature line must carry the 8 mandatory fields
-- **The GFF3 sequence section is honoured**: content after a `##FASTA` directive is not returned as feature rows. prokka and bakta always append the genome, so this is the common case. A feature line carrying only *some* of the 8 mandatory fields is a malformed GFF line and raises an error rather than being silently dropped, whichever columns the query selects or filters on. (A query that stops early, such as one with `LIMIT`, may finish before reaching it.)
+- **The GFF3 sequence section is honoured**: content after a `##FASTA` directive is not returned as feature rows. prokka and bakta always append the genome, so this is the common case. A feature line carrying only *some* of the 8 mandatory fields is a malformed GFF line and raises an error rather than being silently dropped, as does a feature line with an empty seqid, whichever columns the query selects or filters on. (A query that stops early, such as one with `LIMIT`, may finish before reaching it.)
 
 **Use Cases:**
 - **Gene annotation analysis**: Extract genes, transcripts, exons from genome annotations

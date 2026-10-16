@@ -40,10 +40,10 @@ const std::string PARSE_GFF_ATTRIBUTES = // NOLINT
 const std::string READ_GFF = // NOLINT
     "CREATE OR REPLACE MACRO read_gff(path) AS TABLE "
     // Every column is gated on `keep`, the line check below, so a query that reads any column,
-    // to return it or to filter on it, runs the check on that row; `WHERE keep` covers a
-    // query that reads none (COUNT(*)). Without the gate the optimizer can apply a caller's
-    // filter first and drop a malformed line unchecked: `WHERE type IN (...)` did (issue
-    // #186; docs/internals/duckdb-engine-notes.md, "Validation in a table macro").
+    // to return it or to filter on it, runs the check on that row. `WHERE keep` drops the
+    // lines that are not features and runs the check for a query that reads no column
+    // (COUNT(*)). Why the gate: docs/internals/duckdb-engine-notes.md, "Validation in a table
+    // macro".
     "SELECT "
     "   CASE WHEN keep THEN column0 END AS seqid, "
     "   CASE WHEN keep THEN column1 END AS source, "
@@ -64,9 +64,7 @@ const std::string READ_GFF = // NOLINT
     "FROM ( "
     "  SELECT *, "
     "    CASE "
-    // An empty seqid parses as NULL; such a line is dropped, as the WHERE clause before this
-    // CASE dropped it (column0 NOT LIKE '##%' is NULL there).
-    "        WHEN column0 IS NULL OR column0 LIKE '##%' THEN FALSE "
+    "        WHEN column0 LIKE '##%' THEN FALSE "
     // A FASTA header line, checked before the field counts because its description may itself
     // contain tabs (e.g. ">ctg1<TAB>some description"), which would otherwise populate
     // column1 and trip the malformed-feature branch below on a perfectly valid file. '>' is
@@ -79,6 +77,12 @@ const std::string READ_GFF = // NOLINT
     "        WHEN column1 IS NULL AND column2 IS NULL AND column3 IS NULL "
     "         AND column4 IS NULL AND column5 IS NULL AND column6 IS NULL "
     "         AND column7 IS NULL THEN FALSE "
+    // A seqid is mandatory, and an empty one parses as NULL. Other fields are present (a line
+    // of tabs alone was dropped above), so this is a broken feature line; the message shows
+    // the fields that follow, since there is no seqid to name.
+    "        WHEN column0 IS NULL "
+    "        THEN error(printf('read_gff: malformed GFF feature line (empty seqid): %s', "
+    "                          concat_ws(' ', column1, column2, column3, column4))) "
     // Some-but-not-all mandatory fields present is a different thing -- a broken feature
     // line -- and is raised rather than dropped, so we don't trade one silent wrong answer
     // for another. column8 (attributes) is deliberately NOT required: a legitimate line may
@@ -1216,8 +1220,8 @@ const std::string GENOME_COVERAGE = // NOLINT
     // garbage. The guard lives in WHERE rather than the projection because
     // DuckDB prunes unused projections -- inside SELECT it would not fire for
     // `SELECT covered FROM genome_coverage(...)`, the very query that would
-    // otherwise hide the problem. Same reasoning as read_gff's malformed-line
-    // check above. A genome present in subject_total_length but uncovered here
+    // otherwise hide the problem (docs/internals/duckdb-engine-notes.md, "Validation in a
+    // table macro"). A genome present in subject_total_length but uncovered here
     // simply produces no row; only a genome we must divide for and cannot is
     // fatal, so an empty result stays empty rather than raising.
     "LEFT JOIN query_table(subject_total_length) tl "
