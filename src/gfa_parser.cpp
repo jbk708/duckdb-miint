@@ -27,6 +27,8 @@ int MandatoryFieldCount(std::string_view type) {
 		return 3;
 	case 'W':
 		return 6;
+	case 'J':
+		return 5;
 	default:
 		return -1;
 	}

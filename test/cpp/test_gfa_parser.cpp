@@ -53,6 +53,11 @@ TEST_CASE("GfaParser splits each record type at its mandatory field count", "[gf
 	CHECK(Parse("P\tp1\ts1+,s2-,s3+\t4M,5M").fields == Fields {"p1", "s1+,s2-,s3+", "4M,5M"});
 	CHECK(Parse("W\tsample1\t1\tchr1\t0\t1016\t>s1<s2>s3").fields ==
 	      Fields {"sample1", "1", "chr1", "0", "1016", ">s1<s2>s3"});
+
+	// GFA 1.2's jump: like a link, with a distance (or *) in place of the overlap.
+	auto j = Parse("J\ts1\t+\ts2\t-\t*\tSC:i:1");
+	CHECK(j.fields == Fields {"s1", "+", "s2", "-", "*"});
+	CHECK(Tags(j) == Pairs {{"SC", "1"}});
 }
 
 TEST_CASE("GfaParser reads myloasm's segment tags, whose names exceed two characters", "[gfa]") {
@@ -103,6 +108,7 @@ TEST_CASE("GfaParser rejects malformed records with a message naming the defect"
 		CHECK_THROWS_WITH(parser.Parse("S\ts1", record), ContainsSubstring("S record needs 2"));
 		CHECK_THROWS_WITH(parser.Parse("L\ts1\t+\ts2\t-", record), ContainsSubstring("L record needs 5"));
 		CHECK_THROWS_WITH(parser.Parse("W\tsample1\t1\tchr1\t0\t1016", record), ContainsSubstring("W record needs 6"));
+		CHECK_THROWS_WITH(parser.Parse("J\ts1\t+\ts2\t-", record), ContainsSubstring("a J record needs 5"));
 	}
 	SECTION("a tag that is untyped, malformed, or repeated") {
 		// GFA tags are always typed, so the lenient form PAF needs is not accepted here.

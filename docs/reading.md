@@ -365,7 +365,7 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 
 **Output schema:**
 - `line_number` (BIGINT): 1-based line of the record in its file. Comment lines are counted, so this matches what an editor shows; it is also the record order, which matters for records such as myloasm's read placements
-- `record_type` (VARCHAR): The first field: `H`, `S`, `L`, `C`, `P`, `W`, or any other value as written
+- `record_type` (VARCHAR): The first field: `H`, `S`, `L`, `C`, `P`, `W`, `J`, or any other value as written
 - `fields` (VARCHAR[]): The record type's mandatory positional fields, verbatim (table below). For a record type GFA 1 does not define, every field after the type
 - `tags` (MAP(VARCHAR, VARCHAR), nullable): Optional `TAG:TYPE:VALUE` fields as `tag → value`. Empty for a known record with no tags; NULL for an unknown record type, whose fields are never split into positional fields and tags
 - `filepath` (VARCHAR, optional): File path when `include_filepath=true`
@@ -378,6 +378,7 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 | `C` containment | container, container orientation, contained, contained orientation, position, overlap |
 | `P` path | path name, segment names, overlaps |
 | `W` walk | sample, haplotype index, sequence name, start, end, walk |
+| `J` jump | from, from orientation, to, to orientation, distance (or `*`) |
 
 **Behavior:**
 - Lines starting with `#` are comments and produce no row.

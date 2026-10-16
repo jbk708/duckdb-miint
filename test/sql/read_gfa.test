@@ -218,6 +218,16 @@ SELECT count(*), sum(line_number), sum(tags['LN']::BIGINT) FROM read_gfa('__TEST
 ----
 3000	4501500	4498500
 
+# A chunk that continues a file from the previous chunk still names that file: all 3000 of
+# many.gfa's records, and the specification example's 10.
+query TI
+SELECT replace(filepath, '__TEST_DIR__/', ''), count(*)
+FROM read_gfa(['__TEST_DIR__/many.gfa', 'data/gfa/spec_example.gfa'], include_filepath := true)
+GROUP BY ALL ORDER BY ALL;
+----
+data/gfa/spec_example.gfa	10
+many.gfa	3000
+
 statement ok
 COPY (SELECT CASE WHEN i = 2499 THEN E'S\tdamaged' ELSE printf(E'S\ts%d\t*', i) END FROM range(3000) t(i) ORDER BY i)
 TO '__TEST_DIR__/many_damaged.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');

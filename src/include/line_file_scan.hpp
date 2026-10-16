@@ -86,7 +86,7 @@ void ScanLines(ClientContext &context, TableFunctionInput &data_p, DataChunk &ou
 
 	idx_t row = 0;
 	idx_t chunk_bytes = 0;
-	std::string chunk_path;
+	std::string chunk_path = local.file ? local.file->path : std::string();
 	while (row < STANDARD_VECTOR_SIZE && chunk_bytes < LINE_SCAN_MAX_CHUNK_BYTES) {
 		if (!local.file) {
 			if (row > 0) {
@@ -102,8 +102,8 @@ void ScanLines(ClientContext &context, TableFunctionInput &data_p, DataChunk &ou
 			}
 			local.file =
 			    make_uniq<LineFile>(FileSystem::GetFileSystem(context), data.file_paths[idx], data.function_name);
+			chunk_path = local.file->path;
 		}
-		chunk_path = local.file->path;
 
 		std::string_view line;
 		if (!local.file->lines.Next(line)) {
