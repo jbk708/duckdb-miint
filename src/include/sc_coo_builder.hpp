@@ -19,9 +19,9 @@ void ExportUtf8(ArrowArray &array, ArrowSchema &schema, const std::vector<std::s
 
 //! Owns every buffer behind an `sc_coo_table_t` and releases them on destruction.
 //!
-//! sc borrows across the Arrow C Data Interface — `sc-arrow`'s `import_*` reads
-//! the caller's buffers in place and never invokes `release` — so this object
-//! must outlive any sc call that reads it.
+//! sc borrows across the Arrow C Data Interface -- it reads the caller's buffers
+//! in place and never invokes `release` -- so this object must outlive any sc
+//! call that reads it.
 class ScCooTable {
 public:
 	ScCooTable() = default;
@@ -39,8 +39,8 @@ public:
 	int64_t NumFeatures() const {
 		return table_.n_features;
 	}
-	//! Number of stored triples. Duplicates are NOT collapsed here — sc sums
-	//! them (scipy COO semantics, sc-core `matrix.rs` `from_coo`).
+	//! Number of stored triples. Duplicates are not collapsed here; sc sums them,
+	//! as scipy's COO does.
 	int64_t NumNonZeros() const {
 		return table_.rows.length;
 	}
@@ -107,11 +107,8 @@ private:
 //! One `(sample_id, feature_id)` pair that was appended more than once, with the
 //! values that were seen for it.
 //!
-//! The values matter as much as the keys: identical values point at a join
-//! fanout (a duplicated key upstream, where one row is spurious), differing
-//! values at genuine repeat measurements. The correct repair is opposite in the
-//! two cases -- deduplicating versus summing -- and summing a fanout silently
-//! inflates every affected count, so a caller reporting this should show them.
+//! The values tell a caller which repair applies (see RequireNoDuplicateCells),
+//! so a report should show them.
 struct DuplicateCell {
 	std::string sample_id;
 	std::string feature_id;
@@ -139,13 +136,10 @@ struct DuplicateReport {
 //! three columns all arrive here — sc is coupled to the triple, not to a file
 //! format.
 //!
-//! **Both dictionaries are sorted**, so a given set of ids always produces the
-//! same integer encoding regardless of the order rows arrive in. That matters
-//! beyond tidiness: a model trained when `OTU_7` was column 6 returns nonsense
-//! if prediction data encodes it as column 2, and sc only validates the feature
-//! *count* (sc-core `model.rs` `check_features`), never the identity. It also
-//! matches the reference pipeline sc's own fixtures were generated with
-//! (`oracle/generator/gen_forest.py` `load_aligned`, which sorts both axes).
+//! Both dictionaries are sorted, so a given set of ids always produces the same
+//! integer encoding whatever order the rows arrive in, and the same seed gives
+//! the same model. It also matches the reference pipeline sc's own fixtures
+//! were generated with, which sorts both axes.
 class ScCooBuilder {
 public:
 	//! Ids are copied on first sight and interned thereafter.
@@ -163,10 +157,10 @@ public:
 	//!
 	//! This is what makes a model reusable across datasets. Column `i` means
 	//! `vocab[i]` because that is what the model was trained on -- so the
-	//! vocabulary is used in the model's own order and is NOT re-sorted. Two
+	//! vocabulary is used in the model's own order and is not re-sorted. Two
 	//! datasets that differ by one feature in each direction have the same
-	//! width, and sc validates only the width (`RandomForest::check_features`),
-	//! so re-deriving an encoding here would produce confident, silent
+	//! width, and sc validates only the width, never which feature a column
+	//! holds, so re-deriving an encoding here would produce confident, silent
 	//! nonsense.
 	//!
 	//! Consequences, all of which are correct for a sparse matrix:
@@ -190,15 +184,13 @@ public:
 
 	//! Report `(sample_id, feature_id)` pairs appended more than once.
 	//!
-	//! Policy-free by design: sc's `from_coo` *sums* duplicates (scipy COO
-	//! semantics), which is right for genuine repeat measurements and wrong for
-	//! a join fanout. The builder cannot tell those apart, so it reports and
-	//! lets the caller decide.
+	//! Reports without a policy: sc sums duplicates, and whether that is right
+	//! is the caller's decision (see RequireNoDuplicateCells).
 	//!
-	//! Costs one temporary `uint64` per stored cell (8 bytes, freed on return)
-	//! plus an O(n log n) sort -- deliberately not a hash set, whose per-node
-	//! overhead would be several times larger. That matters for the wasm build,
-	//! where DuckDB and this extension share one linear memory.
+	//! Costs one temporary `uint64` per stored cell, freed on return, plus an
+	//! O(n log n) sort over a packed (row, col) key, rather than a hash set's
+	//! allocation per entry. The wasm build shares one linear memory between
+	//! DuckDB and this extension.
 	//!
 	//! Safe to call before [`Finalize`]; it reads the interned indices and does
 	//! not modify them.

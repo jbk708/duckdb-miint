@@ -22,7 +22,7 @@ namespace duckdb {
 //! result scores itself: a confusion matrix, a residual, or an accuracy needs no
 //! join back to the metadata relation.
 //!
-//! The per-fold forests are scored and discarded: this measures the RECIPE, not
+//! The per-fold forests are scored and discarded: this measures the recipe, not
 //! a model. Fit the model you will actually use with fit_* on all the data.
 //!
 //! `probabilities` is the OOF probability of each class, and `classes` names

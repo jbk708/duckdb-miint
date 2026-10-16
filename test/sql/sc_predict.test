@@ -1,5 +1,5 @@
 # name: test/sql/sc_predict.test
-# description: test sc_predict_classifier / sc_predict_regressor table functions
+# description: test the predict table function
 # group: [sql]
 
 require miint
@@ -30,7 +30,7 @@ INSERT INTO test_biom VALUES
   ('Sample6', 'GG_OTU_4', 1.0);
 
 # The split that matters: train on four samples, predict the held-out two. The
-# two halves have DIFFERENT feature sets, which is the normal case for real
+# two halves have different feature sets, which is the normal case for real
 # data and the reason the model carries its own vocabulary.
 statement ok
 CREATE TABLE p_train_ids AS SELECT unnest(['Sample1','Sample2','Sample3','Sample4']) AS sample_id;
@@ -127,8 +127,8 @@ SELECT bool_and(prediction BETWEEN 1.0 AND 15.0) FROM predict('p_full', 'p_rmode
 true
 
 # Also true of any forest. On its training samples it must beat predicting the
-# mean, which a forest that learned nothing cannot: its squared error is under
-# half the mean predictor's.
+# mean: a forest that learned nothing scores near the mean predictor's squared
+# error, and this one scores 0.31 of it, so the bound is half.
 query I
 SELECT sum((p.prediction - m.value::DOUBLE) ^ 2)
      < 0.5 * (SELECT sum((value::DOUBLE - (SELECT avg(value::DOUBLE) FROM p_rmeta)) ^ 2) FROM p_rmeta)
@@ -218,8 +218,8 @@ SELECT * FROM predict('p_full', 'p_unnamed', name := 'm');
 predict: Model relation 'p_unnamed' has no 'name' column
 
 # A model_blob that is not a BLOB -- a hand-assembled or CSV-round-tripped
-# model table -- is an input error. Reading it as one used to raise an INTERNAL
-# error, which invalidates the whole database, not just the query.
+# model table -- is an input error, not an INTERNAL one: an INTERNAL error
+# invalidates the whole database, not just the query.
 statement ok
 CREATE TABLE p_int_blob AS
   SELECT name, model, 42 AS model_blob, n_samples, n_features, n_estimators, task, random_state, feature_id_type
@@ -308,7 +308,7 @@ SELECT count(*) FROM predict('p_test', 'reg', name := 'site_clf');
 ----
 2
 
-# The column type is bound from the NAMED model, not the relation -- one table
+# The column type is bound from the named model, not the relation -- one table
 # holding both tasks, and each call types itself correctly.
 query I
 SELECT typeof(prediction) FROM predict('p_test', 'reg', name := 'site_clf') LIMIT 1;

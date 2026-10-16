@@ -282,7 +282,7 @@ void LoadInput(ClientContext &context, const ScShapData &bind, ScShapGlobalState
 
 //! Make samples [first, first + batch_size) the current batch.
 //!
-//! The previous batch's export is released BEFORE sc allocates the next, so
+//! The previous batch's export is released before sc allocates the next, so
 //! only one batch's attributions ever exist at once.
 void LoadBatch(const ScShapData &bind, ScShapGlobalState &gstate, size_t first) {
 	gstate.values = nullptr;

@@ -18,13 +18,12 @@ namespace miint {
 //! them keeps the many error paths in the table functions from leaking on a
 //! throw.
 struct ScContext {
-	sc_context_t *ptr = nullptr; // nullptr so other programs know it is uninitialized and should not be dereferenced
-	ScContext() = default;       // default constructor for the struct
-	~ScContext();                // destructor
-	ScContext(const ScContext &) =
-	    delete; // forbid copy constructor, since we don't want to copy the pointer. Preventing double free bugs.
-	ScContext &operator=(const ScContext &) = delete; // forbid copy assignment operator, since we don't want to copy
-	                                                  // the pointer. Preventing double free bugs.
+	sc_context_t *ptr = nullptr;
+	ScContext() = default;
+	~ScContext();
+	// Not copyable: two copies would free the same context.
+	ScContext(const ScContext &) = delete;
+	ScContext &operator=(const ScContext &) = delete;
 };
 
 //! A trained sc model, freed on destruction.
@@ -73,8 +72,8 @@ public:
 	//! Decode a `FixedSizeList<Float64>[width]` (format "+w:N") as one flat
 	//! row-major vector of `length * width` doubles, returning `width`.
 	//!
-	//! This is the first NESTED layout we read. The outer array carries no
-	//! values of its own -- `n_buffers` is 1 (validity only) and the doubles
+	//! Unlike the flat arrays above, this layout is nested: the outer array
+	//! carries no values of its own -- `n_buffers` is 1 (validity only) and the doubles
 	//! live in `children[0]`, a plain Float64 array of `length * width`. The
 	//! width is not a field: it is encoded in the format string itself, after
 	//! the "+w:" prefix.

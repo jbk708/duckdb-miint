@@ -122,7 +122,8 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 	}
 	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, data->caller);
 	if (n_folds_given && cv_given) {
-		throw InvalidInputException("%s: pass n_folds or cv, not both -- cv is the q2/sklearn spelling of n_folds",
+		throw InvalidInputException("%s: pass n_folds or cv, not both -- cv is the q2-sample-classifier (QIIME 2) and "
+		                            "sklearn spelling of n_folds",
 		                            data->caller);
 	}
 	{
@@ -194,8 +195,8 @@ void RunCrossValidation(ClientContext &context, const ScCvData &bind, ScCvGlobal
 
 	sc_cv_result_t res {};
 	const auto st = sc_cross_validate(ctx.ptr, table->get(), targets.array(), targets.schema(), &bind.params, &res);
-	// Every field, including the probabilities this function does not return:
-	// unclaimed arrays would leak.
+	// Every field, including the probabilities and classes a regressor's rows do
+	// not use: unclaimed arrays would leak.
 	miint::OwnedArrowArray predictions, proba, classes, fold_scores;
 	miint::TakeArray(res.predictions, res.predictions_schema, predictions);
 	miint::TakeArray(res.proba, res.proba_schema, proba);

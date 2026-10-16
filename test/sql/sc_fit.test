@@ -29,9 +29,8 @@ INSERT INTO test_biom VALUES
   ('Sample6', 'GG_OTU_3', 2.0),
   ('Sample6', 'GG_OTU_4', 1.0);
 
-# The whole point of coupling sc to the (sample_id, feature_id, value) triple is
-# that any reader emitting it feeds sc directly, with no format-specific code in
-# between. sc_read_biom.test checks that end to end for read_biom.
+# sc is coupled to the (sample_id, feature_id, value) triple, not to a file
+# format: any reader emitting it, read_biom included, feeds sc directly.
 statement ok
 CREATE TABLE train_data AS SELECT * FROM test_biom;
 
@@ -236,8 +235,7 @@ model must be 'random_forest'
 # Omitted, the target is the metadata relation's single non-sample_id column --
 # `(sample_id, month)` needs no configuration at all. With several candidates
 # the answer is genuinely unknown, and guessing would train on the wrong
-# variable with no error anywhere, so it asks. This replaces a hardcoded default
-# of "value", which suited long-format metadata and quietly failed otherwise.
+# variable with no error anywhere, so it asks.
 
 statement ok
 CREATE TABLE meta_wide AS SELECT sample_id, sum(value) AS month FROM train_data GROUP BY sample_id;
@@ -403,9 +401,9 @@ SELECT * FROM fit_classifier('train_data', 'class_metadata', min_samples_split :
 min_samples_split count must be >= 2
 
 # n_estimators is capped, unlike sklearn. sc reserves the whole forest before it
-# grows a tree, and a count the allocator grants lazily (1e9 trees reserves 232 GB
-# on macOS) then grows trees until the machine runs out of memory, with no error
-# to show for it. The cap itself is accepted; one past it is not.
+# grows a tree, and a count whose reservation the allocator grants lazily then
+# grows trees until the machine runs out of memory, with no error to show for
+# it. The cap itself is accepted; one past it is not.
 statement error
 SELECT * FROM fit_classifier('train_data', 'class_metadata', n_estimators := 100001, name := 'm27b');
 ----

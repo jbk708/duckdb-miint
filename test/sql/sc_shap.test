@@ -10,8 +10,8 @@ statement ok
 PRAGMA enable_verification;
 
 # Real data -- 126 samples x 150 features -- read straight out of sc's fixture,
-# so there is no BIOM dependency. Ids are zero-padded so lexical order equals
-# numeric order; see sc_oracle_ecam.test for why that matters.
+# so there is no BIOM dependency. Ids are zero-padded so their text order, the
+# order the builder sorts them in, is the fixture's column order.
 statement ok
 CREATE TABLE fx AS SELECT * FROM read_json('ext/sc/oracle/fixtures/forest/agg_ecam.json');
 
@@ -68,7 +68,7 @@ SELECT count(DISTINCT base_value) FROM shap('shp_few', 'shp_models', name := 're
 ----
 1
 
-# Additivity, which is what makes SHAP an explanation of THIS prediction rather
+# Additivity, which is what makes SHAP an explanation of this prediction rather
 # than a ranking: base + sum of a sample's attributions is its predicted value.
 # It is also the check on the decoding -- a stride error in the output-major
 # layout would break the sum.

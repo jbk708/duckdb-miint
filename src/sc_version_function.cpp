@@ -9,7 +9,7 @@ namespace duckdb {
 
 static void ScVersionScalarFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	// sc_version() returns a pointer into a compile-time byte string that is
-	// valid for the whole program lifetime and must NOT be freed (see sc.h).
+	// valid for the whole program lifetime and must not be freed (see sc.h).
 	// AddString copies into the result vector's own string heap, so the
 	// returned string_t does not alias sc's static storage.
 	const char *version = sc_version();

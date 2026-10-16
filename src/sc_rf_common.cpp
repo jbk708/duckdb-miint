@@ -263,9 +263,6 @@ void ValidateForestParameters(const sc_rf_params_t &params, const char *caller) 
 //!
 //! A named column is checked here too, so a typo fails when the query is
 //! planned rather than after the data has been scanned.
-//!
-//! This replaces a hardcoded default of "value", which happened to suit
-//! long-format metadata and quietly failed for everything else.
 std::string ResolveTargetColumn(Connection &conn, const std::string &relation, const std::string &requested,
                                 const char *caller) {
 	const auto q = KeywordHelper::WriteOptionallyQuoted(relation);

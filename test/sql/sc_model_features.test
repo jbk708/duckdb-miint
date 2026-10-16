@@ -111,7 +111,7 @@ SELECT list(feature_id ORDER BY feature_id) FROM (
 ----
 [GG_OTU_1, GG_OTU_4, GG_OTU_5]
 
-# GG_OTU_4 appears on BOTH sides -- the same taxon, failing on case. That is the
+# GG_OTU_4 appears on both sides -- the same taxon, failing on case. That is the
 # mismatch this function exists to make visible.
 query I
 SELECT count(*) FROM (

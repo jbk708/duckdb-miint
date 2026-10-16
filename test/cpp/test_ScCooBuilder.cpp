@@ -43,7 +43,7 @@ struct Cell {
 	double value;
 };
 
-// Deliberately NOT in sorted order: the builder must normalise it.
+// Not in sorted order, so the builder has to sort it.
 const std::vector<Cell> BIOM_CELLS = {
     {"Sample6", "GG_OTU_4", 1.0}, {"Sample3", "GG_OTU_1", 1.0}, {"Sample1", "GG_OTU_2", 5.0},
     {"Sample4", "GG_OTU_3", 4.0}, {"Sample2", "GG_OTU_5", 1.0}, {"Sample6", "GG_OTU_2", 1.0},
@@ -91,7 +91,7 @@ TEST_CASE("ScCooBuilder indices point at the sorted dictionaries", "[sc_coo]") {
 	REQUIRE(cols.size() == BIOM_CELLS.size());
 	REQUIRE(vals.size() == BIOM_CELLS.size());
 
-	// Indices stay in range -- sc's from_coo rejects anything outside. REQUIRE,
+	// Indices stay in range -- sc rejects anything outside. REQUIRE,
 	// because the loop below indexes the dictionaries with them.
 	for (auto r : rows) {
 		REQUIRE((r >= 0 && r < table->NumSamples()));
@@ -119,8 +119,8 @@ TEST_CASE("ScCooBuilder emits arrays sc will accept", "[sc_coo]") {
 	REQUIRE(table);
 	const auto *t = table->get();
 
-	// sc-arrow's check_primitive rejects null_count != 0 and offset != 0, and
-	// matches the format string exactly.
+	// sc rejects null_count != 0 and offset != 0, and matches the format string
+	// exactly.
 	struct Expect {
 		const ArrowArray *array;
 		const ArrowSchema *schema;
@@ -150,9 +150,9 @@ TEST_CASE("ScCooBuilder emits arrays sc will accept", "[sc_coo]") {
 }
 
 TEST_CASE("ScCooBuilder keeps duplicate cells for sc to sum", "[sc_coo]") {
-	// sc-core's from_coo sums duplicate (row, col) pairs (scipy COO->CSR
-	// semantics). Collapsing them here would be a silent behaviour change, so
-	// the builder must pass all three through.
+	// sc sums duplicate (row, col) pairs, as scipy's COO-to-CSR conversion
+	// does. Collapsing them here would change that silently, so the builder
+	// passes all three through.
 	ScCooBuilder builder;
 	builder.Append("s1", "f1", 2.0);
 	builder.Append("s1", "f1", 3.0);
@@ -231,7 +231,7 @@ TEST_CASE("ScCooBuilder reports duplicate cells with their values", "[sc_coo]") 
 	// A join fanout: the same cell appended twice with identical values. The
 	// repair is to deduplicate; summing would inflate the count. Differing
 	// values would mean genuine repeat measurements, where summing is right.
-	// The builder cannot tell them apart, so it reports both keys AND values
+	// The builder cannot tell them apart, so it reports both keys and values
 	// and leaves the choice to the caller.
 	ScCooBuilder builder;
 	builder.Append("Sample1", "GG_OTU_2", 5.0);
@@ -298,10 +298,10 @@ TEST_CASE("ScCooBuilder duplicate scan handles trivial inputs", "[sc_coo]") {
 
 TEST_CASE("ScCooBuilder encodes against a fixed vocabulary", "[sc_coo]") {
 	// A model's columns mean what the model says they mean. The vocabulary is
-	// used in the model's order and is NOT re-sorted -- re-deriving an encoding
+	// used in the model's order and is not re-sorted -- re-deriving an encoding
 	// from prediction data is the silent-corruption bug this exists to prevent.
 	ScCooBuilder builder;
-	builder.SetFeatureVocabulary({"zeta", "alpha", "mid"}); // deliberately unsorted
+	builder.SetFeatureVocabulary({"zeta", "alpha", "mid"}); // unsorted on purpose: it must stay in this order
 	builder.Append("s1", "mid", 7.0);
 	builder.Append("s1", "zeta", 1.0);
 	auto table = builder.Finalize();

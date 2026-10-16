@@ -264,7 +264,7 @@ namespace {
 		    "%s: Could not read 'feature_id_type' from model relation '%s': it has no such column.\n\n"
 		    "A model row records the feature_id type it was fit on, which data must match.\n\n"
 		    "Remedy:\n"
-		    "  Store the whole row from a fit, refitting if the model predates this column:\n"
+		    "  Store the whole row from a fit:\n"
 		    "    CREATE TABLE models AS SELECT * FROM fit_classifier('counts', 'meta', name := 'm1');",
 		    caller, relation);
 	}
@@ -570,9 +570,10 @@ void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation
 			}
 		}
 	}
-	// A model table holds exactly one row. More than one is ambiguous -- there
-	// is no basis for choosing -- and zero usually means an upstream filter ate
-	// it, which is worth saying rather than failing later inside sc.
+	// A name, or a relation holding one model, selects exactly one row. More than
+	// one is ambiguous -- there is no basis for choosing -- and zero usually means
+	// an upstream filter ate it, which is worth saying rather than failing later
+	// inside sc.
 	if (rows != 1) {
 		RejectModelSelection(caller, relation, name, rows, !task.empty());
 	}

@@ -17,9 +17,9 @@ extern crate sc_capi as _;
 /// single-threaded builds have no threads to give it, and Emscripten's
 /// `pthread_create` stub reports EAGAIN rather than "unsupported" -- the one
 /// error rayon falls back to the calling thread on -- so the first parallel
-/// call panics instead (fit_classifier, shap, cross_validate_*,
-/// rype_index_create). A one-thread pool that *is* the calling thread runs the
-/// same work inline, and sc's results do not depend on the thread count.
+/// call panics instead (fit_classifier, shap, rype_index_create). A one-thread
+/// pool that *is* the calling thread runs the same work inline, and sc's
+/// results do not depend on the thread count.
 ///
 /// Called once when the extension loads, before any rype or sc call. A no-op
 /// outside Emscripten, where rayon builds its default pool on first use.

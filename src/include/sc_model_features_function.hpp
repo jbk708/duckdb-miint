@@ -20,9 +20,9 @@ namespace duckdb {
 //!   SELECT DISTINCT feature_id FROM new_data
 //!   EXCEPT SELECT feature_id FROM model_features('models', name := 'rf');
 //!
-//! `column_index` is the position the id occupies in the model's matrix. It is
-//! the thing that has to line up between fit and predict, and sc validates only
-//! the feature *count*, so seeing the mapping is the only way to check it.
+//! `column_index` is the position the id occupies in the model's matrix, the
+//! thing that has to line up between fit and predict. sc checks only how many
+//! columns there are, so seeing the mapping is the way to check it.
 //!
 //! The same list is reachable via feature_importances, but that walks every
 //! tree in the forest to compute MDI -- wasted work when the question is which

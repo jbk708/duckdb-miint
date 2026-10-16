@@ -13,7 +13,7 @@ namespace duckdb {
 //! prediction: the class probability for a classifier, the predicted value for a
 //! regressor.
 //!
-//! A classifier explains every class, but only the PREDICTED class is returned
+//! A classifier explains every class, but only the predicted class is returned
 //! by default. With two classes the other one is an exact mirror (every value
 //! negated), so nothing is lost. `predicted_class_only := false` returns them
 //! all, which matters with three or more classes, where "why not the runner-up"

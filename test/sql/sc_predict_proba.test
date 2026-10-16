@@ -66,11 +66,12 @@ SELECT bool_and(probability BETWEEN 0.0 AND 1.0) FROM predict_proba('pp_data', '
 ----
 true
 
-# The load-bearing check on the FixedSizeList decoding: sc flattens
+# The check on the FixedSizeList decoding: sc flattens
 # n_samples x n_classes row-major, and reading it with the wrong stride would
 # put a sample's probabilities against the wrong classes. The highest-probability
 # class must therefore equal what predict returns for the same sample, which
-# comes from an entirely separate sc call.
+# comes from an entirely separate sc call. Each sample here has one class on
+# top, so row_number picks it rather than breaking a tie.
 query I
 SELECT bool_and(p.prediction = a.class) FROM predict('pp_data','pp_models', name := 'site') p
 JOIN (SELECT sample_id, class, row_number() OVER (PARTITION BY sample_id ORDER BY probability DESC) rn

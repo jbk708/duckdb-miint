@@ -116,19 +116,14 @@ unique_ptr<FunctionData> ScFitBind(ClientContext &context, TableFunctionBindInpu
 
 	ValidateForestParameters(params, data->caller);
 
-	// `name` is required, so this column is never NULL and a registry is
-	// selectable from the moment it is created. Nothing is ever invented to fill
-	// it -- a generated 'm0' would collide on the very next call, since a table
-	// function cannot see what already exists in the table its row is headed for.
+	// `name` is never invented: a generated 'm0' would collide on the next call,
+	// since a table function cannot see the table its row is headed for.
 	//
 	// `random_state` is echoed because it is the one thing needed to reproduce a
 	// fit that the caller would otherwise have to remember and re-type. Richer
-	// provenance stays the caller's: `SELECT 'x' AS target, * FROM sc_fit_...`.
-	// `model` names the algorithm and mirrors the `model :=` parameter; the
-	// serialized forest lives in `model_blob`. They were one column called
-	// `model`, which meant `model := 'random_forest'` went in and bytes came
-	// out under the same name -- and left a row unable to say which algorithm
-	// produced it once there is more than one.
+	// provenance stays the caller's: `SELECT 'x' AS target, * FROM fit_classifier(...)`.
+	// `model` names the algorithm and mirrors the `model :=` parameter, so a row
+	// says which algorithm produced it; the serialized forest is `model_blob`.
 	//
 	// `feature_id_type` is the type the data's feature_id had. Applying the model
 	// requires exactly that type, and the column says which one to provide.

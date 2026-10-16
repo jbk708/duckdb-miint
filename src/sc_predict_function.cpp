@@ -105,7 +105,7 @@ void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChu
 		if (auto st = sc_predict(ctx.ptr, model.ptr, table->get(), pred.array(), pred.schema()); st != SC_OK) {
 			miint::ThrowSc("sc_predict", ctx.ptr, st);
 		}
-		// sc's output type follows the MODEL's task, not the function the caller
+		// sc's output type follows the model's task, not the function the caller
 		// reached for: "u" for a classifier's labels, "g" for a regressor's
 		// numbers. Checking it here turns an Arrow format mismatch -- which
 		// would surface as "expected 'g', got 'u'" -- into advice.

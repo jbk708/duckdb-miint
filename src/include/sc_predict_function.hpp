@@ -18,11 +18,9 @@ namespace duckdb {
 //! scoring open to any metric.
 //!
 //! Features are encoded against the model's vocabulary, never re-derived from
-//! the prediction data: two datasets differing by one feature in each direction
-//! have the same width, and sc validates only the width, so re-deriving would
-//! return confident nonsense with no error anywhere. `known_feature_fraction` reports
-//! matched/observed per sample so a caller can see how much of their data the
-//! model could actually use.
+//! the prediction data (ScCooBuilder::SetFeatureVocabulary says why).
+//! `known_feature_fraction` reports matched/observed per sample so a caller can
+//! see how much of their data the model could actually use.
 class ScPredictFunction {
 public:
 	static void Register(ExtensionLoader &loader);
