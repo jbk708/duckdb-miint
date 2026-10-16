@@ -1114,7 +1114,7 @@ Read GFF3 (General Feature Format) annotation files. GFF is a standard format fo
 
 **Behavior:**
 - Reads tab-delimited GFF3 format files
-- Automatically filters comment lines starting with '##'
+- Skips comment and directive lines (those starting with '#'); a '#' inside a feature line is kept
 - Converts '.' to NULL for score, strand, and phase fields
 - Parses the attributes column (semicolon-separated key=value pairs) into a SQL MAP
 - Percent-decodes (`%XX`) attribute keys and values per the GFF3 spec (e.g. `%3D` → `=`, `%2C` → `,`, `%3B` → `;`, `%26` → `&`); the value is everything after the first `=`, so a raw `=` inside a value is preserved rather than truncated
@@ -1212,7 +1212,7 @@ SELECT parse_gff_attributes('ID=gene1;Name=TEST1;biotype=protein_coding');
 - Coordinates **in the file** are 1-based and inclusive (both start and end). miint normalizes them on read — see [Coordinate conventions](#coordinate-conventions).
 - Strand: '+' (forward), '-' (reverse), '.' (unknown/not applicable)
 - Phase: Indicates position within codon (0, 1, or 2) for CDS features
-- Comment lines starting with '##' are filtered out (metadata/directives)
+- Lines starting with '#' (comments and directives such as '##gff-version') are skipped. A '#' inside a feature line, such as in an attribute value, is part of the value.
 - The 9th column (attributes) may be empty; a feature line must carry the 8 mandatory fields
 - **The GFF3 sequence section is honoured**: content after a `##FASTA` directive is not returned as feature rows. prokka and bakta always append the genome, so this is the common case. A feature line carrying only *some* of the 8 mandatory fields is a malformed GFF line and raises an error rather than being silently dropped, as does a feature line with an empty seqid, whichever columns the query selects or filters on. (A query that stops early, such as one with `LIMIT`, may finish before reaching it.)
 

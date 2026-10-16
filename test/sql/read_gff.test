@@ -408,6 +408,22 @@ FROM read_gff('__TEST_DIR__/blank_lines.gff') ORDER BY position;
 ctg1	INTEGER	INTEGER	NULL	DOUBLE	+	VARCHAR	NULL	INTEGER	g1	MAP(VARCHAR, VARCHAR)	VARCHAR
 ctg1	INTEGER	INTEGER	2.5	DOUBLE	NULL	VARCHAR	1	INTEGER	g2	MAP(VARCHAR, VARCHAR)	VARCHAR
 
+# --- '#' inside a feature line ---
+#
+# GFF3 does not ask for '#' to be escaped inside a field, so a feature line keeps every '#'
+# it holds. Only a line that starts with '#' is a comment or directive, and it is skipped,
+# whatever follows it, tabs included.
+statement ok
+COPY (SELECT * FROM (VALUES (E'##gff-version 3'), (E'# a comment'), (E'#\twith\ttabs'), (E'###'),
+                            (E'ctg1\tsrc#2\tgene\t1\t50\t.\t+\t.\tID=g1;Note=see #3 for details;Name=abc')) t(line))
+TO '__TEST_DIR__/hash.gff' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query TTTTI
+SELECT source, attributes['ID'], attributes['Note'], attributes['Name'], cardinality(attributes)
+FROM read_gff('__TEST_DIR__/hash.gff');
+----
+src#2	g1	see #3 for details	abc	3
+
 # --- Composition with genome_coverage (issue #196) ---
 #
 # genome_coverage computes SUM(stop - start) over compressed intervals -- half-open
