@@ -29,7 +29,7 @@ trap 'if [ "$ALL_PASSED" = 1 ]; then rm -rf "$TMP_ROOT"; fi' EXIT
 mkdir "$TMP_ROOT/bin"
 CPP_OK="$TMP_ROOT/bin/cpp_ok"
 printf '#!/bin/sh\necho "All tests passed (1 assertion in 1 test case)"\n' > "$CPP_OK"
-# SIGKILL rather than SIGSEGV: same negative exit status, and no core file in the caller's
+# SIGKILL rather than SIGSEGV: also a negative exit status, and no core file in the caller's
 # working directory.
 CPP_KILLED="$TMP_ROOT/bin/cpp_killed"
 printf '#!/bin/sh\nkill -KILL $$\n' > "$CPP_KILLED"

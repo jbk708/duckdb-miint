@@ -74,7 +74,9 @@ def main():
     # Every worker shares the working directory, and so the .tmp an in-memory database spills
     # to, where processes corrupt each other's spill files (docs/internals/duckdb-engine-notes.md,
     # "Storage"). unittest runs on_init whenever it opens a database, with __TEST_DIR__
-    # expanded to the process's own directory; temp_directory is database-wide.
+    # expanded to the process's own directory; temp_directory is database-wide. It also runs
+    # it on `reconnect`, so a test that spills and then reconnects fails here alone: DuckDB
+    # refuses to move a temp directory in use. No test does.
     sql_env = dict(os.environ)
     sql_env["DUCKDB_TEST_ON_INIT"] = ";".join(
         filter(None, [os.environ.get("DUCKDB_TEST_ON_INIT"), "SET temp_directory='__TEST_DIR__/spill'"])

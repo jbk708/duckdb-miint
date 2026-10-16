@@ -30,7 +30,9 @@ SET threads=1;
 # Two queries, one per shard — two shards is the minimum that triggers a second
 # read of the query relation. Uses the committed data/shards/shard_{a,b}.mmi
 # fixtures (ref1 / ref2) rather than building indexes, so this test adds no
-# generated files.
+# generated files. They are save_minimap2_index(..., k := 5) of the
+# shard_a_subjects and shard_b_subjects tables in align_minimap2_sharded.test,
+# and rebuild byte-for-byte that way if minimap2's index format changes.
 statement ok
 CREATE TABLE base_q AS SELECT * FROM (VALUES
     ('ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'),
