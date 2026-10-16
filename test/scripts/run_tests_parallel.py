@@ -3,9 +3,9 @@
 
 `MIINT_TEST_JOBS=N bash run_tests.sh` runs this in place of `make test` followed by the
 C++ test binary. The SQL files are the ones `make test` runs: unittest lists them from
-the same spec. Each runs in its own unittest process, and so gets its own __TEST_DIR__,
-which unittest names by process id. The C++ binary is one more job, queued first because
-it is the longest.
+the spec `make test` passes it, test/*, this script's default. Each runs in its own
+unittest process, and so gets its own __TEST_DIR__, which unittest names by process id.
+The C++ binary is one more job, queued first because it is the longest.
 
 Every job runs to completion. The run fails if any job failed, after printing each failed
 job's output, and it reports skips per reason as the serial pass does.
@@ -47,8 +47,8 @@ def skip_reasons(output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--jobs", type=int, required=True, help="worker processes")
-    parser.add_argument("--unittest", default="build/release/test/unittest")
-    parser.add_argument("--cpp-tests", default="build/release/extension/miint/tests")
+    parser.add_argument("--unittest", required=True, help="DuckDB's unittest binary")
+    parser.add_argument("--cpp-tests", required=True, help="miint's Catch2 test binary")
     parser.add_argument("--test-dir", help="passed to unittest, which registers the .test files under DIR/test")
     parser.add_argument("spec", nargs="?", default="test/*", help="unittest test spec (default: test/*, as make test)")
     args = parser.parse_args()
@@ -71,10 +71,10 @@ def main():
         # unittest itself exits 0 on "No tests ran".
         sys.exit(f"error: {args.spec} matches no test file")
 
-    # An in-memory database spills to .tmp under the working directory, which every worker
-    # shares. Spill files carry no process id, and closing a database deletes every
-    # duckdb_temp_* file in its directory, so two workers there corrupt each other. on_init
-    # runs on each connection and expands __TEST_DIR__ to the process's own directory.
+    # Every worker shares the working directory, and so the .tmp an in-memory database spills
+    # to, where processes corrupt each other's spill files (docs/internals/duckdb-engine-notes.md,
+    # "Storage"). unittest runs on_init whenever it opens a database, with __TEST_DIR__
+    # expanded to the process's own directory; temp_directory is database-wide.
     sql_env = dict(os.environ)
     sql_env["DUCKDB_TEST_ON_INIT"] = ";".join(
         filter(None, [os.environ.get("DUCKDB_TEST_ON_INIT"), "SET temp_directory='__TEST_DIR__/spill'"])

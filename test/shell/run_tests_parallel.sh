@@ -1,8 +1,8 @@
 #!/bin/bash
 # Scenario tests for test/scripts/run_tests_parallel.py, the runner behind
-# `MIINT_TEST_JOBS=N bash run_tests.sh`: that it runs every SQL test file once, that a
-# failure or a crash anywhere fails the run, and that skips are reported per reason as
-# the serial pass reports them.
+# `MIINT_TEST_JOBS=N bash run_tests.sh`. It must run exactly the files the serial pass runs,
+# fail the run on any failure it can see, and report what the serial pass reports; each
+# scenario says which part of that it pins and why.
 #
 # Each scenario runs the real unittest binary against a throwaway test root (unittest's
 # --test-dir) holding generated .test files, so no fixture sits under this repository's
@@ -29,9 +29,14 @@ trap 'if [ "$ALL_PASSED" = 1 ]; then rm -rf "$TMP_ROOT"; fi' EXIT
 mkdir "$TMP_ROOT/bin"
 CPP_OK="$TMP_ROOT/bin/cpp_ok"
 printf '#!/bin/sh\necho "All tests passed (1 assertion in 1 test case)"\n' > "$CPP_OK"
-CPP_CRASH="$TMP_ROOT/bin/cpp_crash"
-printf '#!/bin/sh\nkill -SEGV $$\n' > "$CPP_CRASH"
-chmod +x "$CPP_OK" "$CPP_CRASH"
+# SIGKILL rather than SIGSEGV: same negative exit status, and no core file in the caller's
+# working directory.
+CPP_KILLED="$TMP_ROOT/bin/cpp_killed"
+printf '#!/bin/sh\nkill -KILL $$\n' > "$CPP_KILLED"
+# A unittest whose listing dies after one name, as a crash partway through would.
+UNITTEST_DIES="$TMP_ROOT/bin/unittest_dies"
+printf '#!/bin/sh\necho test/sql/listed.test\nkill -KILL $$\n' > "$UNITTEST_DIES"
+chmod +x "$CPP_OK" "$CPP_KILLED" "$UNITTEST_DIES"
 
 pass_test() { printf 'query I\nSELECT 1;\n----\n1\n'; }
 fail_test() { printf 'query I\nSELECT 1;\n----\n2\n'; }
@@ -43,11 +48,12 @@ root() {
     mkdir -p "$ROOT/test/sql"
 }
 
-# invoke CPP_TESTS [SPEC]: run the script on $ROOT with two workers.
+# invoke CPP_TESTS [ARG...]: run the script on $ROOT with two workers. A later --jobs or
+# --unittest in ARG overrides the default, and a bare ARG is the spec.
 invoke() {
     EXIT=0
     OUT="$(python3 "$SCRIPT" --jobs 2 --unittest "$UNITTEST" --cpp-tests "$1" --test-dir "$ROOT" \
-        ${2:+"$2"} 2>&1)" || EXIT=$?
+        "${@:2}" 2>&1)" || EXIT=$?
 }
 
 # ran_once STATUS FILE: FILE's progress line appears exactly once, with STATUS.
@@ -85,7 +91,7 @@ invoke "$CPP_OK"
 ok=0
 [[ $EXIT -ne 0 ]] && ran_once FAIL bad.test && ran_once ok good.test &&
     [[ "$OUT" == *"Wrong result"* ]] && ok=1
-report "a failing file fails the run, prints its output, and the rest still run" \
+report "a failing file fails the run and prints its output" \
     "a lost exit status leaves the run green over a broken test; the output is the only diagnosis" "$ok"
 
 root skips
@@ -102,13 +108,17 @@ ok=0
 report "skips are counted per reason across files" \
     "a change in the skip count is how a reviewer sees coverage move, so it must match the serial pass's report" "$ok"
 
-root cpp_crash
-pass_test > "$ROOT/test/sql/fine.test"
-invoke "$CPP_CRASH"
+# One worker: the C++ job is queued first, so these files start only after it has failed.
+# The worker takes the next job the moment one ends, so a run that stopped on the failure
+# could still start the first of them; the other two show whether it went on.
+root cpp_killed
+for f in a b c; do pass_test > "$ROOT/test/sql/$f.test"; done
+invoke "$CPP_KILLED" --jobs 1
 ok=0
-[[ $EXIT -ne 0 ]] && grep -qE '^\[[0-9]+/[0-9]+\] +FAIL .*C\+\+ tests' <<< "$OUT" && ok=1
-report "a crashing C++ test binary fails the run" \
-    "a signal is a negative exit status in Python, and a check for a positive one would pass a segfault" "$ok"
+[[ $EXIT -ne 0 ]] && grep -qE '^\[[0-9]+/[0-9]+\] +FAIL .*C\+\+ tests' <<< "$OUT" &&
+    ran_once ok a.test && ran_once ok b.test && ran_once ok c.test && ok=1
+report "a C++ binary killed by a signal fails the run, and the queued files still run" \
+    "a signal is a negative exit status in Python, which a check for a positive one passes; and one failure must not hide the rest" "$ok"
 
 root spill_dir
 printf "query I\nSELECT current_setting('temp_directory') = '__TEST_DIR__/spill';\n----\ntrue\n" \
@@ -124,9 +134,16 @@ pass_test > "$ROOT/test/sql/fine.test"
 pass_test > "$ROOT/test/sql/fine.test,odd.test"
 invoke "$CPP_OK"
 ok=0
-[[ $EXIT -ne 0 && "$OUT" == *"test/sql/fine.test,odd.test"* ]] && ok=1
+[[ $EXIT -ne 0 ]] && ran_once FAIL 'fine.test,odd.test' && ran_once ok fine.test && ok=1
 report "a file name that selects another file fails the run" \
     "Catch2 reads a comma in a name as 'or': this name runs fine.test, and only -w NoTests turns the miss into a failure" "$ok"
+
+root listing_dies
+invoke "$CPP_OK" --unittest "$UNITTEST_DIES"
+ok=0
+[[ $EXIT -ne 0 && "$OUT" == *"exited -9 after 1 names"* ]] && ! grep -qE '^\[[0-9]+/' <<< "$OUT" && ok=1
+report "a listing that dies partway fails the run before any file runs" \
+    "the names it printed are a subset of the suite, and running only those would pass as a full run" "$ok"
 
 root no_match
 pass_test > "$ROOT/test/sql/present.test"

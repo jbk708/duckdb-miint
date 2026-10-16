@@ -31,7 +31,7 @@ make test
 ./build/release/test/unittest "[alignment]"
 ```
 
-`MIINT_TEST_JOBS=N` runs the files `make test` runs, each in its own `unittest` process, alongside the C++ test binary (`test/scripts/run_tests_parallel.py`). It prints a line per file as each finishes, then the output of every file that failed, and reports skips per reason as the serial pass does. On a 32-core machine, 8 workers take the whole script from about 4m40s to about 1m15s. CI leaves it unset and runs the serial pass. Every process shares the working directory, so the runner points each one's `temp_directory` at its own `__TEST_DIR__`: DuckDB's default spill directory, `.tmp` under the working directory, would otherwise be shared by processes that overwrite and delete each other's spill files. For the same reason a test that writes outside `__TEST_DIR__` must use a path that no other test file and no C++ test reads or writes.
+`MIINT_TEST_JOBS=N` runs the files `make test` runs, each in its own `unittest` process, alongside the C++ test binary (`test/scripts/run_tests_parallel.py`). It prints a line per file as each finishes, then the output of every file that failed, and reports skips per reason as the serial pass does. The descriptor-limit rerun and the shell tests stay serial. CI leaves it unset and runs the serial pass.
 
 `build/release/duckdb`, `test/unittest`, `extension/miint/tests` and the loadable `miint.duckdb_extension` are separate build targets, so after an incremental `ninja` of one of them the others can be stale. Rebuild every binary you probe with, e.g. `ninja -C build/release duckdb test/unittest extension/miint/tests`.
 
@@ -83,10 +83,11 @@ File not found: nonexistent.fastq
 - Keep test data files small and focused
 - Use clear, descriptive comments for each test section
 - A test that reads through a glob and asserts `filepath` values selects `replace(filepath, '\', '/')`: glob expansion returns native separators on Windows. A single path or an explicit path list keeps the caller's string and needs no wrapping.
+- Write files under `__TEST_DIR__`, the per-process scratch directory unittest substitutes into a test's SQL. Under `MIINT_TEST_JOBS`, test files and the C++ tests run at the same time in one working directory, so any other path a test writes must be one no other test reads or writes. For the same reason the parallel runner gives each SQL process a spill directory under its `__TEST_DIR__` (`docs/internals/duckdb-engine-notes.md`, "Storage").
 
 **Guards and skipped tests:**
 
-`require-env` guards only what a deployment can lack: an optional embedded library, a runtime binary, a network resource or served data. The one other category is process state the `make test` pass cannot set, such as a lowered descriptor limit, which `run_tests.sh` provides in a rerun. `run_tests.sh` decides which guards are exported. A test of this repository's own C++ code is never guarded: an oracle produced by an external tool is committed as a fixture, and a missing or corrupted fixture fails the test. A checksum gate in `run_tests.sh` would turn a corrupted golden into a skip and leave the run green, so a parity test that pins its golden's checksum checks it with an assertion.
+`require-env` guards only what a deployment can lack: an optional embedded library, a runtime binary, a network resource or served data. The one other category is process state the main pass cannot set, such as a lowered descriptor limit, which `run_tests.sh` provides in a rerun. `run_tests.sh` decides which guards are exported. A test of this repository's own C++ code is never guarded: an oracle produced by an external tool is committed as a fixture, and a missing or corrupted fixture fails the test. A checksum gate in `run_tests.sh` would turn a corrupted golden into a skip and leave the run green, so a parity test that pins its golden's checksum checks it with an assertion.
 
 A skipped file is not a passing one, and the suite's skip count is part of its result: a run that skips more files than before covers less, whatever its summary line says. `require httpfs` skips whenever the build does not include httpfs, and `extension_config.cmake` does not build it on this DuckDB version. That covers every `require httpfs` file, the ENA submission mock tests among them. Running them takes:
 
