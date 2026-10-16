@@ -1131,12 +1131,8 @@ set(GLUE_CONFIGURE_CMD "")
 # MIINT_WASM_RUST_TOOLCHAIN above); propagated to the build via RUSTUP_TOOLCHAIN.
 set(GLUE_RUSTUP_TOOLCHAIN "")
 if(EMSCRIPTEN)
-    # Match the C++ side's exception model. With JS exceptions, rustc routes every
-    # call that can unwind through Emscripten's invoke_* helpers, which duckdb-wasm
-    # generates in JS, and on that path Emscripten truncates Rust symbol names at
-    # '$' and sign-extends the low word of i64 arguments: calls trap or receive
-    # corrupted values, and a panic aborts the module (#315). So when the C++ uses
-    # wasm-native exceptions, the glue does too. The flag, not the platform name,
+    # Match the C++ side's exception model: docs/internals/embedded-tools.md,
+    # "Emscripten exceptions", says why. The flag, not the platform name,
     # decides: extension-ci-tools builds wasm_threads without it. Recorded in the
     # cache for scripts/build_wasm.sh's import check.
     if(CMAKE_CXX_FLAGS MATCHES "-fwasm-exceptions")

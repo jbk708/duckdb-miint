@@ -148,9 +148,8 @@ if $VERIFY; then
         echo "--- Checking $t: $WASM_FILE ---"
 
         # A build with wasm-native exceptions (MIINT_WASM_NATIVE_EH, recorded by
-        # CMakeLists.txt) must not import Emscripten's JS exception helpers:
-        # duckdb-wasm generates them, and on that path Rust symbol names are
-        # truncated and i64 arguments corrupted (#315).
+        # CMakeLists.txt) must not import Emscripten's JS exception helpers;
+        # docs/internals/embedded-tools.md, "Emscripten exceptions", says why.
         CACHE="build/$t/CMakeCache.txt"
         NATIVE_EH=$(sed -n 's/^MIINT_WASM_NATIVE_EH:INTERNAL=//p' "$CACHE" 2>/dev/null || true)
         case "$NATIVE_EH" in
