@@ -55,6 +55,10 @@ private:
 	std::string traceback_;
 };
 
+/// The capabilities miint's SQL functions call, each at the `schema_version`
+/// they were built against.
+std::vector<std::pair<std::string, int64_t>> MiintCapabilities();
+
 /// Called while waiting on the host. Throw to abandon the call: the host and
 /// everything it started are killed, and the exception propagates.
 using InterruptCheck = std::function<void()>;

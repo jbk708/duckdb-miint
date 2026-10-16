@@ -219,6 +219,10 @@ Error::Error(std::string kind, const std::string &message, std::string traceback
     : std::runtime_error(message), kind_(std::move(kind)), traceback_(std::move(traceback)) {
 }
 
+std::vector<std::pair<std::string, int64_t>> MiintCapabilities() {
+	return {{"ancombc", 1}, {"mantel", 1}};
+}
+
 std::string MiintSkbArrowCacheBinary() {
 	const std::string dir = gb::MiintGplBoundaryCacheDir();
 	return dir.empty() ? std::string() : dir + "/skb-arrow";

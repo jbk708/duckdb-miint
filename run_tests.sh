@@ -74,6 +74,16 @@ if [ -z "${MIINT_GPL_BOUNDARY_PATH:-}" ] && [ -x "$GPL_BOUNDARY_CACHED" ]; then
     export MIINT_GPL_BOUNDARY_PATH="$GPL_BOUNDARY_CACHED"
 fi
 
+# skb-arrow (process host for scikit-bio). Same $HOME problem: point at the binary install_skb_arrow() puts in
+# miint's cache unless the caller chose one, then guard on whichever binary miint will run.
+SKB_ARROW_CACHED="${XDG_CACHE_HOME:-$HOME/.cache}/miint/bin/skb-arrow"
+if [ -z "${MIINT_SKB_ARROW_PATH:-}" ] && [ -x "$SKB_ARROW_CACHED" ]; then
+    export MIINT_SKB_ARROW_PATH="$SKB_ARROW_CACHED"
+fi
+if [ -x "${MIINT_SKB_ARROW_PATH:-$(command -v skb-arrow)}" ]; then
+    export SKB_ARROW_AVAILABLE=1
+fi
+
 # Independent native FastTree binary (bioconda or built from source) used as
 # the parity oracle for phylogeny_fasttree. Distinct from gpl-boundary's
 # vendored ext/fasttree library.

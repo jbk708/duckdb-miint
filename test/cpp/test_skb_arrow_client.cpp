@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include "skb_arrow/client.hpp"
+#include "skb_arrow/install.hpp"
 
 #include "env_test_helpers.hpp"
 #include "gpl_boundary/arrow_ipc.hpp"
@@ -735,6 +736,273 @@ TEST_CASE("Host shutdown kills a host that won't exit", "[skb-arrow]") {
 }
 
 // =============================================================================
+// Checking and installing
+// =============================================================================
+
+namespace {
+// A ready line offering every capability miint calls.
+constexpr const char *kReadyAll = R"({"type":"ready","protocol_version":1,"host_version":"9.9.9",)"
+                                  R"("capabilities":{"ancombc":1,"echo":1,"mantel":1},"id":null,"warnings":[]})";
+
+// After the handshake: idle until stdin closes, then exit 0.
+constexpr const char *kIdle = "while IFS= read -r line; do :; done\nexit 0";
+
+void WriteExecutable(const std::string &path, const std::string &content) {
+	std::ofstream out(path);
+	out << content;
+	out.close();
+	REQUIRE(::chmod(path.c_str(), 0755) == 0);
+}
+
+std::vector<std::string> Lines(const std::string &path) {
+	std::vector<std::string> lines;
+	std::istringstream in(Slurp(path));
+	for (std::string line; std::getline(in, line);) {
+		lines.push_back(line);
+	}
+	return lines;
+}
+
+// Writes a fake uv: it records its arguments, a line each, then the
+// variables that place an install, then runs `body`.
+struct FakeUv {
+	TempDir tmp;
+	std::string log = tmp.path + "/uv.log";
+	std::string Write(const std::string &body) {
+		const std::string path = tmp.path + "/uv";
+		WriteExecutable(path, "#!/bin/bash\n{ printf '%s\\n' \"$@\"; printf '%s\\n' "
+		                      "\"UV_TOOL_BIN_DIR=$UV_TOOL_BIN_DIR\" \"UV_TOOL_DIR=$UV_TOOL_DIR\" "
+		                      "\"UV_PYTHON_INSTALL_DIR=$UV_PYTHON_INSTALL_DIR\"; } > " +
+		                          ShQuote(log) + "\n" + body + "\n");
+		return path;
+	}
+	bool Ran() const {
+		return Exists(log);
+	}
+};
+
+// A fake uv body that installs `host` as the tool's binary.
+std::string Installs(const std::string &host) {
+	return "mkdir -p \"$UV_TOOL_BIN_DIR\" && cp " + ShQuote(host) + " \"$UV_TOOL_BIN_DIR/skb-arrow\"";
+}
+} // namespace
+
+TEST_CASE("Probe returns the version of a host offering every capability miint calls", "[skb-arrow]") {
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	const std::string bin = fake.Write(kIdle, kReadyAll);
+	REQUIRE(Probe(bin, kNever) == "9.9.9");
+	// A real handshake, not a version string: the contract is what's checked.
+	REQUIRE(fake.Requests() == std::vector<std::string> {R"({"type":"init","protocol_version":1})"});
+	REQUIRE(Entries(fake.sessions).empty());
+}
+
+TEST_CASE("Probe refuses a host without a capability miint calls", "[skb-arrow]") {
+	// skb_arrow_available() must not vouch for a host that can't serve
+	// skb_ancombc, even though it serves skb_mantel.
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	const std::string bin = fake.Write(kIdle); // kReady: echo and mantel only
+	try {
+		Probe(bin, kNever);
+		FAIL("expected an Error");
+	} catch (const Error &e) {
+		REQUIRE(e.kind() == "host_incompatible");
+		REQUIRE_THAT(e.what(), ContainsSubstring("'ancombc'"));
+	}
+	REQUIRE(Entries(fake.sessions).empty());
+}
+
+TEST_CASE("FindUv looks on PATH, then where uv's installer puts it", "[skb-arrow]") {
+	TempDir tmp;
+	const std::string which = gb::FindExecutableInPath("which");
+	REQUIRE_FALSE(which.empty());
+	// PATH holds only `which`, which FindExecutableInPath runs, so no uv on
+	// this machine can leak in.
+	const std::string path_dir = tmp.path + "/path";
+	const std::string home = tmp.path + "/home";
+	REQUIRE(::mkdir(path_dir.c_str(), 0700) == 0);
+	REQUIRE(::symlink(which.c_str(), (path_dir + "/which").c_str()) == 0);
+	REQUIRE(::system(("mkdir -p " + ShQuote(home + "/.local/bin")).c_str()) == 0);
+	EnvGuard path("PATH", path_dir.c_str());
+	EnvGuard home_env("HOME", home.c_str());
+
+	REQUIRE(FindUv().empty());
+	WriteExecutable(home + "/.local/bin/uv", "#!/bin/sh\n");
+	REQUIRE(FindUv() == home + "/.local/bin/uv");
+	WriteExecutable(path_dir + "/uv", "#!/bin/sh\n");
+	REQUIRE(FindUv() == path_dir + "/uv");
+}
+
+TEST_CASE("Install returns at once when the existing binary passes the probe", "[skb-arrow]") {
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o;
+	o.existing = fake.Write(kIdle, kReadyAll);
+	o.uv = uv.Write("exit 0");
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
+	REQUIRE(r.installed);
+	REQUIRE(r.path == o.existing);
+	REQUIRE(r.version == "9.9.9");
+	REQUIRE_THAT(r.message, ContainsSubstring("already available"));
+	REQUIRE_FALSE(uv.Ran());
+}
+
+TEST_CASE("Install runs uv on the pinned release, keeping the tool, its Python and its binary in miint's cache",
+          "[skb-arrow]") {
+	// --managed-python keeps conda's or the system's interpreter out;
+	// UV_PYTHON_INSTALL_DIR keeps uv's own out of ~/.local/share/uv; the pin
+	// is the release miint is tested with.
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o;
+	o.uv = uv.Write(Installs(fake.Write(kIdle, kReadyAll)));
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
+	REQUIRE(Lines(uv.log) == std::vector<std::string> {"tool", "install", "--managed-python", "--python", "3.14",
+	                                                   "skb-arrow==0.1.0", "UV_TOOL_BIN_DIR=" + cache.path + "/bin",
+	                                                   "UV_TOOL_DIR=" + cache.path + "/uv-tools",
+	                                                   "UV_PYTHON_INSTALL_DIR=" + cache.path + "/uv-python"});
+	REQUIRE(r.installed);
+	REQUIRE(r.path == cache.path + "/bin/skb-arrow");
+	REQUIRE(r.version == "9.9.9");
+	REQUIRE_THAT(r.message, ContainsSubstring("Installed skb-arrow 9.9.9 to " + r.path));
+}
+
+TEST_CASE("Install installs over an existing binary that fails the probe", "[skb-arrow]") {
+	FakeHosts stale, fresh;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fresh.sessions.c_str());
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o;
+	o.existing = stale.Write(kIdle); // no ancombc
+	o.uv = uv.Write(Installs(fresh.Write(kIdle, kReadyAll)));
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
+	REQUIRE(uv.Ran());
+	REQUIRE(r.installed);
+	REQUIRE(r.path == cache.path + "/bin/skb-arrow");
+}
+
+TEST_CASE("Install with force skips the probe and has uv reinstall and replace the binary", "[skb-arrow]") {
+	// force is the escape from a binary that passes the probe but is broken
+	// some other way, or one uv didn't put there (`--force` overwrites it).
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o;
+	o.existing = fake.Write(kIdle, kReadyAll);
+	o.uv = uv.Write(Installs(o.existing));
+	o.cache_dir = cache.path;
+	o.force = true;
+	const InstallReport r = Install(o, kNever);
+	const std::vector<std::string> args = Lines(uv.log);
+	REQUIRE(args.size() == 11);
+	REQUIRE(std::vector<std::string>(args.begin() + 6, args.begin() + 8) ==
+	        std::vector<std::string> {"--reinstall", "--force"});
+	REQUIRE(r.installed);
+	REQUIRE(r.path == cache.path + "/bin/skb-arrow");
+}
+
+TEST_CASE("Install without uv says how to get it", "[skb-arrow]") {
+	TempDir cache;
+	InstallOptions o;
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
+	REQUIRE_FALSE(r.installed);
+	REQUIRE_THAT(r.message, ContainsSubstring("uv not found"));
+	REQUIRE_THAT(r.message, ContainsSubstring("https://astral.sh/uv/install.sh"));
+	REQUIRE_THAT(r.message, ContainsSubstring("SELECT install_skb_arrow()"));
+}
+
+TEST_CASE("Install without a cache location says so", "[skb-arrow]") {
+	FakeUv uv;
+	InstallOptions o;
+	o.uv = uv.Write("exit 0");
+	const InstallReport r = Install(o, kNever);
+	REQUIRE_FALSE(r.installed);
+	REQUIRE_THAT(r.message, ContainsSubstring("XDG_CACHE_HOME"));
+	REQUIRE_FALSE(uv.Ran());
+}
+
+TEST_CASE("Install reports uv's failure with what uv said", "[skb-arrow]") {
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o;
+	o.uv = uv.Write("echo 'error: Failed to fetch: no network' >&2\nexit 2");
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
+	REQUIRE_FALSE(r.installed);
+	REQUIRE_THAT(r.message, ContainsSubstring("exit code 2"));
+	REQUIRE_THAT(r.message, ContainsSubstring("error: Failed to fetch: no network"));
+}
+
+TEST_CASE("Install reports a uv success that left no binary", "[skb-arrow]") {
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o;
+	o.uv = uv.Write("exit 0");
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
+	REQUIRE_FALSE(r.installed);
+	REQUIRE_THAT(r.message, ContainsSubstring("no skb-arrow at " + cache.path + "/bin/skb-arrow"));
+}
+
+TEST_CASE("Install reports an installed binary that fails the probe", "[skb-arrow]") {
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o;
+	o.uv = uv.Write(Installs(fake.Write(kIdle))); // no ancombc
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
+	REQUIRE_FALSE(r.installed);
+	REQUIRE_THAT(r.message, ContainsSubstring("'ancombc'"));
+}
+
+TEST_CASE("Install puts the binary where FindSkbArrow looks", "[skb-arrow]") {
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	FakeUv uv;
+	TempDir xdg;
+	EnvGuard xdg_env("XDG_CACHE_HOME", xdg.path.c_str());
+	EnvGuard override_path("MIINT_SKB_ARROW_PATH", nullptr);
+	REQUIRE(MiintCacheDir() == xdg.path + "/miint");
+	InstallOptions o;
+	o.uv = uv.Write(Installs(fake.Write(kIdle, kReadyAll)));
+	o.cache_dir = MiintCacheDir();
+	const InstallReport r = Install(o, kNever);
+	REQUIRE(r.installed);
+	REQUIRE(r.path == MiintSkbArrowCacheBinary());
+	REQUIRE(FindSkbArrow() == r.path);
+}
+
+TEST_CASE("Install lets an interrupt through rather than reporting it", "[skb-arrow]") {
+	// A swallowed interrupt would leave Ctrl-C waiting on a hung binary.
+	FakeHosts fake;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
+	TempDir tmp;
+	InstallOptions o;
+	o.existing = tmp.path + "/silent-skb-arrow";
+	WriteExecutable(o.existing, "#!/bin/bash\nexec sleep 30\n");
+	o.cache_dir = tmp.path;
+	const auto interrupt = [] {
+		throw std::runtime_error("interrupted");
+	};
+	const auto start = std::chrono::steady_clock::now();
+	REQUIRE_THROWS_WITH(Install(o, interrupt), "interrupted");
+	REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(5));
+	REQUIRE(Entries(fake.sessions).empty());
+}
+
+// =============================================================================
 // Against the real host (skipped without one)
 // =============================================================================
 
@@ -850,4 +1118,14 @@ TEST_CASE("The real host's mantel matches the handoff's known answer exactly", "
 	REQUIRE(pvalue == 0.036);
 	REQUIRE(n == 4);
 	host.Shutdown();
+}
+
+TEST_CASE("The real host passes the probe at the release miint pins", "[skb-arrow][!mayfail]") {
+	// The pinned release must offer every capability miint calls, or
+	// install_skb_arrow() would install a host skb_arrow_available() rejects.
+	const std::string bin = FindSkbArrow();
+	if (bin.empty() || !Exists(bin)) {
+		SKIP("skb-arrow not found (SELECT install_skb_arrow(), or set MIINT_SKB_ARROW_PATH)");
+	}
+	REQUIRE("skb-arrow==" + Probe(bin, kNever) == kPinnedRelease);
 }
