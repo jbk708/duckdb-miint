@@ -122,11 +122,22 @@ data/myloasm/does_not_exist/0-cleaning_and_unitigs/read_coverages.txt.gz
 
 # Every read_myloasm_ macro builds its member paths from the directory, and the readers expand
 # globs, so 'run[1]' would quietly read the files of a directory named run1. A directory
-# name with a glob character is refused instead.
+# name with a glob character is refused instead. Each pattern below matches ecoli_sim, so
+# without the refusal each would read it.
 statement error
 SELECT * FROM read_myloasm_splits('data/myloasm/ecoli_si[m]');
 ----
 read_myloasm: the output directory 'data/myloasm/ecoli_si[m]' contains a glob character (*, ? or [)
+
+statement error
+SELECT * FROM read_myloasm_splits('data/myloasm/ecoli_si*');
+----
+read_myloasm: the output directory 'data/myloasm/ecoli_si*' contains a glob character (*, ? or [)
+
+statement error
+SELECT * FROM read_myloasm_splits('data/myloasm/ecoli_si?');
+----
+read_myloasm: the output directory 'data/myloasm/ecoli_si?' contains a glob character (*, ? or [)
 
 # Each case below replaces the constructed round-2 log with one defect.
 

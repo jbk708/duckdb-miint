@@ -205,14 +205,17 @@ are integers. Compare in the column's type and cast the literals instead:
 whose text round trip is exact, and keeps the cast for FLOAT, DOUBLE and DECIMAL ids, whose
 text form is not.
 
-**Validation in a table macro goes in one CASE in its WHERE clause.** Two engine behaviours
-decide this. The terms of `cond AND check` are not guaranteed to run in the order written, so
-a cast or `error()` that `cond` was meant to guard can run on rows `cond` excludes; a CASE
-tests its WHENs in order. And a check written in the SELECT list is pruned when the query
-does not select that column, while a WHERE clause always runs. So a macro raises its errors as
-`WHERE CASE WHEN <excluded> THEN FALSE WHEN <bad> THEN error(...) ELSE TRUE END`, with any cast
-placed after the WHEN that proves it safe. `read_gff`, `read_gfa_links` and the
-`read_myloasm_*` macros in `src/include/miint_macros.hpp` follow it.
+**Validation in a table macro goes in one CASE in a filtering clause.** Two engine behaviours
+decide this. The terms of `cond AND check` do not run in the order written: `filter_pushdown`
+rebuilds the conjunction, and over a table function has put `check` first, so a cast or
+`error()` that `cond` was meant to guard runs on rows `cond` excludes (`reorder_filter`, below,
+is not what moves it). A CASE tests its WHENs in order. And a check written in the SELECT list
+is pruned when the query does not select that column, while a WHERE, HAVING or QUALIFY clause
+runs on every row the query reads, whichever columns it selects. So a macro raises its errors
+as `WHERE CASE WHEN <excluded> THEN FALSE WHEN <bad> THEN error(...) ELSE TRUE END` (or the
+same CASE in HAVING or QUALIFY), with any cast placed after the WHEN that proves it safe. A
+query that stops early, such as one with `LIMIT`, does not read the rest of the file, so a
+malformed record after that point raises nothing.
 
 Passes worth knowing about for our workloads:
 - `late_materialization` — keeps rows narrow through the heavy operators, then joins wide
@@ -223,7 +226,8 @@ Passes worth knowing about for our workloads:
 - `window_self_join` — only for aggregate window functions whose frame is specified
   exclusively by `PARTITION BY`.
 - `reorder_filter` — cheap conjuncts first, with text expressions charged a +200 cost
-  penalty. Conjuncts that can throw are not reordered (that would hide a side effect).
+  penalty. Conjuncts that can throw are not reordered (that would hide a side effect), but
+  `filter_pushdown` may already have reordered them; see the validation paragraph above.
 - `in_clause` — a large `IN (…)` becomes a MARK join against a `COLUMN_DATA_SCAN`.
 
 ## Indexes

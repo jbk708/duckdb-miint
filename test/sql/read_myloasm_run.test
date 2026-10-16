@@ -26,7 +26,8 @@ data/myloasm/ecoli_sim/myloasm.log	2026-10-15 12:44:45.889	0.7.0	myloasm reads.f
 # --- Intent: k and c are the values the run used ---
 
 # myloasm logs its command line, not its settings, so k and c follow its argument rules
-# (src/cli.rs and src/main.rs at 0.7.0):
+# (src/cli.rs and src/main.rs at 0.7.0; the --nano-r9 and --c precedence was also checked by
+# comparing real 0.7.0 assemblies, e.g. --nano-r9 --c 13 against --nano-r9):
 #   c: -c/--compression N if given; else 7 under --nano-r9; else the hidden --c N; else 11.
 #   k: 17 under --nano-r9, whatever -k/--kmer-size says; else -k/--kmer-size N; else 21.
 # Its "HiFi mode enabled. Setting -c to N" line prints c before -c is applied, so it is not
@@ -43,9 +44,10 @@ CREATE TABLE commands AS SELECT * FROM (VALUES
   (5, 'myloasm r.fq -o out --nano-r9'),
   (6, 'myloasm r.fq -o out --nano-r9 -c 9 -k 19'),
   (7, 'myloasm r.fq -o out -k19 -c9'),
-  (8, 'myloasm r.fq -o out --kmer-size=17 -t 4')) t(i, command);
+  (8, 'myloasm r.fq -o out --kmer-size=17 -t 4'),
+  (9, 'myloasm r.fq -o out --nano-r9 --c 13')) t(i, command);
 
-foreach i 1 2 3 4 5 6 7 8
+foreach i 1 2 3 4 5 6 7 8 9
 
 statement ok
 COPY (SELECT printf('(2026-01-01 00:00:0%d.000) INFO [myloasm] COMMAND: %s', i, command) FROM commands WHERE i = ${i}
@@ -67,6 +69,7 @@ myloasm_5.log	2026-01-01 00:00:05	17	7	false
 myloasm_6.log	2026-01-01 00:00:06	17	9	false
 myloasm_7.log	2026-01-01 00:00:07	19	9	false
 myloasm_8.log	2026-01-01 00:00:08	17	11	false
+myloasm_9.log	2026-01-01 00:00:09	17	7	false
 
 # --- Errors ---
 

@@ -85,8 +85,11 @@ run_error_test "read_fastx: empty file via HTTP" "Empty" \
 run_test "read_fastx: empty pair with allow_empty via HTTP" "0" \
     "SELECT COUNT(*) FROM read_fastx('$BASE/fastq/empty.fq', sequence2='$BASE/fastq/empty.fq', allow_empty := true);"
 
-run_error_test "read_fastx: one empty mate with allow_empty via HTTP" "Empty" \
+run_error_test "read_fastx: empty first mate with allow_empty via HTTP" "Empty" \
     "SELECT * FROM read_fastx('$BASE/fastq/empty.fq', sequence2='$BASE/fastq/small_a_r2.fq', allow_empty := true);"
+
+run_error_test "read_fastx: empty second mate with allow_empty via HTTP" "Empty" \
+    "SELECT * FROM read_fastx('$BASE/fastq/small_a_r1.fq', sequence2='$BASE/fastq/empty.fq', allow_empty := true);"
 
 # --- read_alignments ---
 

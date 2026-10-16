@@ -437,8 +437,8 @@ const std::string READ_MYLOASM_MAPPINGS = // NOLINT
 //   u<N>ctg_len-<polished length>_circular-<yes|possibly|no>_depth-<d1>-<d2>-<d3>_duplicated-<flag>
 //   comment: mult=<k-mer multiplicity>[ secondary_to:|<full header>| aligned_frac:<%> ani:<%>]
 // d1-d3 are the GFA's DP, DP2 and DP3: the median, over the contig's reads, of each read's
-// minimum depth counting reads at >= 99%, 99.75% and 100% SNPmer identity. MEDIAN_DP1, despite
-// its name, is the median of the reads' median depths at the 100% tier.
+// minimum depth counting reads at >= 99%, 99.75% and 100% SNPmer identity. MEDIAN_DP1 reads as
+// the 99% tier (DP1), but is the median of the reads' median depths at the 100% tier.
 // myloasm writes all three FASTAs whether or not it has contigs for them, hence allow_empty.
 const std::string READ_MYLOASM_CONTIGS = // NOLINT
     "CREATE OR REPLACE MACRO read_myloasm_contigs(dir) AS TABLE "
@@ -506,9 +506,10 @@ const std::string READ_MYLOASM_CONTIGS = // NOLINT
 
 // read_myloasm_run(dir): one row per myloasm*.log (one per invocation; a resumed run has
 // several). myloasm logs its argv joined by spaces, not its settings, so k and c follow its
-// argument rules at 0.7.0 (cli.rs, main.rs): --nano-r9 sets k = 17 and c = 7; -c/--compression
-// then overrides c; otherwise c is the hidden --c (default 11) and k is -k/--kmer-size
-// (default 21). The "Setting -c to N" log line prints c before -c is applied.
+// argument rules at 0.7.0 (cli.rs, main.rs). Without --nano-r9, k is -k/--kmer-size (default
+// 21) and c is the hidden --c (default 11). --nano-r9 sets k = 17 and c = 7, overriding -k and
+// --c. -c/--compression then sets c in every case. The "Setting -c to N" log line prints c
+// before -c is applied.
 const std::string READ_MYLOASM_RUN = // NOLINT
     "CREATE OR REPLACE MACRO read_myloasm_run(dir) AS TABLE "
     "WITH l AS ( "

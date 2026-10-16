@@ -77,11 +77,12 @@ These are checked against myloasm 0.7.0's source.
 
 ## Regenerating
 
-Generated with **myloasm 0.7.0** (bioconda build `h7f49ad2_1`), as
-`myloasm reads.fa -o run1 --hifi -t 1`.
+Generated with **myloasm 0.7.0** (bioconda build `h7f49ad2_1`, linux-64), as
+`myloasm reads.fa -o run1 --hifi -t 1`. On other platforms, which have their own 0.7.0 builds,
+drop the build string from the command below.
 
 ```bash
-conda create -n myloasm-070 -c conda-forge -c bioconda myloasm=0.7.0=h7f49ad2_1
+conda create -n myloasm-070 -c conda-forge -c bioconda myloasm=0.7.0=h7f49ad2_1   # linux-64
 bash build.sh
 bash test/scripts/generate_myloasm_fixture.sh /path/to/fresh/work_dir
 git diff --stat data/myloasm/   # expect a diff only in myloasm.log's timestamps

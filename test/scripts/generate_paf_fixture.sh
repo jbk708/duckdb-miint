@@ -56,7 +56,6 @@ COPY (
 ) TO 'data/paf/k12_reads.fa' (FORMAT FASTA);
 SQL
 
-"$MINIMAP2" --version
 "$MINIMAP2" -x map-hifi -c --paf-no-hit -t 1 data/paf/k12_ref.fa data/paf/k12_reads.fa \
     > data/paf/k12_minimap2.paf
 gzip -n -c data/paf/k12_minimap2.paf > data/paf/k12_minimap2.paf.gz

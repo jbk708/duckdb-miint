@@ -28,6 +28,10 @@ enum class TagSyntax {
 	TypedOrUntyped,
 };
 
+// True when every character of `s` is printable ASCII or a space ([ !-~]*), the SAM
+// specification's class for a Z value.
+bool AllPrintableOrSpace(std::string_view s);
+
 // Parse fields[first..] into `out` (cleared first), in field order. Throws
 // std::runtime_error naming the offending field when a field is malformed or a key
 // appears twice; the caller adds the line number.

@@ -60,7 +60,8 @@ struct LineScanGlobalState : public GlobalTableFunctionState {
 struct LineFile {
 	std::string path;
 	miint::DuckDBSeqStreamHandle stream;
-	// Reads through `stream`, so it must be declared after it: members are built in order.
+	// Holds `stream`'s raw pointer, taken when it is built, so it must be declared after
+	// `stream` (members are built in order), and `stream` must not be reset or replaced.
 	miint::LineSplitter lines;
 
 	LineFile(FileSystem &fs, const std::string &path, const std::string &function_name);

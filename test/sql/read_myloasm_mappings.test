@@ -85,12 +85,12 @@ WHERE p[2] = 'ovh';
 ----
 20	20	20
 
-# Each chimera is strain A joined to the circle, at a junction known from its name (the read
-# kinds are in data/myloasm/README.md, "The reads"). A forward read starts with its strain A
-# part, so the junction is that part's length; a reverse read is the reverse complement, so it
-# starts with the circle part, and the junction is that part's length. Every alignment must
-# lie on the side of the junction that matches what it aligns to: strain A contigs (u491ctg,
-# u826ctg) or the circle (u840ctg, u982ctg).
+# Each chimera is strain A joined to the circle, at a junction known from its name (the name
+# fields are described in test/scripts/generate_myloasm_fixture.sh). A forward read starts
+# with its strain A part, so the junction is that part's length; a reverse read is the
+# reverse complement, so it starts with the circle part, and the junction is that part's
+# length. Every alignment must lie on the side of the junction that matches what it aligns
+# to: strain A contigs (u491ctg, u826ctg) or the circle (u840ctg, u982ctg).
 query II
 SELECT count(*),
        count(*) FILTER (CASE WHEN (contig_id IN ('u491ctg', 'u826ctg')) = (p[7] = 'f')

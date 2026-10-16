@@ -124,18 +124,35 @@ TEST_CASE("GfaParser rejects malformed records with a message naming the defect"
 	}
 	SECTION("a header naming any version other than GFA 1") {
 		// Only GFA 1's layout is known; any other declared version is refused, not guessed at.
-		CHECK_THROWS_WITH(parser.Parse("H\tVN:Z:3.0", record), ContainsSubstring("VN:Z:3.0"));
-		CHECK_THROWS_WITH(parser.Parse("H\tVN:Z:abc", record), ContainsSubstring("VN:Z:abc"));
+		// GFA 1 is "1" or "1.<minor>", so a version that merely starts with 1 is not it.
+		for (const char *version : {"3.0", "abc", "10.0", "1abc", ""}) {
+			CAPTURE(version);
+			CHECK_THROWS_WITH(parser.Parse(std::string("H\tVN:Z:") + version, record),
+			                  ContainsSubstring("only GFA 1 is supported") &&
+			                      ContainsSubstring(std::string("VN:Z:") + version + ")"));
+		}
 	}
 	SECTION("a record type that is not text") {
 		// Compressed bytes read as text, e.g. a gzipped graph without a .gz name. An unknown
 		// record type is otherwise kept as written, so this would come back as rows.
-		CHECK_THROWS_WITH(parser.Parse(std::string("\x1f\x8b\x08\x00\tx"), record), ContainsSubstring("not text"));
+		const char gzip_start[] = "\x1f\x8b\x08\x00\tx";
+		CHECK_THROWS_WITH(parser.Parse(std::string(gzip_start, sizeof(gzip_start) - 1), record),
+		                  ContainsSubstring("not text"));
+		// Each end of printable ASCII on its own: a control byte, and DEL.
+		CHECK_THROWS_WITH(parser.Parse("\x1f\tx", record), ContainsSubstring("not text"));
+		CHECK_THROWS_WITH(parser.Parse("\x7f\tx", record), ContainsSubstring("not text"));
 	}
 }
 
 TEST_CASE("GfaParser reads a GFA 1 header, or none", "[gfa]") {
 	CHECK(Parse("H\tVN:Z:1.0").record_type == "H");
 	CHECK(Parse("H\tVN:Z:1.2").record_type == "H");
+	CHECK(Parse("H\tVN:Z:1").record_type == "H");
 	CHECK(Parse("H\tTS:i:100").record_type == "H");
+}
+
+TEST_CASE("GfaParser keeps an unknown record type made of any printable text", "[gfa]") {
+	// Space and '~' are the ends of printable ASCII; the not-text check must not refuse them.
+	CHECK(Parse(" \tx").record_type == " ");
+	CHECK(Parse("~\tx").record_type == "~");
 }

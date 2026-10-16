@@ -27,6 +27,8 @@ bool IsPrintableOrSpace(char c) {
 	return c >= ' ' && c <= '~';
 }
 
+} // namespace
+
 bool AllPrintableOrSpace(std::string_view s) {
 	for (char c : s) {
 		if (!IsPrintableOrSpace(c)) {
@@ -35,6 +37,8 @@ bool AllPrintableOrSpace(std::string_view s) {
 	}
 	return true;
 }
+
+namespace {
 
 // [-+]?[0-9]+
 bool IsInteger(std::string_view s) {

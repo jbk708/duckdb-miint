@@ -331,6 +331,7 @@ SELECT * FROM read_paf('alignments.paf');
 - an interval that runs backwards or past its sequence's length
 - a strand other than `+` or `-`, except `*` on an unmapped record
 - `*` as only one of strand and target name, or an unmapped record with a non-zero target start or end
+- a target end too large to move to the 1-based axis
 - a malformed tag, or a tag that appears twice on one line
 
 **Examples:**
@@ -372,7 +373,7 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 
 **Output schema:**
 - `line_number` (BIGINT): 1-based line of the record in its file. Comment lines are counted, so this matches what an editor shows; it is also the record order, which matters for records such as myloasm's read placements
-- `record_type` (VARCHAR): The first field: `H`, `S`, `L`, `C`, `P`, `W`, `J`, or any other value as written
+- `record_type` (VARCHAR): The first field: `H`, `S`, `L`, `C`, `P`, `W`, `J`, or any other printable text as written
 - `fields` (VARCHAR[]): The record type's mandatory positional fields, verbatim (table below). For a record type GFA 1 does not define, every field after the type
 - `tags` (MAP(VARCHAR, VARCHAR), nullable): Optional `TAG:TYPE:VALUE` fields as `tag → value`. Empty for a known record with no tags; NULL for an unknown record type, whose fields are never split into positional fields and tags
 - `filepath` (VARCHAR, optional): File path when `include_filepath=true`
@@ -391,12 +392,12 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 - Lines starting with `#` are comments and produce no row.
 - `fields` are the file's own text. No coordinate conversion is applied: a `W` walk's start and end, and a `C` containment's position, stay 0-based as GFA writes them. See [Coordinate conventions](#coordinate-conventions).
 - Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped, so cast values when you need numbers: `tags['LN']::BIGINT`. A tag name may be any identifier (letters, digits and `_`, not starting with a digit), not only the specification's two characters: assemblers write longer ones, such as myloasm's `MEDIAN_DP1:f:33.0`.
-- GFA 2 (`H VN:Z:2.0`) is rejected rather than read as GFA 1, whose record types it redefines.
+- A header that declares a version other than GFA 1 (`VN:Z:1` or `VN:Z:1.x`) is rejected rather than read as GFA 1. GFA 2 (`VN:Z:2.0`) redefines the record types.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.
 - An empty file returns no rows. stdin is not supported.
 
-**Malformed records fail the scan.** The error names the file, the line and the defect: a blank line, an empty record type, a known record type with fewer positional fields than it needs, a malformed or untyped tag, or a tag that appears twice on one line.
+**Malformed records fail the scan.** The error names the file, the line and the defect: a blank line, an empty record type, a record type that is not printable text (as when a gzipped file is named without `.gz`), a known record type with fewer positional fields than it needs, a malformed or untyped tag, or a tag that appears twice on one line.
 
 #### `read_gfa_segments(filename)`
 
@@ -481,7 +482,7 @@ Every contig in the GFA, with its FASTA header's values. myloasm writes the GFA 
 - `unpolished_length` (BIGINT): The GFA's `LN`, the length every coordinate in these tables refers to
 - `circularity` (VARCHAR, nullable): `yes`, `possibly` or `no`
 - `depth_id99`, `depth_id99_75`, `depth_id100` (DOUBLE): The contig's depth at three SNPmer-identity tiers: the median, over its reads, of each read's minimum depth counting only reads at ≥ 99%, ≥ 99.75% and 100% identity to it. These are the GFA's `DP`, `DP2` and `DP3` and the header's `depth-<d1>-<d2>-<d3>`.
-- `median_depth_id100` (DOUBLE): The median of the reads' median depths at the 100% tier: the GFA's `MEDIAN_DP1`, despite its name
+- `median_depth_id100` (DOUBLE): The median of the reads' median depths at the 100% tier: the GFA's `MEDIAN_DP1`, although the GFA's read placements use `DP1` for the 99% tier
 - `kmer_multiplicity` (DOUBLE, nullable) and `kmer_multiplicity_flag` (VARCHAR, nullable): The header's `mult=` and `duplicated-<no|possibly|yes>`: how repetitive the contig's own k-mers are (below 1.10 is `no`, below 1.50 `possibly`). **This is not the dereplication status**: a contig in `duplicated_contigs.fa` can say `duplicated-no`.
 - `secondary_to_contig_id` (VARCHAR, nullable): For an alternate or duplicated contig, the contig myloasm compared it to and kept in its place. That contig can itself be an alternate.
 - `secondary_aligned_percent`, `secondary_ani_percent` (DOUBLE, nullable): The aligned fraction and ANI of that comparison, in percent
@@ -539,7 +540,7 @@ One row per `myloasm*.log`, one per invocation; a resumed run has several.
 - `log_file` (VARCHAR): The log's path
 - `started_at` (TIMESTAMP): When the invocation began, in the log's local time
 - `myloasm_version` (VARCHAR), `command` (VARCHAR): myloasm's version and command line
-- `kmer_size` (INTEGER), `compression` (INTEGER): The run's k-mer size k, and its compression ratio c: myloasm keeps 1 in c k-mers as minimizers. myloasm logs its command line, not these, so they are derived by its own rules, checked against real runs: `--nano-r9` sets k = 17, overriding `-k`/`--kmer-size`, and c = 7; `-c`/`--compression` then sets c; otherwise c is the hidden `--c` and k is `-k`/`--kmer-size`, defaulting to 11 and 21. The log's "Setting -c to N" line prints c before `-c` is applied. Arguments containing spaces cannot be told apart in the logged command line.
+- `kmer_size` (INTEGER), `compression` (INTEGER): The run's k-mer size k, and its compression ratio c: myloasm keeps 1 in c k-mers as minimizers. myloasm logs its command line, not these, so they are derived by its own rules, checked against real runs. Without `--nano-r9`, k is `-k`/`--kmer-size` (default 21) and c is the hidden `--c` (default 11). `--nano-r9` sets k = 17 and c = 7, overriding `-k` and `--c`. `-c`/`--compression` then sets c in every case. The log's "Setting -c to N" line prints c before `-c` is applied. Arguments containing spaces cannot be told apart in the logged command line.
 - `hifi` (BOOLEAN): Whether `--hifi` was given
 
 **Examples:**
@@ -1239,9 +1240,9 @@ miint reports positions on two axes. A reader converts the file's own convention
 | Axis | Columns | Convention | Length |
 |---|---|---|---|
 | **Reference**: a reference, contig or annotated sequence | `position`, `stop_position` | 1-based half-open `[position, stop_position)` | `stop_position - position` |
-| **Read**: offsets into a read, in the orientation it was sequenced | `query_start`, `query_stop`; `cigar_query_intervals`' `start`, `stop` | 0-based half-open `[query_start, query_stop)` | `query_stop - query_start` |
+| **Read**: offsets into a read, in the orientation it was sequenced | `query_start`, `query_stop` | 0-based half-open `[query_start, query_stop)` | `query_stop - query_start` |
 
-Neither length takes a `+ 1`. `position`/`stop_position` and `query_start`/`query_stop` always name their axis. A bare `start`/`stop` does not: `alignment_slice` and `interval_bins` take reference-axis `start`/`stop`, so each function's documentation says which axis its parameters use.
+Neither length takes a `+ 1`. `position`/`stop_position` and `query_start`/`query_stop` always name their axis. A bare `start`/`stop` does not, so check the function's documentation: `cigar_query_intervals` and `extract_linked_amplicon` return read-axis `start`/`stop`, `alignment_slice` and `interval_bins` take reference-axis ones, and `compress_intervals` takes either.
 
 #### Reference axis
 

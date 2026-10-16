@@ -67,7 +67,7 @@ TEST_CASE("LineSplitter strips CRLF line endings, and only those", "[line_splitt
 	CHECK(AllLines("a\rb\n", 1024) == std::vector<Line> {{"a\rb", 1}});
 	// A read boundary between '\r' and '\n' must not leave the '\r' on the line.
 	CHECK(AllLines("ab\r\ncd\n", 3) == std::vector<Line> {{"ab", 1}, {"cd", 2}});
-	// A CRLF file whose last line lost its '\n' still ends that line with '\r'.
+	// A CRLF file whose last line lost its '\n' still has a '\r' there, which is stripped too.
 	CHECK(AllLines("a\r\nb\r", 1024) == std::vector<Line> {{"a", 1}, {"b", 2}});
 }
 

@@ -40,17 +40,6 @@ std::string RecordName(std::string_view type) {
 	return std::string(vowel_sound ? "an " : "a ") + std::string(type) + " record";
 }
 
-// Printable ASCII. An unknown record type is kept as written, so this is what stops compressed
-// bytes read as text (a gzipped graph whose name does not end in .gz) from becoming rows.
-bool IsText(std::string_view s) {
-	for (unsigned char c : s) {
-		if (c < 0x20 || c > 0x7e) {
-			return false;
-		}
-	}
-	return true;
-}
-
 } // namespace
 
 bool GfaParser::Parse(std::string_view line, GfaRecord &record) {
@@ -64,7 +53,9 @@ bool GfaParser::Parse(std::string_view line, GfaRecord &record) {
 	if (fields_[0].empty()) {
 		throw std::runtime_error("record type is empty");
 	}
-	if (!IsText(fields_[0])) {
+	// An unknown record type is kept as written, so this is what stops compressed bytes read as
+	// text (a gzipped graph whose name does not end in .gz) from becoming rows.
+	if (!AllPrintableOrSpace(fields_[0])) {
 		throw std::runtime_error(
 		    "record type is not text; is the file compressed under a name that does not end in .gz?");
 	}
@@ -92,10 +83,11 @@ bool GfaParser::Parse(std::string_view line, GfaRecord &record) {
 	ParseSamStyleTags(fields_, 1 + mandatory, TagSyntax::Typed, record.tags);
 	record.has_tags = true;
 
-	// Only GFA 1's record layout is known, so a header naming any other version is refused.
+	// Only GFA 1's record layout is known, so a header naming any other version, anything but
+	// "1" or "1.<minor>", is refused.
 	if (record.record_type == "H") {
 		for (const auto &tag : record.tags) {
-			if (tag.key == "VN" && (tag.value.empty() || tag.value[0] != '1')) {
+			if (tag.key == "VN" && tag.value != "1" && tag.value.rfind("1.", 0) != 0) {
 				const bool gfa2 = !tag.value.empty() && tag.value[0] == '2';
 				throw std::runtime_error(std::string(gfa2 ? "GFA 2 is not supported" : "only GFA 1 is supported") +
 				                         " (the header declares VN:Z:" + tag.value + ")");
