@@ -155,7 +155,16 @@ if $VERIFY; then
         NATIVE_EH=$(sed -n 's/^MIINT_WASM_NATIVE_EH:INTERNAL=//p' "$CACHE" 2>/dev/null || true)
         case "$NATIVE_EH" in
             ON)  NATIVE_EH=true ;;
-            OFF) NATIVE_EH=false ;;
+            OFF)
+                NATIVE_EH=false
+                if [ "$t" = "wasm_eh" ]; then
+                    echo "  FAIL: $CACHE records MIINT_WASM_NATIVE_EH=OFF, but wasm_eh must be built"
+                    echo "  with wasm-native exceptions."
+                    VERIFY_OK=false
+                    echo ""
+                    continue
+                fi
+                ;;
             *)
                 echo "  FAIL: $CACHE does not record MIINT_WASM_NATIVE_EH, so the exception"
                 echo "  check cannot run. Rebuild with this script to reconfigure."

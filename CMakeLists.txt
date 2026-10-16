@@ -1144,6 +1144,14 @@ if(EMSCRIPTEN)
     else()
         set(MIINT_WASM_NATIVE_EH OFF CACHE INTERNAL "Rust glue built with wasm-native exceptions")
     endif()
+    # wasm_eh is the platform we ship, and its glue must not fall back to JS
+    # exceptions because a flag went missing.
+    if(DUCKDB_EXPLICIT_PLATFORM STREQUAL "wasm_eh" AND NOT MIINT_WASM_NATIVE_EH)
+        message(FATAL_ERROR
+            "DUCKDB_EXPLICIT_PLATFORM is wasm_eh, but CMAKE_CXX_FLAGS (\"${CMAKE_CXX_FLAGS}\") lacks "
+            "-fwasm-exceptions, so the Rust glue would be built with JS exceptions. extension-ci-tools "
+            "sets the flag in WASM_CXX_EH_FLAGS; configure wasm_eh through its makefile (make wasm_eh).")
+    endif()
     find_program(RUSTUP rustup)
     set(GLUE_CARGO_TARGET_FLAG "--target" "wasm32-unknown-emscripten")
     set(GLUE_LIB_SUBDIR "wasm32-unknown-emscripten/release")
