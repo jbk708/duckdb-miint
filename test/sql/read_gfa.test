@@ -150,6 +150,14 @@ FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa') WHERE record_type
 
 # --- Inputs ---
 
+# The optimizer sizes a scan from its row estimate. With none, DuckDB assumes one row and can
+# put a large graph on the build side of a hash join instead of streaming it, so the estimate
+# grows with the file.
+query II
+EXPLAIN SELECT * FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa');
+----
+physical_plan	<!REGEX>:.*~1 row.*
+
 statement ok
 COPY (SELECT line FROM read_csv('data/gfa/spec_example.gfa', columns = {'line': 'VARCHAR'}, header = false,
                                 delim = E'\x01', quote = '', escape = '', auto_detect = false))
@@ -218,3 +226,16 @@ statement error
 SELECT count(*) FROM read_gfa('__TEST_DIR__/many_damaged.gfa');
 ----
 many_damaged.gfa: line 2500: an S record needs 2 fields after the record type, found 1
+
+# Segments that carry megabases of sequence end a chunk on bytes, long before 2048 records
+# (src/include/line_file_scan.hpp). 20 one-megabase segments cross that limit; every record and
+# line number must survive the chunk ending mid-file.
+statement ok
+COPY (SELECT printf(E'S\ts%d\t%s', i, repeat(substr('ACGT', i % 4 + 1, 1), 1000000)) FROM range(20) t(i) ORDER BY i)
+TO '__TEST_DIR__/long_segments.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query IIII
+SELECT count(*), sum(line_number), sum(length(sequence)), count(DISTINCT left(sequence, 1))
+FROM (SELECT line_number, fields[2] AS sequence FROM read_gfa('__TEST_DIR__/long_segments.gfa'));
+----
+20	210	20000000	4

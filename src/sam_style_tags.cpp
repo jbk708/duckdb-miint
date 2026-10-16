@@ -199,7 +199,6 @@ void ParseSamStyleTags(const std::vector<std::string_view> &fields, size_t first
 		const bool typed = named && colon + 2 < field.size() &&
 		                   std::string_view("AifZJHB").find(field[colon + 1]) != std::string_view::npos &&
 		                   field[colon + 2] == ':';
-		const std::string_view key = named ? field.substr(0, colon) : std::string_view();
 		std::string_view value;
 		if (typed) {
 			value = field.substr(colon + 3);
@@ -214,6 +213,8 @@ void ParseSamStyleTags(const std::vector<std::string_view> &fields, size_t first
 			}
 			value = field.substr(colon + 1);
 		}
+		// Every unnamed field has thrown above.
+		const std::string_view key = field.substr(0, colon);
 		for (const auto &existing : out) {
 			if (existing.key == key) {
 				throw std::runtime_error("tag " + Quoted(key) + " appears more than once");

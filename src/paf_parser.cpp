@@ -18,7 +18,7 @@ int64_t ParseCount(std::string_view field, const char *what) {
 	int64_t value = 0;
 	const char *end = field.data() + field.size();
 	auto [ptr, ec] = std::from_chars(field.data(), end, value);
-	if (field.empty() || ec != std::errc {} || ptr != end || value < 0) {
+	if (ec != std::errc {} || ptr != end || value < 0) {
 		throw std::runtime_error(std::string(what) + " is not a non-negative integer: '" + std::string(field) + "'");
 	}
 	return value;

@@ -382,7 +382,7 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 **Behavior:**
 - Lines starting with `#` are comments and produce no row.
 - `fields` are the file's own text. No coordinate conversion is applied: a `W` walk's start and end, and a `C` containment's position, stay 0-based as GFA writes them. See [Coordinate conventions](#coordinate-conventions).
-- Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped, so cast values when you need numbers: `tags['LN']::BIGINT`. Tag names longer than the specification's two characters are accepted, because myloasm writes `DP2:f:30.0` and `MEDIAN_DP1:f:33.0`.
+- Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped, so cast values when you need numbers: `tags['LN']::BIGINT`. A tag name may be any identifier (letters, digits and `_`, not starting with a digit), not only the specification's two characters: assemblers write longer ones, such as myloasm's `MEDIAN_DP1:f:33.0`.
 - GFA 2 (`H VN:Z:2.0`) is rejected rather than read as GFA 1, whose record types it redefines.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.

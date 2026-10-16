@@ -225,6 +225,14 @@ WHERE sam.reference = p.reference AND sam.position = p.position AND sam.stop_pos
 
 # --- Inputs ---
 
+# The optimizer sizes a scan from its row estimate. With none, DuckDB assumes one row and can
+# put a multi-gigabyte PAF on the build side of a hash join instead of streaming it, so the
+# estimate grows with the file.
+query II
+EXPLAIN SELECT * FROM read_paf('data/paf/k12_minimap2.paf');
+----
+physical_plan	<!REGEX>:.*~1 row.*
+
 # gzip is read transparently and changes nothing.
 query I
 SELECT count(*) FROM (

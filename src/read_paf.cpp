@@ -32,7 +32,6 @@ void SetInt64(Vector &vec, idx_t row, int64_t value) {
 
 unique_ptr<FunctionData> ReadPafTableFunction::Bind(ClientContext &context, TableFunctionBindInput &input,
                                                     vector<LogicalType> &return_types, vector<std::string> &names) {
-	auto data = BindLineScan(context, input, "read_paf");
 	names = {"read_id",  "query_length",  "query_start",     "query_stop",   "strand", "reference", "reference_length",
 	         "position", "stop_position", "residue_matches", "block_length", "mapq",   "tags"};
 	return_types = {LogicalType::VARCHAR,
@@ -48,11 +47,7 @@ unique_ptr<FunctionData> ReadPafTableFunction::Bind(ClientContext &context, Tabl
 	                LogicalType::BIGINT,
 	                LogicalType::UTINYINT,
 	                LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)};
-	if (data->include_filepath) {
-		names.emplace_back("filepath");
-		return_types.emplace_back(LogicalType::VARCHAR);
-	}
-	return std::move(data);
+	return BindLineScan(context, input, names, return_types);
 }
 
 unique_ptr<LocalTableFunctionState> ReadPafTableFunction::InitLocal(ExecutionContext &context,
@@ -65,7 +60,7 @@ void ReadPafTableFunction::Execute(ClientContext &context, TableFunctionInput &d
 	auto &local = data_p.local_state->Cast<LocalState>();
 	const auto &r = local.record;
 	ScanLines(
-	    context, data_p, output, "read_paf",
+	    context, data_p, output,
 	    [&](std::string_view line) {
 		    local.parser.Parse(line, local.record);
 		    return true;
@@ -88,9 +83,7 @@ void ReadPafTableFunction::Execute(ClientContext &context, TableFunctionInput &d
 }
 
 void ReadPafTableFunction::Register(ExtensionLoader &loader) {
-	TableFunction tf("read_paf", {LogicalType::ANY}, Execute, Bind, InitLineScanGlobal, InitLocal);
-	tf.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
-	loader.RegisterFunction(tf);
+	loader.RegisterFunction(MakeLineScanFunction("read_paf", Execute, Bind, InitLocal));
 }
 
 } // namespace duckdb

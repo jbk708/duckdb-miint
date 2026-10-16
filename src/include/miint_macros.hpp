@@ -173,22 +173,50 @@ const std::string MIINT_MYLOASM_PATH = // NOLINT
     "     ELSE rtrim(dir, '/') || '/' || member END; ";
 
 // A myloasm read name is the read's first header word plus zero or more +split<i> suffixes.
+// Most reads carry none, so each helper skips its regex when the name has no '+split': on a
+// mappings PAF that is most of the macro's time.
 const std::string MIINT_MYLOASM_READ_ID = // NOLINT
-    "CREATE OR REPLACE MACRO _miint_myloasm_read_id(name) AS regexp_replace(name, '([+]split[0-9]+)+$', ''); ";
+    "CREATE OR REPLACE MACRO _miint_myloasm_read_id(name) AS "
+    "CASE WHEN contains(name, '+split') THEN regexp_replace(name, '([+]split[0-9]+)+$', '') ELSE name END; ";
 
 const std::string MIINT_MYLOASM_SPLIT_SUFFIX = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_split_suffix(name) AS "
-    "nullif(regexp_extract(name, '([+]split[0-9]+)+$', 0), ''); ";
+    "CASE WHEN contains(name, '+split') THEN nullif(regexp_extract(name, '([+]split[0-9]+)+$', 0), '') END; ";
 
 const std::string MIINT_MYLOASM_SPLIT_DEPTH = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_split_depth(name) AS "
-    "len(regexp_extract_all(coalesce(_miint_myloasm_split_suffix(name), ''), '[+]split')); ";
+    "coalesce(len(regexp_extract_all(_miint_myloasm_split_suffix(name), '[+]split')), 0); ";
 
 // The piece whose start in the read this piece shares. A +split0 piece starts where its
 // parent does, so trailing +split0s are dropped: R+split1+split0 starts with R+split1, and
 // R+split0 with R itself (offset 0). Any other piece is its own.
 const std::string MIINT_MYLOASM_OFFSET_PIECE = // NOLINT
-    "CREATE OR REPLACE MACRO _miint_myloasm_offset_piece(name) AS regexp_replace(name, '([+]split0)+$', ''); ";
+    "CREATE OR REPLACE MACRO _miint_myloasm_offset_piece(name) AS "
+    "CASE WHEN contains(name, '+split') THEN regexp_replace(name, '([+]split0)+$', '') ELSE name END; ";
+
+// A piece's interval [start, stop) moved onto the original read: myloasm writes a '-'
+// interval on the piece's reverse complement, so it is mirrored back first, then shifted by
+// where the piece starts in the read.
+const std::string MIINT_MYLOASM_QUERY_START = // NOLINT
+    "CREATE OR REPLACE MACRO _miint_myloasm_query_start(piece_offset, strand, piece_length, start, stop) AS "
+    "piece_offset + CASE WHEN strand = '+' THEN start ELSE piece_length - stop END; ";
+
+const std::string MIINT_MYLOASM_QUERY_STOP = // NOLINT
+    "CREATE OR REPLACE MACRO _miint_myloasm_query_stop(piece_offset, strand, piece_length, start, stop) AS "
+    "piece_offset + CASE WHEN strand = '+' THEN stop ELSE piece_length - start END; ";
+
+// TRUE for a piece name the breakpoint logs account for, given its looked-up `piece_offset`;
+// otherwise an error naming it after `context`. For the ELSE arm of a WHERE-clause CASE, so it
+// runs only on rows that passed the caller's own checks.
+const std::string MIINT_MYLOASM_CHECK_PIECE = // NOLINT
+    "CREATE OR REPLACE MACRO _miint_myloasm_check_piece(name, piece_offset, context) AS "
+    "CASE "
+    "  WHEN _miint_myloasm_split_depth(name) > 2 "
+    "  THEN error(context || printf('read ''%s'' has more than two +split levels', name)) "
+    "  WHEN _miint_myloasm_offset_piece(name) <> _miint_myloasm_read_id(name) AND piece_offset IS NULL "
+    "  THEN error(context || printf('piece ''%s'' has no breakpoint that starts it', name)) "
+    "  ELSE TRUE "
+    "END; ";
 
 // A text file's lines, verbatim: \x01 never occurs in these files, and no quoting applies.
 const std::string MIINT_MYLOASM_LINES = // NOLINT
@@ -284,60 +312,61 @@ const std::string MIINT_MYLOASM_PIECE_OFFSETS = // NOLINT
 // which has no next read, so they are NULL there.
 const std::string READ_MYLOASM_LAYOUT = // NOLINT
     "CREATE OR REPLACE MACRO read_myloasm_layout(dir) AS TABLE "
-    "WITH a AS ( "
-    "  SELECT line_number, fields, "
+    "WITH placements AS ( "
+    "  SELECT line_number, "
+    "         len(fields) AS field_count, "
+    "         fields[1] AS slice_field, "
     "         regexp_extract(fields[1], '^(u[0-9]+ctg),([0-9]+)-([0-9]+)$', ['contig_id', 'start', 'stop']) AS slice, "
+    "         fields[3] AS contig_offset, "
+    "         fields[4] AS piece_name, "
+    "         fields[5] AS strand, "
+    "         fields[6] AS slice_length, "
     "         regexp_extract(fields[7], "
     "                        '^DP1:([0-9.]+),DP2:([0-9.]+),DP3:([0-9.]+),READ_LEN:([0-9]+),OL_LEN_NEXT:([0-9]+),"
     "SNP_SHARE_NEXT:([0-9]+),SNP_DIFF_NEXT:([0-9]+)$', "
     "                        ['dp1', 'dp2', 'dp3', 'read_len', 'ol', 'share', 'diff']) AS stats "
     "  FROM read_gfa(_miint_myloasm_path(dir, 'final_contig_graph.gfa')) "
     "  WHERE record_type = 'a' "
+    "), a AS ( "
+    "  SELECT *, row_number() OVER w AS layout_order, lead(line_number) OVER w IS NULL AS is_last "
+    "  FROM placements "
+    "  WINDOW w AS (PARTITION BY slice.contig_id ORDER BY line_number) "
     ") "
     "SELECT a.slice.contig_id AS contig_id, "
-    "       row_number() OVER w AS layout_order, "
-    "       a.fields[3]::BIGINT + 1 AS position, "
-    "       a.fields[3]::BIGINT + 1 + a.fields[6]::BIGINT AS stop_position, "
-    "       _miint_myloasm_read_id(a.fields[4]) AS read_id, "
-    "       _miint_myloasm_split_suffix(a.fields[4]) AS split_suffix, "
+    "       a.layout_order, "
+    "       a.contig_offset::BIGINT + 1 AS position, "
+    "       a.contig_offset::BIGINT + 1 + a.slice_length::BIGINT AS stop_position, "
+    "       _miint_myloasm_read_id(a.piece_name) AS read_id, "
+    "       _miint_myloasm_split_suffix(a.piece_name) AS split_suffix, "
     "       coalesce(o.piece_offset, 0) AS piece_offset, "
     "       a.stats.read_len::BIGINT AS piece_length, "
-    "       coalesce(o.piece_offset, 0) "
-    "         + CASE WHEN a.fields[5] = '+' THEN a.slice.start::BIGINT "
-    "                ELSE a.stats.read_len::BIGINT - a.slice.stop::BIGINT END AS query_start, "
-    "       coalesce(o.piece_offset, 0) "
-    "         + CASE WHEN a.fields[5] = '+' THEN a.slice.stop::BIGINT "
-    "                ELSE a.stats.read_len::BIGINT - a.slice.start::BIGINT END AS query_stop, "
-    "       a.fields[5] AS strand, "
+    "       _miint_myloasm_query_start(coalesce(o.piece_offset, 0), a.strand, a.stats.read_len::BIGINT, "
+    "                                  a.slice.start::BIGINT, a.slice.stop::BIGINT) AS query_start, "
+    "       _miint_myloasm_query_stop(coalesce(o.piece_offset, 0), a.strand, a.stats.read_len::BIGINT, "
+    "                                 a.slice.start::BIGINT, a.slice.stop::BIGINT) AS query_stop, "
+    "       a.strand, "
     "       a.stats.dp1::DOUBLE AS read_depth_id99, "
     "       a.stats.dp2::DOUBLE AS read_depth_id99_75, "
     "       a.stats.dp3::DOUBLE AS read_depth_id100, "
-    "       CASE WHEN lead(a.line_number) OVER w IS NOT NULL THEN a.stats.ol::BIGINT END AS next_overlap_length, "
-    "       CASE WHEN lead(a.line_number) OVER w IS NOT NULL THEN a.stats.share::BIGINT END AS next_shared_snpmers, "
-    "       CASE WHEN lead(a.line_number) OVER w IS NOT NULL THEN a.stats.diff::BIGINT END AS next_differing_snpmers "
+    "       CASE WHEN NOT a.is_last THEN a.stats.ol::BIGINT END AS next_overlap_length, "
+    "       CASE WHEN NOT a.is_last THEN a.stats.share::BIGINT END AS next_shared_snpmers, "
+    "       CASE WHEN NOT a.is_last THEN a.stats.diff::BIGINT END AS next_differing_snpmers "
     "FROM a "
-    "LEFT JOIN _miint_myloasm_piece_offsets(dir) o ON o.piece = _miint_myloasm_offset_piece(a.fields[4]) "
+    "LEFT JOIN _miint_myloasm_piece_offsets(dir) o ON o.piece = _miint_myloasm_offset_piece(a.piece_name) "
     "WHERE CASE "
-    "        WHEN len(a.fields) <> 7 OR a.slice.contig_id = '' OR a.stats.dp1 = '' "
-    "          OR NOT regexp_full_match(a.fields[3], '[0-9]+') OR NOT regexp_full_match(a.fields[6], '[0-9]+') "
-    "          OR a.fields[5] NOT IN ('+', '-') "
+    "        WHEN a.field_count <> 7 OR a.slice.contig_id = '' OR a.stats.dp1 = '' "
+    "          OR NOT regexp_full_match(a.contig_offset, '[0-9]+') OR NOT regexp_full_match(a.slice_length, '[0-9]+') "
+    "          OR a.strand NOT IN ('+', '-') "
     "        THEN error(printf('read_myloasm_layout: final_contig_graph.gfa line %d: "
     "not a myloasm read-placement (a) line', a.line_number)) "
-    "        WHEN a.slice.stop::BIGINT - a.slice.start::BIGINT <> a.fields[6]::BIGINT "
+    "        WHEN a.slice.stop::BIGINT - a.slice.start::BIGINT <> a.slice_length::BIGINT "
     "          OR a.slice.stop::BIGINT > a.stats.read_len::BIGINT "
     "        THEN error(printf('read_myloasm_layout: final_contig_graph.gfa line %d: "
     "read slice %s does not fit a %s bp piece with a %s bp slice', "
-    "                          a.line_number, split_part(a.fields[1], ',', 2), a.stats.read_len, a.fields[6])) "
-    "        WHEN _miint_myloasm_split_depth(a.fields[4]) > 2 "
-    "        THEN error(printf('read_myloasm_layout: final_contig_graph.gfa line %d: "
-    "read ''%s'' has more than two +split levels', a.line_number, a.fields[4])) "
-    "        WHEN _miint_myloasm_offset_piece(a.fields[4]) <> _miint_myloasm_read_id(a.fields[4]) "
-    "         AND o.piece_offset IS NULL "
-    "        THEN error(printf('read_myloasm_layout: final_contig_graph.gfa line %d: "
-    "piece ''%s'' has no breakpoint that starts it', a.line_number, a.fields[4])) "
-    "        ELSE TRUE "
-    "      END "
-    "WINDOW w AS (PARTITION BY a.slice.contig_id ORDER BY a.line_number); ";
+    "                          a.line_number, split_part(a.slice_field, ',', 2), a.stats.read_len, a.slice_length)) "
+    "        ELSE _miint_myloasm_check_piece(a.piece_name, o.piece_offset, "
+    "                 printf('read_myloasm_layout: final_contig_graph.gfa line %d: ', a.line_number)) "
+    "      END; ";
 
 // read_myloasm_links(dir): the GFA's L lines with myloasm's tags (described on the GFA's
 // second line). r1/r2 are the reads at the two contig ends that meet; fs is omitted when the
@@ -379,10 +408,10 @@ const std::string READ_MYLOASM_MAPPINGS = // NOLINT
     "       _miint_myloasm_split_suffix(p.name) AS split_suffix, "
     "       coalesce(o.piece_offset, 0) AS piece_offset, "
     "       p.query_length AS piece_length, "
-    "       coalesce(o.piece_offset, 0) + CASE WHEN p.strand = '+' THEN p.query_start "
-    "                                          ELSE p.query_length - p.query_stop END AS query_start, "
-    "       coalesce(o.piece_offset, 0) + CASE WHEN p.strand = '+' THEN p.query_stop "
-    "                                          ELSE p.query_length - p.query_start END AS query_stop, "
+    "       _miint_myloasm_query_start(coalesce(o.piece_offset, 0), p.strand, p.query_length, "
+    "                                  p.query_start, p.query_stop) AS query_start, "
+    "       _miint_myloasm_query_stop(coalesce(o.piece_offset, 0), p.strand, p.query_length, "
+    "                                 p.query_start, p.query_stop) AS query_stop, "
     "       p.strand, "
     "       p.reference AS contig_id, "
     "       p.position, "
@@ -401,11 +430,7 @@ const std::string READ_MYLOASM_MAPPINGS = // NOLINT
     "          OR TRY_CAST(p.tags['diff_snp'] AS BIGINT) IS NULL "
     "        THEN error(printf('read_myloasm_mappings: record for ''%s'' is not a myloasm mapping "
     "(r<index>-<read>, mapped to a contig, with shared_mini, shared_snp and diff_snp)', p.read_id)) "
-    "        WHEN _miint_myloasm_split_depth(p.name) > 2 "
-    "        THEN error(printf('read_myloasm_mappings: read ''%s'' has more than two +split levels', p.name)) "
-    "        WHEN _miint_myloasm_offset_piece(p.name) <> _miint_myloasm_read_id(p.name) AND o.piece_offset IS NULL "
-    "        THEN error(printf('read_myloasm_mappings: piece ''%s'' has no breakpoint that starts it', p.name)) "
-    "        ELSE TRUE "
+    "        ELSE _miint_myloasm_check_piece(p.name, o.piece_offset, 'read_myloasm_mappings: ') "
     "      END; ";
 
 // read_myloasm_contigs(dir): every contig in the GFA, joined to its FASTA header. The status
@@ -2697,6 +2722,9 @@ public:
 		register_macro(MIINT_MYLOASM_SPLIT_SUFFIX, "_miint_myloasm_split_suffix");
 		register_macro(MIINT_MYLOASM_SPLIT_DEPTH, "_miint_myloasm_split_depth");
 		register_macro(MIINT_MYLOASM_OFFSET_PIECE, "_miint_myloasm_offset_piece");
+		register_macro(MIINT_MYLOASM_QUERY_START, "_miint_myloasm_query_start");
+		register_macro(MIINT_MYLOASM_QUERY_STOP, "_miint_myloasm_query_stop");
+		register_macro(MIINT_MYLOASM_CHECK_PIECE, "_miint_myloasm_check_piece");
 		register_macro(MIINT_MYLOASM_LINES, "_miint_myloasm_lines");
 		register_macro(MIINT_MYLOASM_BREAKPOINTS, "_miint_myloasm_breakpoints");
 		register_macro(READ_MYLOASM_SPLITS, "read_myloasm_splits");

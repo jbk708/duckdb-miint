@@ -22,15 +22,26 @@ namespace duckdb {
 // by one thread; several files are read in parallel.
 
 struct LineScanData : public TableFunctionData {
+	std::string function_name;
 	std::vector<std::string> file_paths;
 	bool include_filepath = false;
 };
 
+// A chunk stops filling once its lines hold this many bytes, so a file of megabase records
+// (GFA segments that carry their sequence) is not held in memory thousands of records at a time.
+constexpr idx_t LINE_SCAN_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+
 // Resolve a reader's arguments: a VARCHAR path or glob, or a VARCHAR[] of literal paths,
 // plus include_filepath. Rejects NULL, an empty list, stdin, and a local path that does not
-// exist, with messages prefixed by `function_name`.
-unique_ptr<LineScanData> BindLineScan(ClientContext &context, TableFunctionBindInput &input,
-                                      const std::string &function_name);
+// exist, with messages prefixed by the function's name. `names` and `return_types` are the
+// reader's own columns; a filepath column is appended when requested.
+unique_ptr<FunctionData> BindLineScan(ClientContext &context, TableFunctionBindInput &input, vector<std::string> &names,
+                                      vector<LogicalType> &return_types);
+
+// A line-scan reader's table function: one path argument, include_filepath, the shared
+// global state, and a row estimate from the files' sizes.
+TableFunction MakeLineScanFunction(const std::string &name, table_function_t execute, table_function_bind_t bind,
+                                   table_function_init_local_t init_local);
 
 struct LineScanGlobalState : public GlobalTableFunctionState {
 	std::mutex lock;
@@ -43,8 +54,6 @@ struct LineScanGlobalState : public GlobalTableFunctionState {
 		return max_threads;
 	}
 };
-
-unique_ptr<GlobalTableFunctionState> InitLineScanGlobal(ClientContext &context, TableFunctionInitInput &input);
 
 // The file a thread is reading.
 struct LineFile {
@@ -70,15 +79,15 @@ void SetTagMap(Vector &map_vec, idx_t row, const std::vector<miint::SamStyleTag>
 // `write(row)` then stores that record at `row`. A chunk holds one file's rows only, so the
 // filepath column, the last one when requested, is constant.
 template <typename Parse, typename Write>
-void ScanLines(ClientContext &context, TableFunctionInput &data_p, DataChunk &output, const char *function_name,
-               Parse &&parse, Write &&write) {
+void ScanLines(ClientContext &context, TableFunctionInput &data_p, DataChunk &output, Parse &&parse, Write &&write) {
 	auto &data = data_p.bind_data->Cast<LineScanData>();
 	auto &global = data_p.global_state->Cast<LineScanGlobalState>();
 	auto &local = data_p.local_state->Cast<LineScanLocalState>();
 
 	idx_t row = 0;
+	idx_t chunk_bytes = 0;
 	std::string chunk_path;
-	while (row < STANDARD_VECTOR_SIZE) {
+	while (row < STANDARD_VECTOR_SIZE && chunk_bytes < LINE_SCAN_MAX_CHUNK_BYTES) {
 		if (!local.file) {
 			if (row > 0) {
 				break;
@@ -91,7 +100,8 @@ void ScanLines(ClientContext &context, TableFunctionInput &data_p, DataChunk &ou
 				}
 				idx = global.next_file_idx++;
 			}
-			local.file = make_uniq<LineFile>(FileSystem::GetFileSystem(context), data.file_paths[idx], function_name);
+			local.file =
+			    make_uniq<LineFile>(FileSystem::GetFileSystem(context), data.file_paths[idx], data.function_name);
 		}
 		chunk_path = local.file->path;
 
@@ -104,12 +114,13 @@ void ScanLines(ClientContext &context, TableFunctionInput &data_p, DataChunk &ou
 		try {
 			is_record = parse(line);
 		} catch (const std::runtime_error &e) {
-			throw InvalidInputException(std::string(function_name) + ": " + local.file->path + ": line " +
+			throw InvalidInputException(data.function_name + ": " + local.file->path + ": line " +
 			                            std::to_string(local.file->lines.LineNumber()) + ": " + e.what());
 		}
 		if (is_record) {
 			write(row);
 			row++;
+			chunk_bytes += line.size();
 		}
 	}
 	if (data.include_filepath && row > 0) {

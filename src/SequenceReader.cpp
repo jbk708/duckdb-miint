@@ -115,7 +115,7 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
-		if (is_empty1 != is_empty2 || (is_empty2 && !allow_empty)) {
+		if (is_empty1 != is_empty2) { // both empty only gets here with allow_empty
 			throw std::runtime_error("Empty file: " + (is_empty1 ? path1 : path2.value()));
 		}
 		if (is_empty1) {
@@ -162,7 +162,7 @@ SequenceReader::SequenceReader(DuckDBSeqStreamHandle stream1, DuckDBSeqStreamHan
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
-		if (is_empty1 != is_empty2 || (is_empty2 && !allow_empty)) {
+		if (is_empty1 != is_empty2) { // both empty only gets here with allow_empty
 			throw std::runtime_error(is_empty1 ? "Empty stream" : "Empty stream (sequence2)");
 		}
 		if (is_empty1) {

@@ -23,15 +23,10 @@ void SetFields(Vector &list_vec, idx_t row, const std::vector<std::string> &fiel
 
 unique_ptr<FunctionData> ReadGfaTableFunction::Bind(ClientContext &context, TableFunctionBindInput &input,
                                                     vector<LogicalType> &return_types, vector<std::string> &names) {
-	auto data = BindLineScan(context, input, "read_gfa");
 	names = {"line_number", "record_type", "fields", "tags"};
 	return_types = {LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR),
 	                LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR)};
-	if (data->include_filepath) {
-		names.emplace_back("filepath");
-		return_types.emplace_back(LogicalType::VARCHAR);
-	}
-	return std::move(data);
+	return BindLineScan(context, input, names, return_types);
 }
 
 unique_ptr<LocalTableFunctionState> ReadGfaTableFunction::InitLocal(ExecutionContext &context,
@@ -44,8 +39,7 @@ void ReadGfaTableFunction::Execute(ClientContext &context, TableFunctionInput &d
 	auto &local = data_p.local_state->Cast<LocalState>();
 	const auto &r = local.record;
 	ScanLines(
-	    context, data_p, output, "read_gfa",
-	    [&](std::string_view line) { return local.parser.Parse(line, local.record); },
+	    context, data_p, output, [&](std::string_view line) { return local.parser.Parse(line, local.record); },
 	    [&](idx_t row) {
 		    FlatVector::GetData<int64_t>(output.data[LINE_NUMBER])[row] =
 		        static_cast<int64_t>(local.file->lines.LineNumber());
@@ -61,9 +55,7 @@ void ReadGfaTableFunction::Execute(ClientContext &context, TableFunctionInput &d
 }
 
 void ReadGfaTableFunction::Register(ExtensionLoader &loader) {
-	TableFunction tf("read_gfa", {LogicalType::ANY}, Execute, Bind, InitLineScanGlobal, InitLocal);
-	tf.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
-	loader.RegisterFunction(tf);
+	loader.RegisterFunction(MakeLineScanFunction("read_gfa", Execute, Bind, InitLocal));
 }
 
 } // namespace duckdb

@@ -8,10 +8,12 @@
 
 namespace duckdb {
 
-unique_ptr<LineScanData> BindLineScan(ClientContext &context, TableFunctionBindInput &input,
-                                      const std::string &function_name) {
+unique_ptr<FunctionData> BindLineScan(ClientContext &context, TableFunctionBindInput &input, vector<std::string> &names,
+                                      vector<LogicalType> &return_types) {
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto data = make_uniq<LineScanData>();
+	const auto &function_name = input.table_function.name;
+	data->function_name = function_name;
 	const auto &arg = input.inputs[0];
 
 	if (arg.IsNull()) {
@@ -41,13 +43,36 @@ unique_ptr<LineScanData> BindLineScan(ClientContext &context, TableFunctionBindI
 		}
 	}
 	data->include_filepath = ParseIncludeFilepathParameter(input.named_parameters);
-	return data;
+	if (data->include_filepath) {
+		names.emplace_back("filepath");
+		return_types.emplace_back(LogicalType::VARCHAR);
+	}
+	return std::move(data);
 }
+
+namespace {
 
 unique_ptr<GlobalTableFunctionState> InitLineScanGlobal(ClientContext &context, TableFunctionInitInput &input) {
 	auto &data = input.bind_data->Cast<LineScanData>();
 	idx_t threads = std::max<idx_t>(1, std::min<idx_t>(data.file_paths.size(), std::thread::hardware_concurrency()));
 	return make_uniq<LineScanGlobalState>(threads);
+}
+
+// 50 bytes a line is shorter than typical PAF and GFA records, so the estimate errs high, as
+// EstimateFileScanCardinality wants.
+unique_ptr<NodeStatistics> LineScanCardinality(ClientContext &context, const FunctionData *bind_data) {
+	constexpr idx_t BYTES_PER_LINE = 50;
+	return EstimateFileScanCardinality(bind_data->Cast<LineScanData>().file_paths, BYTES_PER_LINE);
+}
+
+} // namespace
+
+TableFunction MakeLineScanFunction(const std::string &name, table_function_t execute, table_function_bind_t bind,
+                                   table_function_init_local_t init_local) {
+	TableFunction tf(name, {LogicalType::ANY}, execute, bind, InitLineScanGlobal, init_local);
+	tf.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
+	tf.cardinality = LineScanCardinality;
+	return tf;
 }
 
 LineFile::LineFile(FileSystem &fs, const std::string &path_p, const std::string &function_name)
