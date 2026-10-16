@@ -76,6 +76,12 @@ run_test "read_fastx: paired-end gzipped FASTQ via HTTP" "2,2,2" \
 run_error_test "read_fastx: HTTP 404" "HTTP" \
     "SELECT * FROM read_fastx('$BASE/fastq/nonexistent.fq');"
 
+run_test "read_fastx: empty file with allow_empty via HTTP" "0" \
+    "SELECT COUNT(*) FROM read_fastx('$BASE/fastq/empty.fq', allow_empty := true);"
+
+run_error_test "read_fastx: empty file via HTTP" "Empty" \
+    "SELECT * FROM read_fastx('$BASE/fastq/empty.fq');"
+
 # --- read_alignments ---
 
 run_test "read_alignments: SAM via HTTP" "4" \

@@ -175,8 +175,14 @@ unique_ptr<FunctionData> ReadFastxTableFunction::Bind(ClientContext &context, Ta
 		max_batch_bytes = static_cast<uint64_t>(parsed);
 	}
 
+	bool allow_empty = false;
+	auto empty_param = input.named_parameters.find("allow_empty");
+	if (empty_param != input.named_parameters.end() && !empty_param->second.IsNull()) {
+		allow_empty = empty_param->second.GetValue<bool>();
+	}
+
 	auto data = duckdb::make_uniq<Data>(sequence1_paths, sequence2_paths, include_filepath, uses_stdin, qual_offset,
-	                                    max_batch_bytes);
+	                                    max_batch_bytes, allow_empty);
 	for (auto &name : data->names) {
 		names.emplace_back(name);
 	}
@@ -190,7 +196,8 @@ unique_ptr<GlobalTableFunctionState> ReadFastxTableFunction::InitGlobal(ClientCo
                                                                         TableFunctionInitInput &input) {
 	auto &data = input.bind_data->Cast<Data>();
 	auto &fs = FileSystem::GetFileSystem(context);
-	return duckdb::make_uniq<GlobalState>(fs, data.sequence1_paths, data.sequence2_paths, data.uses_stdin);
+	return duckdb::make_uniq<GlobalState>(fs, data.sequence1_paths, data.sequence2_paths, data.uses_stdin,
+	                                      data.allow_empty);
 }
 
 unique_ptr<LocalTableFunctionState> ReadFastxTableFunction::InitLocal(ExecutionContext &context,
@@ -378,6 +385,7 @@ TableFunction ReadFastxTableFunction::GetFunction() {
 	tf.named_parameters["include_filepath"] = LogicalType::BOOLEAN;
 	tf.named_parameters["qual_offset"] = LogicalType::BIGINT;
 	tf.named_parameters["max_batch_bytes"] = LogicalType::VARCHAR;
+	tf.named_parameters["allow_empty"] = LogicalType::BOOLEAN;
 	tf.cardinality = ReadFastxCardinality;
 	return tf;
 }
