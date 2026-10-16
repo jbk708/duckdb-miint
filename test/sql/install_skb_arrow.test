@@ -41,6 +41,14 @@ SELECT typeof(skb_arrow_available());
 ----
 BOOLEAN
 
+# A false answer is checked again on the next call, so one folded into a plan
+# would outlive the install (and EXPLAIN would start a host).
+# test/shell/skb_mantel_host.sh checks the behaviour.
+query I
+SELECT stability FROM duckdb_functions() WHERE function_name = 'skb_arrow_available';
+----
+VOLATILE
+
 # =============================================================================
 # With skb-arrow present (run_tests.sh sets SKB_ARROW_AVAILABLE)
 # =============================================================================
@@ -66,12 +74,19 @@ SELECT install_skb_arrow() = install_skb_arrow();
 ----
 true
 
-# force := false, and a NULL force, are the 0-arg form.
+# force := false, and a NULL force, are the 0-arg form: nothing is installed.
+# Each is the only row, because force is read from a call's first row.
 query II
-SELECT (install_skb_arrow(f)).installed, (install_skb_arrow(f)).version FROM (VALUES (false), (NULL::BOOLEAN)) t(f);
+SELECT r.installed, r.message LIKE 'skb-arrow 0.1.0 already available at /%; no install performed'
+FROM (SELECT install_skb_arrow(f) AS r FROM (VALUES (false)) t(f));
 ----
-true	0.1.0
-true	0.1.0
+true	true
+
+query II
+SELECT r.installed, r.message LIKE 'skb-arrow 0.1.0 already available at /%; no install performed'
+FROM (SELECT install_skb_arrow(f) AS r FROM (VALUES (NULL::BOOLEAN)) t(f));
+----
+true	true
 
 # force := true reinstalls over the network, so it is checked by hand
 # (localdocs/skb-arrow/PLAN.md, Phase 3), not here.

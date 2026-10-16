@@ -455,7 +455,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	// Stubs: install_gpl_boundary() and install_skb_arrow() report that the
 	// platform can't run their tool at all, so installing wouldn't help.
-	const auto register_install_stub = [&loader](const char *name, const string &tool, bool is_volatile) {
+	const auto register_install_stub = [&loader](const char *name, const string &tool) {
 		const string msg = string(name) +
 		                   ": this miint build was compiled without MIINT_ENABLE_GPL_BOUNDARY (typically "
 		                   "WASM or Windows). " +
@@ -463,16 +463,17 @@ static void LoadInternal(ExtensionLoader &loader) {
 		const scalar_function_t exec = [msg](DataChunk &args, ExpressionState &state, Vector &result) {
 			SetInstallReport(result, false, "", "", msg);
 		};
-		loader.RegisterFunction(InstallFunctionSet(name, exec, is_volatile));
+		loader.RegisterFunction(InstallFunctionSet(name, exec));
 	};
-	register_install_stub("install_gpl_boundary", "gpl-boundary", false);
-	register_install_stub("install_skb_arrow", "skb-arrow", true);
+	register_install_stub("install_gpl_boundary", "gpl-boundary");
+	register_install_stub("install_skb_arrow", "skb-arrow");
 
-	// Stub: skb_arrow_available() always returns false.
+	// Stub: skb_arrow_available() always returns false. Volatile, as the real one is.
 	ScalarFunction skb_arrow_available_stub("skb_arrow_available", {}, LogicalType::BOOLEAN,
 	                                        [](DataChunk &args, ExpressionState &state, Vector &result) {
 		                                        result.Reference(Value::BOOLEAN(false), count_t(args.size()));
 	                                        });
+	skb_arrow_available_stub.SetVolatile();
 	loader.RegisterFunction(skb_arrow_available_stub);
 #endif
 	DeblurTableFunction::Register(loader);

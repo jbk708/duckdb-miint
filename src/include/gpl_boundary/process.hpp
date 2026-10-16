@@ -188,6 +188,10 @@ public:
 	/// buffered, or the fd has reached EOF.
 	bool HasLine() const;
 
+	/// True when a whole, newline-terminated line is buffered: unlike
+	/// `HasLine`, false at EOF after a partial last line.
+	bool HasCompleteLine() const;
+
 	/// One read() into the buffer: for a caller that polls the fd (to stay
 	/// interruptible) and calls `ReadLine` only once `HasLine()`. Blocks only
 	/// if the fd has nothing to read. Throws on read errors.

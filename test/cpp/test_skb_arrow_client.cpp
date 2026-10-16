@@ -499,6 +499,41 @@ TEST_CASE("Host reports a host that exits at startup, with its exit code and std
 	REQUIRE(Entries(fakes.sessions).empty());
 }
 
+TEST_CASE("Host reports a host it can't start as a broken install, not a miint bug", "[skb-arrow]") {
+	// A launcher whose interpreter is gone (a removed uv-managed Python):
+	// execve fails. Reinstalling fixes it; reporting it as a bug doesn't.
+	FakeHosts fakes;
+	const std::string bin = fakes.tmp.path + "/orphaned-launcher";
+	std::ofstream(bin) << "#!/nonexistent/python3\n";
+	REQUIRE(::chmod(bin.c_str(), 0755) == 0);
+	try {
+		Host host(fakes.Options(bin), kNever);
+		FAIL("expected an Error");
+	} catch (const Error &e) {
+		REQUIRE(e.kind() == "host_incompatible");
+		REQUIRE_THAT(e.what(), ContainsSubstring(bin));
+		REQUIRE_THAT(e.what(), ContainsSubstring("SELECT install_skb_arrow(true)"));
+	}
+	REQUIRE(Entries(fakes.sessions).empty());
+}
+
+TEST_CASE("Host reports a host killed mid-response as a dead host, not a malformed response", "[skb-arrow]") {
+	// The half line a host leaves when killed while writing is not a
+	// response: the user needs how it died, not a JSON parse error.
+	FakeHosts fakes;
+	const std::string bin = fakes.Write("next\nprintf '%s' '{\"type\":\"res'\nkill -9 $$");
+	Host host(fakes.Options(bin), kNever);
+	const std::string dir = host.dir();
+	try {
+		host.Call("echo", Params {}, {{"table", {"t-0"}}}, kNever);
+		FAIL("expected an Error");
+	} catch (const Error &e) {
+		REQUIRE(e.kind() == "internal");
+		REQUIRE_THAT(e.what(), ContainsSubstring("killed by signal 9"));
+	}
+	REQUIRE_FALSE(Exists(dir));
+}
+
 TEST_CASE("Host passes thread caps and strips Python's environment", "[skb-arrow]") {
 	// A Python-hosted DuckDB must not leak its own interpreter's settings into
 	// the host, and the host's thread pools follow the caller's budget.
@@ -827,7 +862,8 @@ TEST_CASE("Install runs uv on the pinned release, keeping the tool, its Python a
           "[skb-arrow]") {
 	// --managed-python keeps conda's or the system's interpreter out;
 	// UV_PYTHON_INSTALL_DIR keeps uv's own out of ~/.local/share/uv; the pin
-	// is the release miint is tested with.
+	// is the release miint is tested with. uv runs only when there is no
+	// working skb-arrow, so it always reinstalls: see the next tests.
 	FakeHosts fake;
 	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fake.sessions.c_str());
 	FakeUv uv;
@@ -837,7 +873,8 @@ TEST_CASE("Install runs uv on the pinned release, keeping the tool, its Python a
 	o.cache_dir = cache.path;
 	const InstallReport r = Install(o, kNever);
 	REQUIRE(Lines(uv.log) == std::vector<std::string> {"tool", "install", "--managed-python", "--python", "3.14",
-	                                                   "skb-arrow==0.1.0", "UV_TOOL_BIN_DIR=" + cache.path + "/bin",
+	                                                   "skb-arrow==0.1.0", "--reinstall", "--force",
+	                                                   "UV_TOOL_BIN_DIR=" + cache.path + "/bin",
 	                                                   "UV_TOOL_DIR=" + cache.path + "/uv-tools",
 	                                                   "UV_PYTHON_INSTALL_DIR=" + cache.path + "/uv-python"});
 	REQUIRE(r.installed);
@@ -857,6 +894,24 @@ TEST_CASE("Install installs over an existing binary that fails the probe", "[skb
 	o.cache_dir = cache.path;
 	const InstallReport r = Install(o, kNever);
 	REQUIRE(uv.Ran());
+	REQUIRE(r.installed);
+	REQUIRE(r.path == cache.path + "/bin/skb-arrow");
+}
+
+TEST_CASE("Install reinstalls a tool uv still has after its binary is gone", "[skb-arrow]") {
+	// uv skips a tool it already has, exiting 0 without restoring a deleted
+	// or broken binary ("`skb-arrow==0.1.0` is already installed"); only
+	// --reinstall replaces it. This fake uv behaves that way.
+	FakeHosts fresh;
+	EnvGuard segdir("MIINT_SKB_ARROW_SEGMENT_DIR", fresh.sessions.c_str());
+	FakeUv uv;
+	TempDir cache;
+	InstallOptions o; // no existing binary: FindSkbArrow found none
+	o.uv =
+	    uv.Write("if printf '%s\\n' \"$@\" | grep -qx -- --reinstall; then " + Installs(fresh.Write(kIdle, kReadyAll)) +
+	             "; else echo '`skb-arrow==0.1.0` is already installed' >&2; fi");
+	o.cache_dir = cache.path;
+	const InstallReport r = Install(o, kNever);
 	REQUIRE(r.installed);
 	REQUIRE(r.path == cache.path + "/bin/skb-arrow");
 }
@@ -1029,7 +1084,7 @@ HostOptions RealHostOptions(const std::string &binary) {
 }
 } // namespace
 
-TEST_CASE("The real host echoes a two-segment table", "[skb-arrow][!mayfail]") {
+TEST_CASE("The real host echoes a two-segment table", "[skb-arrow]") {
 	const std::string bin = FindSkbArrow();
 	if (bin.empty() || !Exists(bin)) {
 		SKIP("skb-arrow not found (SELECT install_skb_arrow(), or set MIINT_SKB_ARROW_PATH)");
@@ -1054,7 +1109,7 @@ TEST_CASE("The real host echoes a two-segment table", "[skb-arrow][!mayfail]") {
 	REQUIRE_FALSE(Exists(dir));
 }
 
-TEST_CASE("The real host's mantel matches the handoff's known answer exactly", "[skb-arrow][!mayfail]") {
+TEST_CASE("The real host's mantel matches the handoff's known answer exactly", "[skb-arrow]") {
 	// skb-arrow's handoff transcript, call 2: recorded against the published
 	// 0.1.0. Mantel's statistic and permutation p-value don't depend on thread
 	// counts, so they must match bit for bit.
@@ -1092,7 +1147,7 @@ TEST_CASE("The real host's mantel matches the handoff's known answer exactly", "
 	host.Shutdown();
 }
 
-TEST_CASE("The real host passes the probe at the release miint pins", "[skb-arrow][!mayfail]") {
+TEST_CASE("The real host passes the probe at the release miint pins", "[skb-arrow]") {
 	// The pinned release must offer every capability miint calls, or
 	// install_skb_arrow() would install a host skb_arrow_available() rejects.
 	const std::string bin = FindSkbArrow();

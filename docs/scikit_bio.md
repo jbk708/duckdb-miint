@@ -92,7 +92,7 @@ SELECT * FROM skb_mantel('dm_bc', 'dm_jac', method := 'spearman', permutations :
 **Inputs:**
 - **Condensed and complete.** Each unordered pair of distinct samples appears exactly once, in either orientation, and no row pairs a sample with itself. A square matrix (both orientations and the diagonal) is refused; pass its upper triangle, e.g. a view `SELECT * FROM dm WHERE sample_a < sample_b`. A missing pair is an error naming it.
 - **Every distance present.** A NULL, NaN, infinite or negative distance is an error. (This is stricter than [`pcoa`](diversity.md#pcoa-from-a-distance-table), which skips NULLs.)
-- **The same samples in both.** `x` and `y` must hold the same samples, as the same kind of ID: two integer-ID matrices, or two text-ID ones. Integer IDs go to skb-arrow as integers, and every other type as text.
+- **The same samples in both.** `x` and `y` must hold the same samples, as the same kind of ID: two integer-ID matrices, or two text-ID ones. Within each, `sample_a` and `sample_b` must be one kind too; an INTEGER `sample_a` beside a VARCHAR `sample_b` is refused. Integer IDs of up to 64 bits go to skb-arrow as integers, and every other type as text. A UBIGINT ID beyond BIGINT's range is an error; cast such IDs to VARCHAR.
 - Distances of any numeric type are read as DOUBLE.
 
 **Behavior:**
@@ -154,7 +154,7 @@ A DOUBLE parameter must be finite: NaN or infinity is an error.
 ### ANCOM-BC inputs
 
 - **Feature table.** Each `(sample_id, feature_id)` at most once, and no NULL or negative `value`; an absent pair counts as 0, before the `pseudocount` is added. Unlike the UniFrac functions, a duplicate row is an error, not summed: aggregate first (`GROUP BY sample_id, feature_id`). `value` of any numeric type is read as DOUBLE.
-- **Metadata.** Every sample in the table needs a row, and at most one; other rows are ignored. Its `sample_id` must be the same kind of ID as the table's: both integers or both text. No covariate the formula uses may be NULL, NaN or infinite for a sample in the table.
+- **Metadata.** Every sample in the table needs a row, and at most one; other rows are ignored. Its `sample_id` must be the same kind of ID as the table's: both integers or both text. A UBIGINT ID beyond BIGINT's range is an error; cast such IDs to VARCHAR. No covariate the formula uses may be NULL, NaN or infinite for a sample in the table.
 - **Only the columns the formula or `grouping` names are read**, so other columns, of any type, don't matter.
 - **Covariate types:**
   - BOOLEAN and text (VARCHAR) are categorical, with levels sorted; the first is the reference level.

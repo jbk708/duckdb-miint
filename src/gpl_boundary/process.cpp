@@ -620,7 +620,11 @@ bool LineReader::ReadLine(std::string &out) {
 }
 
 bool LineReader::HasLine() const {
-	return eof_ || buffer_.find('\n') != std::string::npos;
+	return eof_ || HasCompleteLine();
+}
+
+bool LineReader::HasCompleteLine() const {
+	return buffer_.find('\n') != std::string::npos;
 }
 
 void LineReader::FillOnce() {

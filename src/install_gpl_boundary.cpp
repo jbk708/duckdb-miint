@@ -272,7 +272,7 @@ void InstallGplBoundaryScalar::Register(ExtensionLoader &loader) {
 	// 1-arg: force=true bypasses the probe and re-downloads latest into the
 	// miint cache. Used to escape a stale binary on PATH that the probe
 	// considers "good enough".
-	loader.RegisterFunction(InstallFunctionSet("install_gpl_boundary", InstallGplBoundaryExecute, false));
+	loader.RegisterFunction(InstallFunctionSet("install_gpl_boundary", InstallGplBoundaryExecute));
 }
 
 } // namespace duckdb

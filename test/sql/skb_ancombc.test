@@ -355,6 +355,17 @@ FROM skb_ancombc('counts_uuid', 'meta', 'g', pseudocount := 1) WHERE term = 'g[T
 ----
 UUID	true
 
+# UBIGINT IDs go as BIGINT; one beyond BIGINT's range is refused by name.
+statement ok
+CREATE TABLE counts_ubigint_over AS SELECT sample_id,
+    CASE WHEN feature_id = 3 THEN 18446744073709551615::UBIGINT ELSE feature_id::UBIGINT END AS feature_id, value
+FROM counts_bigint;
+
+statement error
+SELECT * FROM skb_ancombc('counts_ubigint_over', 'meta_bigint', 'g', pseudocount := 1);
+----
+<REGEX>:Invalid Input Error: skb_ancombc: cannot read 'counts_ubigint_over': .*feature_id 18446744073709551615 is beyond BIGINT.*
+
 # =============================================================================
 # skb-arrow's checks, surfaced
 # =============================================================================

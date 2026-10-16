@@ -205,7 +205,11 @@ gb::ChildProcess SpawnHost(const HostOptions &options, const std::string &dir) {
 	try {
 		return gb::ChildProcess({options.binary, "--segment-dir", dir}, spawn);
 	} catch (const std::runtime_error &e) {
-		throw Error("internal", "cannot start skb-arrow at '" + options.binary + "': " + e.what());
+		// Most often a launcher whose interpreter is gone: the installation's
+		// problem, not miint's.
+		throw Error("host_incompatible", "cannot start skb-arrow at '" + options.binary + "': " + e.what() +
+		                                     ". If its installation is broken, reinstall it: "
+		                                     "SELECT install_skb_arrow(true);");
 	}
 }
 
@@ -733,10 +737,13 @@ std::string Host::Exchange(const std::string &request, const InterruptCheck &che
 			check();
 		}
 	}
-	std::string line;
-	if (!reader_.ReadLine(line)) {
+	// At EOF without a whole line, the host died, perhaps while writing: a
+	// partial line is not a response.
+	if (!reader_.HasCompleteLine()) {
 		ThrowHostDeath(awaiting);
 	}
+	std::string line;
+	(void)reader_.ReadLine(line);
 	return line;
 }
 

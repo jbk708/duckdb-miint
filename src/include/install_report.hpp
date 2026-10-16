@@ -38,14 +38,13 @@ inline bool InstallForceArg(DataChunk &args) {
 
 /// An installer's overloads: 0-arg (find, else install) and 1-arg BOOLEAN
 /// `force`. The stubs build theirs here too, so SQL that passes `force`
-/// type-checks on every build.
-inline ScalarFunctionSet InstallFunctionSet(const char *name, scalar_function_t execute, bool is_volatile) {
+/// type-checks on every build. Volatile: an installer has side effects, so
+/// DuckDB must never fold one into a plan, where EXPLAIN or PREPARE would run it.
+inline ScalarFunctionSet InstallFunctionSet(const char *name, scalar_function_t execute) {
 	ScalarFunctionSet set(name);
 	for (const auto &arguments : {vector<LogicalType> {}, vector<LogicalType> {LogicalType::BOOLEAN}}) {
 		ScalarFunction fn(arguments, InstallReportType(), execute);
-		if (is_volatile) {
-			fn.SetVolatile();
-		}
+		fn.SetVolatile();
 		set.AddFunction(fn);
 	}
 	return set;

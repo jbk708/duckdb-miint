@@ -306,13 +306,13 @@ These are invoked via `fork`/`exec` at runtime; the extension links no code for 
 - **Why a separate process?** [skb-arrow](https://github.com/the-miint/skb-arrow) (BSD) is Python: it runs curated scikit-bio operations. An extension `.so` can't carry Python symbols, so miint runs skb-arrow as a child process. The control channel is JSON lines on stdin/stdout, and data travels as uncompressed Arrow IPC stream "segment" files in a private session directory. The contract is skb-arrow's protocol v1 docs at v0.1.0: `docs/protocol.md`, `docs/transport.md` and `docs/errors.md`.
 - **Install:** `install_skb_arrow()` runs `uv tool install --managed-python --python 3.14 skb-arrow==0.1.0`. It sets `UV_TOOL_BIN_DIR=<cache>/miint/bin` (beside gpl-boundary), `UV_TOOL_DIR=<cache>/miint/uv-tools` and `UV_PYTHON_INSTALL_DIR=<cache>/miint/uv-python`, so the tool, its environment and its interpreter all stay in miint's cache: about 850 MB (the interpreter about 110 MB, the tool environment about 745 MB, measured for 0.1.0 on Linux x86_64).
   - uv is required; without it, the message gives uv's install command.
-  - The pin is the release miint is tested with; `force := true` adds `--reinstall --force`.
-  - Failures come back in `message`. The function is volatile.
+  - The pin is the release miint is tested with. uv runs only when there is no working skb-arrow, and always with `--reinstall --force`: without them uv skips a tool it already has, even one whose binary is gone (measured with uv 0.10.0). `force := true` skips the check for a working one.
+  - Failures come back in `message`. Both installers are volatile, so `EXPLAIN` or `PREPARE` never runs one.
 - **Discovery and compatibility:**
   - Lookup order: `$MIINT_SKB_ARROW_PATH`, then `<cache>/miint/bin/skb-arrow`, then PATH (`FindSkbArrow`).
   - "Compatible" means the `init`/`ready` handshake succeeds: protocol 1, plus every capability miint calls (`MiintCapabilities()`) at the `schema_version` miint was built against.
   - `skb_arrow_available()` and the installer both run that handshake (`Probe`). They never run `--doctor`, which exits 1 on Docker's 64 MiB `/dev/shm`.
-  - `skb_arrow_available()` caches a true answer for the process; a false one is checked again on the next call, so it can't outlive an install.
+  - `skb_arrow_available()` caches a true answer for the process; a false one is checked again on the next call, so it can't outlive an install. It is volatile, so a false answer is never folded into a plan, and it probes without a lock, so a host that never answers holds up only its own query.
 - **Wrapper:** `src/skb_arrow/`. DuckDB-free, so the Catch2 `tests` binary drives it against fake hosts and a fake uv, and against the real host when one is installed.
   - `client.{cpp,hpp}`:
     - `FindSkbArrow` and `SegmentDirParent`;
@@ -324,10 +324,11 @@ These are invoked via `fork`/`exec` at runtime; the extension links no code for 
 - **SQL bridge** (`src/skb_arrow_functions.cpp`):
   - **Bind** resolves the inputs' shape only (`RejectCTERelationName`, then `LIMIT 0` probes). It never starts a host, so `EXPLAIN` stays free and a prepared statement re-runs the call on each `EXECUTE`. The bind data implements `Copy` and `Equals`, because the base `Copy` throws an `InternalException`.
   - **InitGlobal**, once per query, starts one host. It reads each input relation over a read-only helper connection (`SubmitStream`, then `ChunkSourceArrowStream`) into segments of 65,536-row batches. The Arrow export is pinned to 1.0 layouts with 32-bit offsets, the layout nanoarrow's IPC writer handles.
-  - It then makes the call, relays the host's warnings through `EmitWarning`, decodes the output segments with DuckDB's own Arrow conversion into a `ColumnDataCollection`, and shuts the host down. Execute only scans the collection.
+  - It then makes the call, relays the host's warnings through `EmitWarning`, decodes the output segments with DuckDB's own Arrow conversion into a `ColumnDataCollection`, and kills the host: the answer is in, and waiting for Python's teardown (about 60 ms after a `mantel` call) would only add latency. Execute only scans the collection.
   - Each input is cast as it is read:
     - distances and feature-table values to DOUBLE, which absorbs DECIMAL and HUGEINT;
-    - IDs to BIGINT when they are integers of up to 64 bits, else VARCHAR.
+    - IDs to BIGINT when they are integers of up to 64 bits, else VARCHAR (`IdExpression`). A UBIGINT beyond BIGINT fails the read, naming the value, rather than wrapping.
+    - A distance table's `sample_a` and `sample_b` must go as one kind (integer or text), or bind refuses it.
   - A returned ID comes back in miint's convention (`ResolveSampleIdOutputType`), cast from what skb-arrow sends.
   - **Metadata.** Only `sample_id` and the columns named in `formula` or `grouping` are sent, so an unrelated column of any type never matters.
     - A covariate passes as BOOLEAN, an integer type, FLOAT, DOUBLE or VARCHAR; DECIMAL and HUGEINT go as DOUBLE.
@@ -343,12 +344,12 @@ These are invoked via `fork`/`exec` at runtime; the extension links no code for 
     - `PYTHONHOME` and `PYTHONPATH` are removed and `PYTHONNOUSERSITE=1` is set, so a Python-hosted DuckDB can't leak into the host.
     - A thread cap sets `NUMBA_NUM_THREADS`, `OMP_NUM_THREADS`, `OPENBLAS_NUM_THREADS` and `VECLIB_MAXIMUM_THREADS`.
   - **Session directory.** `mkdtemp` of `miint-skb-XXXXXX` under `/dev/shm` on Linux, else `$TMPDIR`. `$MIINT_SKB_ARROW_SEGMENT_DIR` overrides it, which is the escape from Docker's 64 MiB `/dev/shm`. The directory is removed, with anything left in it, once the host is reaped.
-  - **Shutdown.** Close stdin, wait up to 5 s for the host to exit, then kill the group.
-  - **Errors.** An error response leaves the host serving. Any other failure (the host dies or breaks the protocol, or an interrupt arrives) kills it. An `internal` error never becomes a DuckDB `InternalException`, which on v2 invalidates the whole database.
+  - **Shutdown.** After a call, the host's group is killed. `Host::Shutdown` (close stdin, wait up to 5 s for the host to exit, then kill the group) is the graceful path, used by the handshake-only `Probe`.
+  - **Errors.** An error response leaves the host serving. Any other failure (the host dies or breaks the protocol, or an interrupt arrives) kills it. A partial last line at EOF counts as the host's death, not a malformed response. A host that can't be started (its launcher's interpreter gone, say) is `host_incompatible`, with a reinstall hint. An `internal` error never becomes a DuckDB `InternalException`, which on v2 invalidates the whole database.
 - **Tests:**
   - C++: the `[skb-arrow]` tag.
   - SQL: `run_tests.sh` exports `SKB_ARROW_AVAILABLE`, and points `MIINT_SKB_ARROW_PATH` at the cached binary, because the unittest overrides `$HOME`. It also exports `SKB_ARROW_COMPILED` when `skb_mantel` is registered, for tests that only bind.
-  - Shell: `test/shell/skb_mantel_host.sh` drives `skb_mantel` against fake hosts (bash scripts). It checks that every error kind maps to the right exception and the session survives it, and that SIGINT kills the host's whole process group and removes its session directory.
+  - Shell: `test/shell/skb_mantel_host.sh` drives `skb_mantel` against fake hosts (bash scripts). It checks that every error kind maps to the right exception and the session survives it, that `skb_arrow_available()` starts no host from `EXPLAIN`, that a query doesn't wait on a host's group after its answer (with the real host, when installed), and that SIGINT kills the host's whole process group and removes its session directory.
   - CI (`test-with-bowtie2`) installs uv, then runs `install_skb_arrow()` itself before the suite.
 
 ### IBM Aspera ascp

@@ -80,12 +80,11 @@ InstallReport Install(const InstallOptions &options, const InterruptCheck &check
 		return r;
 	}
 
-	std::vector<std::string> argv = {options.uv, "tool",        "install",     "--managed-python",
-	                                 "--python", kPinnedPython, kPinnedRelease};
-	if (options.force) {
-		argv.emplace_back("--reinstall");
-		argv.emplace_back("--force");
-	}
+	// uv runs only when there is no working skb-arrow, and it skips a tool it
+	// already has even when that tool's binary is gone or broken. So always
+	// reinstall, replacing a binary uv didn't put there (--force).
+	const std::vector<std::string> argv = {options.uv,    "tool",         "install",     "--managed-python", "--python",
+	                                       kPinnedPython, kPinnedRelease, "--reinstall", "--force"};
 	const std::string bin_dir = options.cache_dir + "/bin";
 	gb::ChildProcessOptions spawn;
 	spawn.set_env = {{"UV_TOOL_BIN_DIR", bin_dir},

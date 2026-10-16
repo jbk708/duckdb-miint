@@ -11,6 +11,9 @@ if ! echo "SELECT 1 FROM duckdb_functions() WHERE function_name = 'skb_mantel';"
     exit 0
 fi
 
+# The real host, when installed, for the one check that needs real output.
+REAL="${MIINT_SKB_ARROW_PATH:-$(command -v skb-arrow || true)}"
+
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/miint_skb_mantel_host.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 SEGDIR="$WORK/segments"
@@ -107,7 +110,65 @@ out=$(run_with_host "$WORK/no-such-skb-arrow")
 expect "says how to install it" "$out" "IO Error: skb_mantel: .*SELECT install_skb_arrow\(\)"
 survives "missing binary" "$out"
 
+echo "Running: a host that can't start (its interpreter is gone)"
+printf '#!/nonexistent/python3\n' > "$WORK/orphaned-launcher"
+chmod +x "$WORK/orphaned-launcher"
+out=$(run_with_host "$WORK/orphaned-launcher")
+expect "says to reinstall" "$out" "IO Error: skb_mantel: .*SELECT install_skb_arrow\(true\)"
+reject "not reported as a miint bug" "$out" "please report"
+survives "unstartable host" "$out"
+
 expect "no session directory is left behind" "$(ls -A "$SEGDIR")" "^$"
+
+echo "Running: skb_arrow_available() starts a host only when it runs"
+# Each launch leaves a line; the host then fails, so the answer stays false.
+cat > "$WORK/counted" <<EOF
+#!/bin/bash
+echo launched >> "$WORK/launches"
+exit 1
+EOF
+chmod +x "$WORK/counted"
+launches() { wc -l < "$WORK/launches" | tr -d ' '; }
+: > "$WORK/launches"
+echo "EXPLAIN SELECT skb_arrow_available();" |
+    MIINT_SKB_ARROW_PATH="$WORK/counted" MIINT_SKB_ARROW_SEGMENT_DIR="$SEGDIR" $DUCKDB -no-agent -csv > /dev/null 2>&1
+expect "EXPLAIN starts no host" "$(launches)" "^0$"
+: > "$WORK/launches"
+printf 'PREPARE p AS SELECT skb_arrow_available();\nEXECUTE p;\nEXECUTE p;\n' |
+    MIINT_SKB_ARROW_PATH="$WORK/counted" MIINT_SKB_ARROW_SEGMENT_DIR="$SEGDIR" $DUCKDB -no-agent -csv > /dev/null 2>&1
+expect "each EXECUTE checks again, so an install is seen" "$(launches)" "^2$"
+
+echo "Running: the query doesn't wait on a host that has answered"
+if [ -x "$REAL" ]; then
+    # The real host, in a group that outlives it: a wrapper that sleeps once
+    # the host exits. Waiting for the group would add the 5 s shutdown grace.
+    cat > "$WORK/lingers" <<EOF
+#!/bin/bash
+"$REAL" "\$@"
+sleep 60
+EOF
+    chmod +x "$WORK/lingers"
+    timed_mantel() {
+        local start=$SECONDS
+        out=$(printf '%s\nSELECT statistic, n FROM skb_mantel('"'"'x'"'"', '"'"'x'"'"');\n' "$SETUP" |
+            MIINT_SKB_ARROW_PATH="$1" MIINT_SKB_ARROW_SEGMENT_DIR="$SEGDIR" timeout 60 $DUCKDB -no-agent -csv 2>&1)
+        elapsed=$((SECONDS - start))
+    }
+    timed_mantel "$REAL"
+    direct=$elapsed
+    timed_mantel "$WORK/lingers"
+    expect "the answer arrives" "$out" "^[0-9.]+,3$"
+    if [ $((elapsed - direct)) -lt 3 ]; then
+        echo "  ✓ no wait for the host's group (${elapsed} s, direct ${direct} s)"
+    else
+        echo "  ✗ the query waited on the host's group: ${elapsed} s, direct ${direct} s"
+        FAILED=1
+    fi
+    expect "nothing of the host's group survives" "$(pgrep -f -- "$WORK/lingers" || true)" "^$"
+    expect "no session directory is left behind" "$(ls -A "$SEGDIR")" "^$"
+else
+    echo "  - skb-arrow not installed: skipped"
+fi
 
 echo "Running: SIGINT kills the host and everything it started"
 host=$(fake_host host_hangs 'sleep 300 & wait')

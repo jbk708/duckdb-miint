@@ -39,7 +39,7 @@ struct InstallOptions {
 	/// gpl-boundary; uv's tool environment in `uv-tools`; the interpreter in
 	/// `uv-python`. Empty: there is nowhere to install.
 	std::string cache_dir;
-	/// Skip `existing`, and have uv reinstall the tool and replace the binary.
+	/// Skip `existing`: install even over one that passes `Probe`.
 	bool force = false;
 };
 
@@ -54,8 +54,9 @@ struct InstallReport {
 };
 
 /// Unless `force`, return at once when `existing` passes `Probe`. Otherwise
-/// run `uv tool install --managed-python --python 3.14 skb-arrow==0.1.0`
-/// with everything under `cache_dir`, then `Probe` what it installed.
+/// run `uv tool install --managed-python --python 3.14 skb-arrow==0.1.0
+/// --reinstall --force` with everything under `cache_dir`, then `Probe` what
+/// it installed.
 /// Serialized within the process. Failures come back in `message`; only
 /// `check` throws.
 InstallReport Install(const InstallOptions &options, const InterruptCheck &check);

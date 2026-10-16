@@ -313,6 +313,10 @@ void RunCall(ClientContext &context, const SkbArrowCallData &data, ColumnDataCol
 			options.required = {capability};
 		}
 	}
+	if (options.required.empty()) {
+		ThrowAsDuckDB(data.function,
+		              sk::Error("internal", "miint has no schema_version for capability '" + data.capability + "'"));
+	}
 	const sk::InterruptCheck check = [&context] {
 		context.BlockingInterruptCheck();
 	};
@@ -344,7 +348,9 @@ void RunCall(ClientContext &context, const SkbArrowCallData &data, ColumnDataCol
 				throw sk::Error("host_incompatible", "cannot decode output segment " + name + ": " + e.what());
 			}
 		}
-		host.Shutdown();
+		// The answer is in, and the host is stateless: waiting for Python's
+		// teardown would add tens of ms to every call for nothing.
+		host.Kill();
 	} catch (const sk::Error &e) {
 		ThrowAsDuckDB(data.function, e);
 	}
@@ -403,7 +409,8 @@ void ReadNamedParams(ClientContext &context, TableFunctionBindInput &input, SkbA
 // =============================================================================
 
 // skb-arrow takes integer or string IDs. Integers of up to 64 bits go as
-// BIGINT; anything else (UUID, HUGEINT, ...) as text.
+// BIGINT (a UBIGINT beyond BIGINT is refused: see IdExpression); anything
+// else (UUID, HUGEINT, ...) as text.
 LogicalType IdWireType(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:
@@ -420,23 +427,39 @@ LogicalType IdWireType(const LogicalType &type) {
 	}
 }
 
+// The SQL that reads ID column `column` (of `type`) as IdWireType sends it.
+// A UBIGINT beyond BIGINT fails the read by name, never wrapping to a
+// negative ID.
+std::string IdExpression(const std::string &column, const LogicalType &type) {
+	if (type.id() == LogicalTypeId::UBIGINT) {
+		return "CASE WHEN " + column + " > 9223372036854775807::UBIGINT THEN error('" + column + " ' || " + column +
+		       "::VARCHAR || ' is beyond BIGINT, the widest integer ID skb-arrow takes; cast the IDs to VARCHAR') "
+		       "ELSE " +
+		       column + "::BIGINT END";
+	}
+	return column + "::" + IdWireType(type).ToString();
+}
+
 // miint's condensed (sample_a, sample_b, distance) relation, as skb-arrow's
 // distance table (id_a, id_b, distance DOUBLE). The cast absorbs DECIMAL and
 // HUGEINT distances, which skb-arrow refuses.
 SkbArrowInput DistanceInput(ClientContext &context, const std::string &function, const std::string &table,
                             const std::string &relation) {
-	// Columns, castability, and one id type across sample_a and sample_b.
-	ProbeDistanceTableIdType(context, relation, function);
-	LogicalType id_type = LogicalType::VARCHAR;
-	const auto columns = GetTableOrViewColumns(context, relation, "distance-table");
-	for (idx_t i = 0; i < columns.names.size(); i++) {
-		if (StringUtil::Lower(columns.names[i]) == "sample_a") {
-			id_type = columns.types[i];
-		}
+	// Columns, castability, and one output id type across sample_a and sample_b.
+	LogicalType sample_a_type;
+	LogicalType sample_b_type;
+	ProbeDistanceTableIdType(context, relation, function, nullptr, &sample_a_type, &sample_b_type);
+	// Each column goes as its own kind of ID, so they must be one kind: an
+	// INTEGER beside a VARCHAR would otherwise read '007' as 7.
+	if (IdWireType(sample_a_type) != IdWireType(sample_b_type)) {
+		throw BinderException(function + ": distance-table '" + relation + "' has sample_a " +
+		                      sample_a_type.ToString() + " and sample_b " + sample_b_type.ToString() +
+		                      ", which skb-arrow takes as different kinds of ID (integer and text); cast both to "
+		                      "one type in a view");
 	}
-	const std::string id = IdWireType(id_type).ToString();
 	return {table, relation,
-	        "SELECT sample_a::" + id + " AS id_a, sample_b::" + id + " AS id_b, distance::DOUBLE AS distance FROM " +
+	        "SELECT " + IdExpression("sample_a", sample_a_type) + " AS id_a, " +
+	            IdExpression("sample_b", sample_b_type) + " AS id_b, distance::DOUBLE AS distance FROM " +
 	            SQLIdentifier::ToString(relation)};
 }
 
@@ -445,21 +468,12 @@ SkbArrowInput DistanceInput(ClientContext &context, const std::string &function,
 SkbArrowInput FeatureTableInput(ClientContext &context, const std::string &function, const std::string &relation,
                                 LogicalType &feature_id_type) {
 	// Columns and castability.
-	ProbeFeatureTableIdType(context, relation, function);
-	LogicalType sample_id_type = LogicalType::VARCHAR;
-	const auto columns = GetTableOrViewColumns(context, relation, "feature-table");
-	for (idx_t i = 0; i < columns.names.size(); i++) {
-		const auto name = StringUtil::Lower(columns.names[i]);
-		if (name == "sample_id") {
-			sample_id_type = columns.types[i];
-		} else if (name == "feature_id") {
-			feature_id_type = columns.types[i];
-		}
-	}
+	LogicalType sample_id_type;
+	ProbeFeatureTableIdType(context, relation, function, &sample_id_type, &feature_id_type);
 	return {"table", relation,
-	        "SELECT sample_id::" + IdWireType(sample_id_type).ToString() +
-	            " AS sample_id, feature_id::" + IdWireType(feature_id_type).ToString() +
-	            " AS feature_id, value::DOUBLE AS value FROM " + SQLIdentifier::ToString(relation)};
+	        "SELECT " + IdExpression("sample_id", sample_id_type) + " AS sample_id, " +
+	            IdExpression("feature_id", feature_id_type) + " AS feature_id, value::DOUBLE AS value FROM " +
+	            SQLIdentifier::ToString(relation)};
 }
 
 // The type a metadata covariate is sent as. skb-arrow takes booleans, integers,
@@ -544,7 +558,7 @@ SkbArrowInput MetadataInput(ClientContext &context, const std::string &function,
 		throw BinderException(function + ": metadata '" + relation + "' has no sample_id column");
 	}
 	return {"metadata", relation,
-	        "SELECT sample_id::" + IdWireType(*sample_id_type).ToString() + " AS sample_id" + covariates + " FROM " +
+	        "SELECT " + IdExpression("sample_id", *sample_id_type) + " AS sample_id" + covariates + " FROM " +
 	            SQLIdentifier::ToString(relation)};
 }
 

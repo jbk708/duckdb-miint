@@ -53,6 +53,33 @@ SELECT * FROM skb_mantel('x', 'y', threads := -1);
 ----
 skb_mantel: threads must be >= 0
 
+# sample_a and sample_b must hold one kind of ID, whichever column comes first.
+# An INTEGER sample_a beside a VARCHAR or DOUBLE sample_b would read sample_b as
+# integers: '007' as 7, 1.5 as 2, merging distinct samples.
+statement ok
+CREATE TABLE x_int_text AS SELECT 1 AS sample_a, '007' AS sample_b, 1.0::DOUBLE AS distance;
+
+statement error
+SELECT * FROM skb_mantel('x_int_text', 'y');
+----
+skb_mantel: distance-table 'x_int_text' has sample_a INTEGER and sample_b VARCHAR
+
+statement ok
+CREATE TABLE x_text_int AS SELECT '007' AS sample_a, 1 AS sample_b, 1.0::DOUBLE AS distance;
+
+statement error
+SELECT * FROM skb_mantel('x', 'x_text_int');
+----
+skb_mantel: distance-table 'x_text_int' has sample_a VARCHAR and sample_b INTEGER
+
+statement ok
+CREATE TABLE x_int_double AS SELECT 1 AS sample_a, 1.5::DOUBLE AS sample_b, 1.0::DOUBLE AS distance;
+
+statement error
+SELECT * FROM skb_mantel('x_int_double', 'y');
+----
+skb_mantel: distance-table 'x_int_double' has sample_a INTEGER and sample_b DOUBLE
+
 # skb-arrow checks params, so a bad one fails only when the query runs. EXPLAIN
 # binds without running: it succeeds, proving Bind starts no host.
 statement ok
@@ -171,6 +198,28 @@ query II
 SELECT statistic = 0.9849397709505465::DOUBLE, n FROM skb_mantel('x_int', 'y_int');
 ----
 true	4
+
+# UBIGINT IDs go as BIGINT. One beyond BIGINT's range is refused by name,
+# never wrapped to a negative ID.
+statement ok
+CREATE TABLE x_ubigint AS SELECT sample_a::UBIGINT AS sample_a, sample_b::UBIGINT AS sample_b, distance FROM x_int;
+
+statement ok
+CREATE TABLE y_ubigint AS SELECT sample_a::UBIGINT AS sample_a, sample_b::UBIGINT AS sample_b, distance FROM y_int;
+
+query II
+SELECT statistic = 0.9849397709505465::DOUBLE, n FROM skb_mantel('x_ubigint', 'y_ubigint');
+----
+true	4
+
+statement ok
+CREATE TABLE y_ubigint_over AS SELECT sample_a,
+    CASE WHEN sample_b = 4 THEN 9223372036854775808::UBIGINT ELSE sample_b END AS sample_b, distance FROM y_ubigint;
+
+statement error
+SELECT * FROM skb_mantel('x_ubigint', 'y_ubigint_over');
+----
+<REGEX>:Invalid Input Error: skb_mantel: cannot read 'y_ubigint_over': .*sample_b 9223372036854775808 is beyond BIGINT.*cast.*VARCHAR.*
 
 # A square matrix (both orientations and the diagonal) is not condensed:
 # skb-arrow refuses its self pairs. Filtered to the upper triangle, it works.
