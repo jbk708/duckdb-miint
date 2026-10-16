@@ -408,6 +408,24 @@ FROM read_gff('__TEST_DIR__/blank_lines.gff') ORDER BY position;
 ctg1	INTEGER	INTEGER	NULL	DOUBLE	+	VARCHAR	NULL	INTEGER	g1	MAP(VARCHAR, VARCHAR)	VARCHAR
 ctg1	INTEGER	INTEGER	2.5	DOUBLE	NULL	VARCHAR	1	INTEGER	g2	MAP(VARCHAR, VARCHAR)	VARCHAR
 
+# --- A field that is present but not a number ---
+#
+# Start and end must be integers, and score and phase numbers or '.'. A line that breaks
+# this is malformed, so it fails the scan even when no number is read (COUNT(*)), instead
+# of being counted as a feature and failing only when its position is selected.
+foreach bad E'ctg1\tsrc\tgene\tabc\t50\t.\t+\t.\tID=g1' E'ctg1\tsrc\tgene\t1\t5O\t.\t+\t.\tID=g1' E'ctg1\tsrc\tgene\t1\t50\thigh\t+\t.\tID=g1' E'ctg1\tsrc\tCDS\t1\t50\t.\t+\tx\tID=g1'
+
+statement ok
+COPY (SELECT * FROM (VALUES (E'ctg1\tsrc\tgene\t1\t50\t1e3\t+\t0\tID=g0'), (${bad})) t(line))
+TO '__TEST_DIR__/not_a_number.gff' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT COUNT(*) FROM read_gff('__TEST_DIR__/not_a_number.gff');
+----
+malformed GFF feature line (start, end, score or phase is not a number)
+
+endloop
+
 # --- '#' and '"' inside a line ---
 #
 # GFF3 has no end-of-line comments, and a seqid must escape '#', so only a line that starts

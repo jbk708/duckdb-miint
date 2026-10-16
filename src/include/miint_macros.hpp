@@ -96,6 +96,14 @@ const std::string READ_GFF = // NOLINT
     "          OR column7 IS NULL "
     "        THEN error(printf('read_gff: malformed GFF feature line "
     "(expected 9 tab-separated fields, found fewer): %s', column0)) "
+    // Every field is present from here. Start and end must be integers, score and phase a
+    // number or '.', so that the casts in the columns above cannot fail and a line that would
+    // fail them is refused whichever columns the query reads.
+    "        WHEN TRY_CAST(column3 AS INTEGER) IS NULL OR TRY_CAST(column4 AS INTEGER) IS NULL "
+    "          OR (column5 <> '.' AND TRY_CAST(column5 AS DOUBLE) IS NULL) "
+    "          OR (column7 <> '.' AND TRY_CAST(column7 AS INTEGER) IS NULL) "
+    "        THEN error(printf('read_gff: malformed GFF feature line (start, end, score or phase is not "
+    "a number): %s %s %s %s %s %s', column0, column2, column3, column4, column5, column7)) "
     "        ELSE TRUE "
     "    END AS keep "
     "  FROM read_csv(path, "
