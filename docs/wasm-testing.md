@@ -182,14 +182,26 @@ including ones that work in the playground.
 
 ### Adding steps
 
-A step is `{"name", "sql", "expect"}` with a unique name; steps run in order on
-one connection, and a step without `expect` (setup) only has to succeed. Make a checked step return one
-VARCHAR cell (an `md5` over an ordered `string_agg` for anything bigger), so both
-runtimes print it the same way. Take `expect` from a native build:
+A step has a unique `name` and its `sql`, and runs in order on one connection.
+It checks one of three things:
+
+- `expect`: the first cell of its first row equals this. Make the step return
+  one VARCHAR cell (an `md5` over an ordered `string_agg` for anything bigger),
+  so both runtimes print it the same way.
+- `expect_error`: it fails with an error containing this text, and the database
+  still answers afterwards.
+- neither (setup): it succeeds.
+
+Take `expect` from a native build, which runs the same steps:
 
 ```bash
-./scripts/test_wasm_browser.sh --native   # build/release/duckdb, same steps
+./scripts/test_wasm_browser.sh --native   # build/release/duckdb
 ```
+
+The committed steps do not yet include one that fails when the Rust glue is
+built with JS exceptions: the rype extract functions they cover work either way,
+in the v1.5.5 release too. Until the sample-classifier cross-validation steps
+arrive (#277), check 4 in Level 2 is what fails without wasm-native exceptions.
 
 ## CI Integration
 

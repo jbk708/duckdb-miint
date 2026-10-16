@@ -10,11 +10,12 @@
 // --native runs the same steps in a native shell, which is how the expected
 // values are produced and kept honest.
 //
-// A step is {name, sql, expect?}, and names are unique. Steps run in order on
-// one connection. A step with `expect` must return it as the first cell of its
-// first row; cast the result to VARCHAR in the SQL so both runtimes print it the
-// same way. A step without `expect` (setup) must only succeed. The run passes
-// only when every step ran and passed.
+// A step is {name, sql, expect?, expect_error?}, and names are unique. Steps run
+// in order on one connection. A step with `expect` must return it as the first
+// cell of its first row; cast the result to VARCHAR in the SQL so both runtimes
+// print it the same way. A step with `expect_error` must fail with an error
+// containing that text and leave the database answering. A step with neither
+// (setup) must only succeed. The run passes only when every step ran and passed.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -32,6 +33,14 @@ for (const s of steps) {
     console.error(`steps.json: every step needs a string name and sql: ${JSON.stringify(s).slice(0, 120)}`);
     process.exit(2);
   }
+  if (s.expect !== undefined && s.expect_error !== undefined) {
+    console.error(`steps.json: step '${s.name}' has both expect and expect_error`);
+    process.exit(2);
+  }
+  if (s.expect_error !== undefined && (typeof s.expect_error !== 'string' || s.expect_error === '')) {
+    console.error(`steps.json: step '${s.name}' needs a non-empty string expect_error`);
+    process.exit(2);
+  }
   if (names.has(s.name)) {
     console.error(`steps.json: duplicate step name '${s.name}'`);
     process.exit(2);
@@ -45,24 +54,38 @@ for (const s of steps) {
 let passed = 0;
 let failed = 0;
 let aborted = null;
+// r is {ok, value} or {ok: false, error, alive}.
 function report(step, r) {
-  if (!r.ok) {
-    failed++;
-    console.log(`FAIL ${step.name}: ${r.error}`);
+  let why = null;
+  if (step.expect_error !== undefined) {
+    if (r.ok) why = `expected an error containing "${step.expect_error}", but the step succeeded`;
+    else if (!r.error.includes(step.expect_error)) why = `expected an error containing "${step.expect_error}", got: ${r.error}`;
+    else if (!r.alive) why = `failed as expected, but the database no longer answers: ${r.error}`;
+  } else if (!r.ok) {
+    why = r.error;
   } else if (step.expect !== undefined && r.value !== step.expect) {
-    failed++;
-    console.log(`FAIL ${step.name}:\n  expected ${step.expect}\n  got      ${r.value}`);
-  } else {
+    why = `\n  expected ${step.expect}\n  got      ${r.value}`;
+  }
+  if (why === null) {
     passed++;
     console.log(`ok   ${step.name}`);
+  } else {
+    failed++;
+    console.log(`FAIL ${step.name}: ${why}`.replace(': \n', ':\n'));
   }
 }
 
+// The shell prints an error's first line as "<Kind> Error: ...".
+const ERROR_LINE = /^[A-Za-z][A-Za-z ]*Error: /;
+
 function runNative(duckdb) {
-  // One shell session, with a marker before each step so its output can be told apart.
-  const script = steps.map(s => `.print @@step ${s.name}\n${s.sql.trim().replace(/;?$/, ';')}`).join('\n')
-    + '\n.print @@end\n';
-  const r = spawnSync(duckdb, ['-noheader', '-list', '-bail', ':memory:'], { input: script, encoding: 'utf8' });
+  // One shell session with a marker before each step. Its output goes to stderr
+  // (.output /dev/stderr), so each step's errors land between its markers in
+  // order. No -bail: a step expected to fail must not end the run, and a step
+  // that fails unexpectedly is reported without stopping the rest.
+  const script = '.output /dev/stderr\n'
+    + steps.map(s => `.print @@step ${s.name}\n${s.sql.trim().replace(/;?$/, ';')}`).join('\n') + '\n.print @@end\n';
+  const r = spawnSync(duckdb, ['-noheader', '-list', ':memory:'], { input: script, encoding: 'utf8' });
   if (r.error) {
     aborted = `could not run ${duckdb}: ${r.error.message}`;
     return;
@@ -70,21 +93,23 @@ function runNative(duckdb) {
   const out = new Map();
   let cur = null;
   let ended = false;
-  for (const line of r.stdout.split('\n')) {
+  for (const line of r.stderr.split('\n')) {
     const m = line.match(/^@@step (.*)$/);
     if (m) { cur = m[1]; out.set(cur, []); } else if (line === '@@end') { ended = true; cur = null; } else if (cur) out.get(cur).push(line);
   }
-  const clean = ended && r.status === 0;
-  const last = [...out.keys()].at(-1);
-  for (const s of steps) {
+  const started = [...out.keys()];
+  const stopped = `shell stopped (${r.signal ? `signal ${r.signal}` : `status ${r.status}`})`;
+  for (const [i, s] of steps.entries()) {
     if (!out.has(s.name)) break;
-    // With -bail the shell stops at the first error, so a failure belongs to the
-    // last step it started.
-    report(s, !clean && s.name === last
-      ? { ok: false, error: `shell exited ${r.status}: ${r.stderr.trim() || '(no message)'}` }
-      : { ok: true, value: out.get(s.name)[0] ?? null });
+    const lines = out.get(s.name);
+    // The shell went on to another step or the end marker, so it still answers.
+    const alive = ended || i < started.length - 1;
+    const at = lines.findIndex(l => ERROR_LINE.test(l));
+    if (at >= 0) report(s, { ok: false, error: lines.slice(at).join('\n').trim(), alive });
+    else if (!alive) report(s, { ok: false, error: `${stopped} during this step`, alive });
+    else report(s, { ok: true, value: lines[0] ?? null });
   }
-  if (!clean && out.size === 0) aborted = `shell exited ${r.status} before the first step: ${r.stderr.trim() || '(no message)'}`;
+  if (out.size === 0) aborted = `${stopped} before the first step: ${r.stdout.trim() || '(no message)'}`;
 }
 
 async function runWasm(wasmFile, chrome) {
@@ -125,7 +150,7 @@ async function runWasm(wasmFile, chrome) {
       const before = log.length;
       const r = await page.evaluate(q => window.__step(q), s.sql);
       report(s, r);
-      if (!r.ok) {
+      if (!r.ok && !(s.expect_error !== undefined && r.alive)) {
         const worker = log.slice(before).filter(l => l.trim());
         if (worker.length) console.log(worker.slice(0, 12).map(l => `  [worker] ${l}`).join('\n'));
         if (!r.alive) {
