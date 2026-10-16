@@ -82,5 +82,14 @@ if ! node -e '
     npm ci --prefix "$DRIVER_DIR" --ignore-scripts --no-audit --no-fund
 fi
 
+# The DuckDB version the extension targets, from the same workflow input
+# scripts/check-duckdb-version.sh treats as canonical.
+DUCKDB_VERSION="$(grep -oE '^[[:space:]]*duckdb_version:[[:space:]]*v?[0-9]+\.[0-9]+\.[0-9]+' \
+    "$REPO_DIR/.github/workflows/MainDistributionPipeline.yml" | head -1 | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+if [ -z "$DUCKDB_VERSION" ]; then
+    echo "ERROR: no duckdb_version input in .github/workflows/MainDistributionPipeline.yml"
+    exit 1
+fi
+
 echo "=== Browser check: $WASM_FILE ==="
-exec node "$DRIVER_DIR/driver.mjs" --wasm "$WASM_FILE" --chrome "$CHROME"
+exec node "$DRIVER_DIR/driver.mjs" --wasm "$WASM_FILE" --chrome "$CHROME" --duckdb-version "$DUCKDB_VERSION"

@@ -5,6 +5,8 @@
 // The playground's boot sequence (the-miint.github.io, docs/playground.md):
 // same duckdb-wasm version, selectBundle(getJsDelivrBundles()), a Blob worker,
 // instantiate(mainModule, pthreadWorker), open({allowUnsignedExtensions}).
+// The pin below must run the DuckDB core the extension targets; docs/UPDATING.md
+// bumps it with DuckDB.
 import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev64.0/+esm';
 
 let conn = null;
@@ -16,7 +18,7 @@ const fmt = v => (v === null || v === undefined ? 'NULL' : String(v));
 
 // The extension is built for the eh bundle (wasm_eh), which the playground gets
 // on a page without cross-origin isolation; any other bundle is a different test.
-async function boot() {
+async function boot(expectedVersion) {
   const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
   if (!/\/duckdb-eh\.wasm$/.test(bundle.mainModule)) throw new Error(`expected eh bundle, got ${bundle.mainModule}`);
   const workerUrl = URL.createObjectURL(
@@ -29,12 +31,16 @@ async function boot() {
   const platform = (await conn.query('PRAGMA platform')).toArray()[0].platform;
   if (platform !== 'wasm_eh') throw new Error(`expected platform wasm_eh, got ${platform}`);
   const v = (await conn.query('SELECT library_version, source_id FROM pragma_version()')).toArray()[0];
+  if (v.library_version !== expectedVersion) {
+    throw new Error(`duckdb-wasm runs DuckDB ${v.library_version}, but the extension targets ${expectedVersion}; `
+      + 'bump the @duckdb/duckdb-wasm pin in scripts/wasm_browser/index.html');
+  }
   return { ok: true, mainModule: bundle.mainModule, platform, version: `${v.library_version} @ ${v.source_id}` };
 }
 
-window.__boot = async () => {
+window.__boot = async expectedVersion => {
   try {
-    return await withTimeout(boot(), 120000, 'boot');
+    return await withTimeout(boot(expectedVersion), 120000, 'boot');
   } catch (e) {
     return { ok: false, error: String(e && e.message || e) };
   }

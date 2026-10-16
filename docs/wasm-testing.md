@@ -163,14 +163,15 @@ playground uses.
 ./scripts/test_wasm_browser.sh path/to/miint.duckdb_extension.wasm
 ```
 
-It boots duckdb-wasm in headless Chrome the way the playground does
-(`@duckdb/duckdb-wasm@1.33.1-dev64.0`, `selectBundle`, the eh bundle,
-`allowUnsignedExtensions`), serves the extension with no cross-origin isolation
-headers, like GitHub Pages, `LOAD`s it, and runs
+It boots duckdb-wasm in headless Chrome the way the playground does (the
+`@duckdb/duckdb-wasm` release pinned in `scripts/wasm_browser/index.html`,
+`selectBundle`, the eh bundle, `allowUnsignedExtensions`), serves the extension
+with no cross-origin isolation headers, like GitHub Pages, `LOAD`s it, and runs
 `scripts/wasm_browser/steps.json`. Each step with an `expect` must return that
 value. The run passes only when every step ran and passed; a mismatch, an
-error, a step left unrun because the database died, or duckdb-wasm picking a
-bundle other than eh fails it.
+error, a step left unrun because the database died, duckdb-wasm picking a
+bundle other than eh, or the pin running a DuckDB core other than the
+workflow's `duckdb_version` fails it.
 
 **This is the check for Rust code paths, not Level 3.** The load test links its
 own main module and JS glue from the `duckdb/` submodule, while the browser check

@@ -1,12 +1,14 @@
 // Run steps.json against the miint extension and compare each step to its
 // expected value.
 //
-//   node driver.mjs --wasm <miint.duckdb_extension.wasm> --chrome <chrome binary>
+//   node driver.mjs --wasm <miint.duckdb_extension.wasm> --chrome <chrome binary> --duckdb-version <vX.Y.Z>
 //   node driver.mjs --native <duckdb shell with miint built in>
 //
 // --wasm boots duckdb-wasm in headless Chrome the way the playground does
 // (index.html), serving the page and the extension with no COOP/COEP headers,
 // like GitHub Pages, so duckdb-wasm picks the same bundle the playground gets.
+// --duckdb-version is the core the extension targets; the run fails if the
+// pinned duckdb-wasm reports another.
 // --native runs the same steps in a native shell. That is where expected values
 // come from: after adding a step or bumping rype or sc, run it by hand and update
 // any `expect` that changed.
@@ -117,7 +119,7 @@ function runNative(duckdb) {
   if (out.size === 0) aborted = `${stopped} before the first step: ${r.stdout.trim() || '(no message)'}`;
 }
 
-async function runWasm(wasmFile, chrome) {
+async function runWasm(wasmFile, chrome, duckdbVersion) {
   const { default: puppeteer } = await import('puppeteer-core');
   const files = { '/': [path.join(here, 'index.html'), 'text/html'],
                   '/miint.duckdb_extension.wasm': [wasmFile, 'application/wasm'] };
@@ -138,7 +140,7 @@ async function runWasm(wasmFile, chrome) {
     page.on('workercreated', w => w.on('console', m => log.push(m.text())));
     await page.goto(`${base}/`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.__ready === true, { timeout: 120_000 });
-    const boot = await page.evaluate(() => window.__boot());
+    const boot = await page.evaluate(v => window.__boot(v), duckdbVersion);
     if (!boot.ok) {
       aborted = `boot: ${boot.error}`;
       return;
@@ -170,9 +172,9 @@ async function runWasm(wasmFile, chrome) {
 }
 
 if (args.native) runNative(args.native);
-else if (args.wasm && args.chrome) await runWasm(args.wasm, args.chrome);
+else if (args.wasm && args.chrome && args['duckdb-version']) await runWasm(args.wasm, args.chrome, args['duckdb-version']);
 else {
-  console.error('usage: driver.mjs --wasm <file> --chrome <binary> | --native <duckdb>');
+  console.error('usage: driver.mjs --wasm <file> --chrome <binary> --duckdb-version <vX.Y.Z> | --native <duckdb>');
   process.exit(2);
 }
 const notRun = steps.length - passed - failed;
