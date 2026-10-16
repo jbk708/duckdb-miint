@@ -7,8 +7,9 @@
 // --wasm boots duckdb-wasm in headless Chrome the way the playground does
 // (index.html), serving the page and the extension with no COOP/COEP headers,
 // like GitHub Pages, so duckdb-wasm picks the same bundle the playground gets.
-// --native runs the same steps in a native shell, which is how the expected
-// values are produced and kept honest.
+// --native runs the same steps in a native shell. That is where expected values
+// come from: after adding a step or bumping rype or sc, run it by hand and update
+// any `expect` that changed.
 //
 // A step is {name, sql, expect?, expect_error?}, and names are unique. Steps run
 // in order on one connection. A step with `expect` must return it as the first
@@ -31,6 +32,10 @@ const names = new Set();
 for (const s of steps) {
   if (typeof s.name !== 'string' || typeof s.sql !== 'string') {
     console.error(`steps.json: every step needs a string name and sql: ${JSON.stringify(s).slice(0, 120)}`);
+    process.exit(2);
+  }
+  if (!/^[A-Za-z0-9_.-]+$/.test(s.name)) {
+    console.error(`steps.json: step name '${s.name}' may use only letters, digits, '_', '.' and '-'`);
     process.exit(2);
   }
   if (s.expect !== undefined && s.expect_error !== undefined) {
@@ -126,8 +131,7 @@ async function runWasm(wasmFile, chrome) {
   await new Promise(r => server.once('listening', r));
   const base = `http://127.0.0.1:${server.address().port}`;
 
-  const browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ['--no-sandbox'],
-                                           protocolTimeout: 900_000 });
+  const browser = await puppeteer.launch({ executablePath: chrome, headless: true, protocolTimeout: 900_000 });
   try {
     const page = await browser.newPage();
     const log = [];
@@ -139,7 +143,7 @@ async function runWasm(wasmFile, chrome) {
       aborted = `boot: ${boot.error}`;
       return;
     }
-    console.log(`duckdb-wasm ${boot.version}, bundle ${boot.mainModule}`);
+    console.log(`duckdb-wasm ${boot.version}, platform ${boot.platform}, bundle ${boot.mainModule}`);
     const load = await page.evaluate(u => window.__load(u), `${base}/miint.duckdb_extension.wasm`);
     if (!load.ok) {
       aborted = `LOAD: ${load.error}`;

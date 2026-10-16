@@ -26,8 +26,10 @@ async function boot() {
   URL.revokeObjectURL(workerUrl);
   await db.open({ allowUnsignedExtensions: true });
   conn = await db.connect();
+  const platform = (await conn.query('PRAGMA platform')).toArray()[0].platform;
+  if (platform !== 'wasm_eh') throw new Error(`expected platform wasm_eh, got ${platform}`);
   const v = (await conn.query('SELECT library_version, source_id FROM pragma_version()')).toArray()[0];
-  return { ok: true, mainModule: bundle.mainModule, version: `${v.library_version} @ ${v.source_id}` };
+  return { ok: true, mainModule: bundle.mainModule, platform, version: `${v.library_version} @ ${v.source_id}` };
 }
 
 window.__boot = async () => {
