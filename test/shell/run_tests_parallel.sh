@@ -110,6 +110,24 @@ ok=0
 report "a crashing C++ test binary fails the run" \
     "a signal is a negative exit status in Python, and a check for a positive one would pass a segfault" "$ok"
 
+root spill_dir
+printf "query I\nSELECT current_setting('temp_directory') = '__TEST_DIR__/spill';\n----\ntrue\n" \
+    > "$ROOT/test/sql/spill.test"
+invoke "$CPP_OK"
+ok=0
+[[ $EXIT -eq 0 ]] && ran_once ok spill.test && ok=1
+report "each SQL process spills into its own test directory" \
+    "workers share a working directory, and two DuckDB processes spilling to its .tmp overwrite and delete each other's files" "$ok"
+
+root odd_name
+pass_test > "$ROOT/test/sql/fine.test"
+pass_test > "$ROOT/test/sql/fine.test,odd.test"
+invoke "$CPP_OK"
+ok=0
+[[ $EXIT -ne 0 && "$OUT" == *"test/sql/fine.test,odd.test"* ]] && ok=1
+report "a file name that selects another file fails the run" \
+    "Catch2 reads a comma in a name as 'or': this name runs fine.test, and only -w NoTests turns the miss into a failure" "$ok"
+
 root no_match
 pass_test > "$ROOT/test/sql/present.test"
 invoke "$CPP_OK" "test/sql/absent*"

@@ -14,6 +14,7 @@ job's output, and it reports skips per reason as the serial pass does.
 import argparse
 import collections
 import concurrent.futures
+import os
 import re
 import subprocess
 import sys
@@ -23,9 +24,9 @@ CPP_JOB = "C++ tests"
 SKIP_HEADER = "Skipped tests for the following reasons:"
 
 
-def run(name, cmd):
+def run(name, cmd, env=None):
     start = time.monotonic()
-    proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     return name, proc.returncode, proc.stdout.decode(errors="replace"), time.monotonic() - start
 
 
@@ -70,8 +71,17 @@ def main():
         # unittest itself exits 0 on "No tests ran".
         sys.exit(f"error: {args.spec} matches no test file")
 
-    # -w NoTests: a file that matches nothing fails instead of passing as "No tests ran".
-    jobs = [(CPP_JOB, [args.cpp_tests])] + [(f, unittest + ["-w", "NoTests", f]) for f in files]
+    # An in-memory database spills to .tmp under the working directory, which every worker
+    # shares. Spill files carry no process id, and closing a database deletes every
+    # duckdb_temp_* file in its directory, so two workers there corrupt each other. on_init
+    # runs on each connection and expands __TEST_DIR__ to the process's own directory.
+    sql_env = dict(os.environ)
+    sql_env["DUCKDB_TEST_ON_INIT"] = ";".join(
+        filter(None, [os.environ.get("DUCKDB_TEST_ON_INIT"), "SET temp_directory='__TEST_DIR__/spill'"])
+    )
+
+    # -w NoTests: a name that matches nothing fails instead of passing as "No tests ran".
+    jobs = [(CPP_JOB, [args.cpp_tests], None)] + [(f, unittest + ["-w", "NoTests", f], sql_env) for f in files]
     print(f"Running {len(files)} SQL test files and the C++ tests on {args.jobs} workers...", flush=True)
 
     failed = []
@@ -80,7 +90,7 @@ def main():
     assertions = 0
     cpp_summary = ""
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
-        futures = [pool.submit(run, name, cmd) for name, cmd in jobs]
+        futures = [pool.submit(run, name, cmd, env) for name, cmd, env in jobs]
         try:
             for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 name, code, output, seconds = future.result()

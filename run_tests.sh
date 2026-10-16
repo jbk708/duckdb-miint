@@ -622,7 +622,7 @@ fi
 # either way. Unset, as in CI, it is 1: the serial pass below, unchanged.
 MIINT_TEST_JOBS="${MIINT_TEST_JOBS:-1}"
 case "$MIINT_TEST_JOBS" in
-    '' | *[!0-9]* | 0)
+    '' | *[!0-9]* | 0*)
         echo "ERROR: MIINT_TEST_JOBS must be a positive integer, got '$MIINT_TEST_JOBS'" >&2
         exit 1
         ;;
