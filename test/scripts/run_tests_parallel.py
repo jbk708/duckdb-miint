@@ -7,7 +7,8 @@ the spec `make test` passes it, test/*, this script's default. Each runs in its 
 unittest process, and so gets its own __TEST_DIR__, which unittest names by process id.
 The C++ binary is one more job, queued first because it is the longest.
 
-Every job runs to completion. The run fails if any job failed, after printing each failed
+One job's failure does not stop the others, and a job still running after --timeout seconds
+is killed and counts as failed. The run fails if any job failed, after printing each failed
 job's output, and it reports skips per reason as the serial pass does.
 """
 
@@ -33,8 +34,8 @@ def run(name, cmd, env, timeout):
         )
         code, output = proc.returncode, proc.stdout
     except subprocess.TimeoutExpired as expired:
-        # run() has already killed the job. A deadlocked test (#318) would otherwise stall
-        # the whole run with nothing printed.
+        # subprocess.run has killed the job's own process, though not any process it started
+        # (docs/testing.md says why the limit exists).
         code, output = None, expired.stdout or b""
     return name, code, output.decode(errors="replace"), time.monotonic() - start
 
@@ -59,10 +60,15 @@ def main():
     parser.add_argument("--unittest", required=True, help="DuckDB's unittest binary")
     parser.add_argument("--cpp-tests", required=True, help="miint's Catch2 test binary")
     parser.add_argument(
-        "--timeout", type=int, default=600, help="seconds a job may run before it is killed and fails (default 600)"
+        "--timeout",
+        type=int,
+        default=600,
+        help="seconds a job may run before it is killed and fails (default %(default)s)",
     )
     parser.add_argument("--test-dir", help="passed to unittest, which registers the .test files under DIR/test")
-    parser.add_argument("spec", nargs="?", default="test/*", help="unittest test spec (default: test/*, as make test)")
+    parser.add_argument(
+        "spec", nargs="?", default="test/*", help="unittest test spec (default: %(default)s, as make test)"
+    )
     args = parser.parse_args()
     if args.jobs < 1 or args.timeout < 1:
         parser.error("--jobs and --timeout must be at least 1")
@@ -111,8 +117,7 @@ def main():
         try:
             for done, future in enumerate(concurrent.futures.as_completed(futures), 1):
                 name, code, output, seconds = future.result()
-                # A signal is a negative return code and a timeout is None, so test for
-                # nonzero, not positive.
+                # A signal is a negative return code, so test for nonzero, not positive.
                 if code != 0:
                     status = "FAIL"
                     failed.append((name, code, output))

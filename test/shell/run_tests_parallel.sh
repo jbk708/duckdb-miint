@@ -1,8 +1,9 @@
 #!/bin/bash
 # Scenario tests for test/scripts/run_tests_parallel.py, the runner behind
 # `MIINT_TEST_JOBS=N bash run_tests.sh`. It must run exactly the files the serial pass runs,
-# fail the run on any failure it can see, and report what the serial pass reports; each
-# scenario says which part of that it pins and why.
+# fail the run on any failure it can see (a hang included), report what the serial pass
+# reports, and give each job what it needs to run beside the others; each scenario says
+# which part of that it pins and why.
 #
 # Scenarios run the real unittest binary against a throwaway test root (unittest's
 # --test-dir) holding generated .test files, so no fixture sits under this repository's
@@ -38,10 +39,11 @@ printf '#!/bin/sh\nkill -KILL $$\n' > "$CPP_KILLED"
 # A unittest whose listing dies after one name, as a crash partway through would.
 UNITTEST_DIES="$TMP_ROOT/bin/unittest_dies"
 printf '#!/bin/sh\necho test/sql/listed.test\nkill -KILL $$\n' > "$UNITTEST_DIES"
-# A C++ binary that hangs, as a deadlocked test does; it records its pid so the scenario can
-# check it was killed.
+# A C++ binary that prints a line and then hangs, as a deadlocked test does. It records its
+# pid, and exec keeps that pid for the sleep, so the pid the scenario checks is the process
+# the runner must kill.
 CPP_HANGS="$TMP_ROOT/bin/cpp_hangs"
-printf '#!/bin/sh\necho $$ > "%s"\nexec sleep 30\n' "$TMP_ROOT/cpp_hangs.pid" > "$CPP_HANGS"
+printf '#!/bin/sh\necho "hang marker"\necho $$ > "%s"\nexec sleep 60\n' "$TMP_ROOT/cpp_hangs.pid" > "$CPP_HANGS"
 chmod +x "$CPP_HANGS"
 # A unittest that lists one file and passes it only if the job sees EXPECT_RUST_MIN_STACK.
 UNITTEST_STACK="$TMP_ROOT/bin/unittest_stack"
@@ -131,17 +133,20 @@ ok=0
 report "a C++ binary killed by a signal fails the run, and the queued files still run" \
     "a signal is a negative exit status in Python, which a check for a positive one passes; and one failure must not hide the rest" "$ok"
 
+# One worker, as in cpp_killed: the files are queued behind the hanging C++ job, so they run
+# only if the timeout lets the run go on.
 root hang
-for f in a b; do pass_test > "$ROOT/test/sql/$f.test"; done
+for f in a b c; do pass_test > "$ROOT/test/sql/$f.test"; done
 started=$SECONDS
-invoke "$CPP_HANGS" --timeout 2
+invoke "$CPP_HANGS" --jobs 1 --timeout 5
 elapsed=$((SECONDS - started))
 ok=0
-[[ $EXIT -ne 0 && $elapsed -lt 20 && "$OUT" == *"C++ tests (timed out after 2s)"* ]] &&
-    grep -qE '^\[[0-9]+/[0-9]+\] +FAIL .*C\+\+ tests' <<< "$OUT" && ran_once ok a.test && ran_once ok b.test &&
-    ! kill -0 "$(cat "$TMP_ROOT/cpp_hangs.pid")" 2> /dev/null && ok=1
-report "a job past the timeout is killed and fails the run, and the others still run" \
-    "a deadlocked test otherwise stalls the run with no output, and a job left running holds the box" "$ok"
+[[ $EXIT -ne 0 && $elapsed -lt 40 && "$OUT" == *"C++ tests (timed out after 5s)"* && "$OUT" == *"hang marker"* ]] &&
+    grep -qE '^\[[0-9]+/[0-9]+\] +FAIL .*C\+\+ tests' <<< "$OUT" &&
+    ran_once ok a.test && ran_once ok b.test && ran_once ok c.test &&
+    [[ -s "$TMP_ROOT/cpp_hangs.pid" ]] && ! kill -0 "$(cat "$TMP_ROOT/cpp_hangs.pid")" 2> /dev/null && ok=1
+report "a job past the timeout is killed and fails the run with its output, and the queued files still run" \
+    "a deadlocked test otherwise stalls the run before the summary and every failure's output, and a job left running keeps a worker busy" "$ok"
 
 root spill_dir
 printf "query I\nSELECT current_setting('temp_directory') = '__TEST_DIR__/spill';\n----\ntrue\n" \
