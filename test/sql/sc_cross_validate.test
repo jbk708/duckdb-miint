@@ -231,7 +231,7 @@ true	true
 # --- parameter_tuning ---
 
 # The inner search runs inside each training fold, so the held-out fold stays
-# unseen and the score stays honest.
+# unseen by it and the score is not fit to it.
 query II
 SELECT count(*), len(any_value(fold_scores)) FROM
   cross_validate_classifier('cv_counts', 'cv_stage', n_estimators := 5, n_folds := 2, random_state := 1,

@@ -187,9 +187,8 @@ void ScCooBuilder::SetFeatureVocabulary(std::vector<std::string> vocab) {
 
 void ScCooBuilder::Append(std::string_view sample_id, std::string_view feature_id, double value) {
 	// ------------------ samples ------------------
-	// Intern the sample first, unconditionally. A sample every one of whose
-	// features is unknown to the model still belongs in the output: it gets an
-	// all-zero row and a prediction, rather than silently vanishing.
+	// Intern the sample first, unconditionally: see Append's doc for the
+	// sample whose every feature is unknown.
 	const auto row = Intern(sample_index_, sample_ids_, sample_id);
 	// Intern hands out sequential indices, so the per-sample counters only ever
 	// need to grow by one.

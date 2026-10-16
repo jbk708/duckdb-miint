@@ -38,7 +38,7 @@ namespace duckdb {
 //! with sample_id compared as text (a BIGINT 10 before 2) and ties in model
 //! column order. That is the order rows are produced in, not
 //! a property DuckDB tracks: a plain SELECT or CREATE TABLE AS keeps it, joins
-//! and aggregates may not, and an outer ORDER BY simply re-sorts.
+//! and aggregates may not, and an outer ORDER BY re-sorts.
 //!
 //! SHAP is computed densely -- every class of every sample in a call, before any
 //! `top_k` filtering -- so samples are explained in batches and rows stream out

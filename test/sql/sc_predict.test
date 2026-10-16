@@ -346,6 +346,46 @@ SELECT * FROM predict('p_test', 'reg');
 ----
 SELECT * FROM predict('counts', 'reg', name := 'my_model');
 
+# A remedy is SQL to paste and run, so it quotes the relations it names: as an
+# identifier after FROM, as a string literal in a call. A bare splice of either
+# name below would not parse.
+statement ok
+CREATE TABLE "Joe's models" AS SELECT * FROM reg;
+
+statement error
+SELECT * FROM predict('p_test', 'Joe''s models');
+----
+SELECT name, task, n_estimators FROM "Joe's models";  -- see what is there
+
+statement error
+SELECT * FROM predict('p_test', 'Joe''s models');
+----
+SELECT * FROM predict('counts', 'Joe''s models', name := 'my_model');
+
+statement ok
+CREATE TABLE "wrong columns" AS SELECT sample_id AS s, feature_id, value FROM p_full;
+
+statement error
+SELECT * FROM predict('wrong columns', 'p_rmodel');
+----
+FROM "wrong columns";
+
+statement ok
+CREATE TABLE "int samples" AS SELECT 1::INTEGER AS sample_id, feature_id, value FROM p_full;
+
+statement error
+SELECT * FROM predict('int samples', 'p_rmodel');
+----
+Cast it first: CREATE VIEW v AS SELECT sample_id::BIGINT AS sample_id, feature_id, value FROM "int samples";
+
+statement ok
+CREATE TABLE "bigint features" AS SELECT sample_id, 1::BIGINT AS feature_id, value FROM p_full;
+
+statement error
+SELECT * FROM predict('bigint features', 'p_rmodel');
+----
+Cast it first: CREATE VIEW v AS SELECT sample_id, feature_id::VARCHAR AS feature_id, value FROM "bigint features";
+
 # The name is a value, never SQL. Only the literal comes from the caller and it
 # is escaped, so a quote cannot start a new clause -- which is why `name :=` is
 # safe where a general `where :=` would not be.

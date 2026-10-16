@@ -40,7 +40,7 @@ namespace duckdb {
 //! standard deviation q2 prints -- and `fold_scores` holds each fold's score, so
 //! `unnest(fold_scores)` shows the spread. All four are properties of the whole
 //! run, so they repeat on every row; `SELECT DISTINCT` collapses them. Two grains
-//! in one result because cross-validation fits `cv` forests: asking for the
+//! in one result because cross-validation fits `n_folds` forests: asking for the
 //! scores and the predictions separately would pay that cost twice.
 //!
 //! Scoring is the mean of the per-fold scores, not a pooled score over all
@@ -49,9 +49,9 @@ namespace duckdb {
 //!
 //! `parameter_tuning := true` searches the built-in hyperparameter grid inside
 //! each training fold and refits with the winner (q2's `parameter_tuning`). The
-//! search never sees the held-out fold, which is what keeps the score honest.
-//! Each training fold scores 20 candidates by an inner cv-fold CV, so tuning
-//! adds about 20 x cv^2 fits.
+//! search never sees the held-out fold, so the score is not fit to it. Each
+//! training fold scores 20 candidates by an inner `n_folds`-fold CV, so tuning
+//! adds about 20 x n_folds^2 fits.
 class ScCrossValidateFunction {
 public:
 	static void Register(ExtensionLoader &loader);

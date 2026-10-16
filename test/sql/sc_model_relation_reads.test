@@ -97,6 +97,20 @@ SELECT * FROM model_features('text_then_big');
 ----
 model_features: model relation 'text_then_big' changed between planning and execution: its feature_id_type was VARCHAR, now BIGINT
 
+# A model gone by execution is the same change: bind resolved one row, so no
+# other count can be the model the output columns were typed for.
+statement ok
+CREATE SEQUENCE s6;
+
+statement ok
+CREATE VIEW clf_then_none AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s6') = 1 THEN 'clf' ELSE 'gone' END);
+
+statement error
+SELECT * FROM predict('d', 'clf_then_none');
+----
+predict: model relation 'clf_then_none' changed between planning and execution: it selected one model, now 0
+
 # Bind reads a model relation once, for task and feature_id_type together, as
 # every read of a view re-runs it. EXPLAIN binds without executing, so the
 # sequence counts bind's reads alone: five calls, five reads.

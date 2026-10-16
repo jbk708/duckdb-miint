@@ -167,19 +167,22 @@ void RequireSameSamples(const std::vector<std::string> &data_samples, const std:
 		                       bind.data_relation.c_str(), bind.target_column.c_str(), sample_list(unlabelled).c_str());
 	}
 	if (!uncounted.empty()) {
-		msg += StringUtil::Format("\n  %llu sample(s) in '%s' with no data: %s", (uint64_t)uncounted.size(),
+		msg += StringUtil::Format("\n  %llu sample(s) in '%s' with no counts: %s", (uint64_t)uncounted.size(),
 		                          bind.metadata_relation.c_str(), sample_list(uncounted).c_str());
 	}
+	// The views are named apart from the relations, which are often called
+	// `counts` and `labels`.
+	const auto data = KeywordHelper::WriteOptionallyQuoted(bind.data_relation);
+	const auto metadata = KeywordHelper::WriteOptionallyQuoted(bind.metadata_relation);
 	msg += StringUtil::Format(
 	    "\n\nRemedy:\n"
-	    "  Restrict both sides to the samples they share, then refit:\n"
+	    "  Restrict both sides to the samples they share, then refit on shared_counts and shared_labels:\n"
 	    "    CREATE VIEW shared AS SELECT DISTINCT sample_id FROM %s SEMI JOIN %s USING (sample_id);\n"
-	    "    CREATE VIEW counts AS SELECT * FROM %s SEMI JOIN shared USING (sample_id);\n"
-	    "    CREATE VIEW labels AS SELECT * FROM %s SEMI JOIN shared USING (sample_id);\n"
+	    "    CREATE VIEW shared_counts AS SELECT * FROM %s SEMI JOIN shared USING (sample_id);\n"
+	    "    CREATE VIEW shared_labels AS SELECT * FROM %s SEMI JOIN shared USING (sample_id);\n"
 	    "  Or fix the upstream join if the mismatch is unexpected -- a truncated metadata\n"
 	    "  export trains a model on fewer samples than you think.",
-	    bind.data_relation.c_str(), bind.metadata_relation.c_str(), bind.data_relation.c_str(),
-	    bind.metadata_relation.c_str());
+	    data, metadata, data, metadata);
 	throw InvalidInputException(msg);
 }
 

@@ -125,7 +125,7 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 	data->threads = unifrac_internal::ResolveThreadsParameter(context, requested_threads, data->caller);
 	if (n_folds_given && cv_given) {
 		throw InvalidInputException("%s: pass n_folds or cv, not both -- cv is the q2-sample-classifier (QIIME 2) and "
-		                            "sklearn spelling of n_folds",
+		                            "scikit-learn spelling of n_folds",
 		                            data->caller);
 	}
 	{
@@ -148,7 +148,7 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
 		// Positional, not a map: probabilities[i] is the probability of classes[i],
 		// and `classes` is the same list on every row, so a whole column reads as
 		// one matrix. The regressor has no classes to be probable, and the task is
-		// fixed by which function was called, so its schema simply lacks these
+		// fixed by which function was called, so its schema lacks these
 		// rather than carrying two always-NULL columns.
 		names.push_back("probabilities");
 		return_types.push_back(LogicalType::LIST(LogicalType::DOUBLE));

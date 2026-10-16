@@ -35,7 +35,8 @@ struct ScModel {
 	ScModel &operator=(const ScModel &) = delete;
 };
 
-//! An Arrow array sc exported to us, released on destruction.
+//! An Arrow array that carries its own release callback: one sc exported to
+//! us, or one we built to hand sc. Released on destruction.
 //!
 //! Ownership runs the other way from `ScCooBuilder`'s. sc's *imports* borrow --
 //! it reads our buffers in place and never releases them -- but its *exports*
@@ -124,8 +125,9 @@ inline const char *TaskName(bool classification) {
 	return classification ? kClassification : kRegression;
 }
 
-//! Refuse a NULL named parameter: a NULL is refused, not read as a value.
-//! Omitting a parameter means its default.
+//! Refuse a NULL named parameter. Omitting a parameter means its default; a
+//! NULL, say from a parameter bound to NULL, means neither a value nor the
+//! default, so reading it as either would guess.
 void RequireNotNull(const std::string &parameter, const duckdb::Value &v, const char *caller);
 
 //! What bind reads from a model row to type its output.

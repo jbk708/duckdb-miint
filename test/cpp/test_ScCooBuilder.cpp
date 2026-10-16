@@ -179,6 +179,7 @@ TEST_CASE("ScCooBuilder offsets count bytes, not characters", "[sc_coo]") {
 	REQUIRE(table);
 
 	const auto &ids = table->get()->feature_ids;
+	REQUIRE(ids.n_buffers == 3);
 	const auto *offsets = static_cast<const int32_t *>(ids.buffers[1]);
 	REQUIRE(ids.length == 2);
 	CHECK(offsets[0] == 0);
@@ -336,10 +337,8 @@ TEST_CASE("ScCooBuilder drops features the model never saw", "[sc_coo]") {
 }
 
 TEST_CASE("ScCooBuilder keeps a sample whose features are all unknown", "[sc_coo]") {
-	// Such a sample has no cells at all, but it is still in the data and still
-	// deserves a prediction -- from an all-zero row, which in a sparse matrix
-	// is the faithful representation of "none of the model's features were
-	// observed here". Dropping it would silently shorten the output.
+	// It has no cells, but it gets an all-zero row and so a prediction (see
+	// ScCooBuilder::Append); dropping it would shorten the output.
 	ScCooBuilder builder;
 	builder.SetFeatureVocabulary({"a", "b"});
 	builder.Append("known", "a", 1.0);

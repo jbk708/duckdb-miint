@@ -148,10 +148,10 @@ public:
 	//!
 	//! With a fixed vocabulary (see [`SetFeatureVocabulary`]) a feature the
 	//! model never saw is dropped and counted. The sample is interned either
-	//! way, so a sample whose every feature was dropped still gets a row -- an
-	//! all-zero one, which represents "none of the model's features were
-	//! observed here" and is what lets it still receive a prediction rather than
-	//! silently vanishing from the output.
+	//! way, so a sample whose every feature was dropped still gets a row: an
+	//! all-zero one, the sparse form of "none of the model's features were
+	//! observed here". It still receives a prediction rather than vanishing
+	//! from the output.
 	void Append(std::string_view sample_id, std::string_view feature_id, double value);
 
 	//! Encode features against a model's training vocabulary instead of
@@ -162,13 +162,13 @@ public:
 	//! vocabulary is used in the model's own order and is not re-sorted. Two
 	//! datasets that differ by one feature in each direction have the same
 	//! width, and sc validates only the width, never which feature a column
-	//! holds, so re-deriving an encoding here would produce confident, silent
-	//! nonsense.
+	//! holds, so re-deriving an encoding here would give predictions from the
+	//! wrong columns with no error.
 	//!
-	//! Consequences, all of which are correct for a sparse matrix:
+	//! So, for a sparse matrix:
 	//!   * a feature not in `vocab` is dropped -- the model has no column for it
-	//!   * a feature in `vocab` but absent from the data is simply not stored,
-	//!     and absent already means zero
+	//!   * a feature in `vocab` but absent from the data is not stored, and
+	//!     absent already means zero
 	//!   * `n_features` is always `vocab.size()`, never what the data happened
 	//!     to contain
 	//!

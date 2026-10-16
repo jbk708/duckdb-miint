@@ -105,6 +105,39 @@ SELECT * FROM fit_regressor('train_data', 'short_metadata', name := 'm8');
 ----
 describe different sample sets
 
+# The remedy runs as printed, even on a data relation named `counts`, the name
+# the docs use: the views it creates must not take that name.
+statement ok
+CREATE TABLE counts AS SELECT * FROM train_data;
+
+statement error
+SELECT * FROM fit_regressor('counts', 'short_metadata', name := 'm8');
+----
+CREATE VIEW shared_counts AS SELECT * FROM counts SEMI JOIN shared USING (sample_id);
+
+statement ok
+CREATE VIEW shared AS SELECT DISTINCT sample_id FROM counts SEMI JOIN short_metadata USING (sample_id);
+
+statement ok
+CREATE VIEW shared_counts AS SELECT * FROM counts SEMI JOIN shared USING (sample_id);
+
+statement ok
+CREATE VIEW shared_labels AS SELECT * FROM short_metadata SEMI JOIN shared USING (sample_id);
+
+query I
+SELECT n_samples FROM fit_regressor('shared_counts', 'shared_labels', name := 'm8');
+----
+2
+
+# And it quotes the relations it names.
+statement ok
+CREATE TABLE "Joe's counts" AS SELECT * FROM train_data;
+
+statement error
+SELECT * FROM fit_regressor('Joe''s counts', 'short_metadata', name := 'm8');
+----
+CREATE VIEW shared AS SELECT DISTINCT sample_id FROM "Joe's counts" SEMI JOIN short_metadata USING (sample_id);
+
 # A duplicated join key fans out every cell for that sample. Summing would
 # silently inflate the counts, so this errors and shows the values -- identical
 # ones point at a fanout, differing ones at genuine repeat measurements.
@@ -360,6 +393,16 @@ SELECT (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_est
      = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 3, name := 'd'));
 ----
 true	true	true	true
+
+# A fraction in a floating type is the same fraction as the literal, whose type
+# is DECIMAL; a fraction computed in SQL is usually a DOUBLE.
+query II
+SELECT (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 0.5::DOUBLE, name := 'd'))
+     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 0.5, name := 'd')),
+       (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 0.5::FLOAT, name := 'd'))
+     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 0.5, name := 'd'));
+----
+true	true
 
 query I
 SELECT (SELECT model_blob FROM fit_classifier('train_data','class_metadata', random_state := 1, name := 'm19'))
@@ -635,6 +678,13 @@ SELECT (SELECT count(DISTINCT feature_id) FROM gm_data),
        (SELECT count(DISTINCT feature_id) FROM gm_test_data);
 ----
 5	3
+
+# Applied from the table, the model predicts both held-out samples, and every
+# cell they carry is a feature it knows.
+query II
+SELECT count(*), bool_and(known_feature_fraction = 1.0) FROM predict('gm_test_data', 'month_model');
+----
+2	true
 
 # --- parameter ranges are checked when the query is planned ---
 #

@@ -117,7 +117,7 @@ SELECT DISTINCT metric, mean_score, std_score, fold_scores FROM cv;
 | parameter | default | |
 |---|---|---|
 | `target_column` | auto | as at fit |
-| `n_folds` | 5 | at least 2; also accepted as `cv`, q2's and scikit-learn's name for it (not both) |
+| `n_folds` | 5 | at least 2; also accepted as `cv`, q2's and scikit-learn's name for it; passing both is an error |
 | `parameter_tuning` | false | see below |
 | `n_estimators`, `random_state`, `threads` and every forest parameter from [Fitting](#fitting) | as at fit | the recipe each fold's forest is fit with |
 
@@ -157,7 +157,7 @@ SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
 | `name` | | as at prediction |
 | `predicted_class_only` | true | with two classes the other is an exact mirror; with three or more, `false` also explains the other classes |
 | `top_k` | off | keep the k strongest features per sample, or per sample and class with `predicted_class_only := false`, split evenly between those pushing toward the prediction and against it |
-| `max_attributions` | 10,000,000 | attributions one batch may hold (samples × classes × features, 8 bytes each, so ~80 MB); a sample that alone needs more runs by itself, above the cap, with a warning |
+| `max_attributions` | 10,000,000 | attributions one batch may hold (samples × classes × features, 8 bytes each, so ~80 MB) |
 | `batch_size` | derived | samples per batch, overriding `max_attributions`; passing both is an error |
 | `threads` | 0 | as at fit |
 
@@ -165,7 +165,7 @@ SELECT * FROM shap('counts', 'models', name := 'site', top_k := 10);
 - **Absent features get attributions too.** A feature the model knows but the sample lacks is a zero, and a zero can push a prediction as hard as a large count; the absence of adult taxa is evidence of an infant.
 - **`top_k` shrinks the output, not the computation**, since every attribution is computed before the strongest are picked.
 - **Rows come out in waterfall order**: `sample_id` (as text; see [Input tables](#input-tables)), `class`, then `shap_value` descending.
-- **Attributions are computed one batch at a time**, sized by `max_attributions`, so 20,000 samples need no more attribution memory than 2,000. The exception is a sample whose classes × features exceed the cap: it runs alone, above it, with a warning.
+- **Attributions are computed one batch at a time**, sized by `max_attributions`, so attribution memory stays under the cap however many samples there are. The exception is a model whose classes × features exceed the cap on their own: every sample then runs alone, above the cap, with a warning.
 
 ### Feature importances
 

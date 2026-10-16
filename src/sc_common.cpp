@@ -175,9 +175,10 @@ void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 	}
 }
 
-//! One place for every "which model did you mean" failure, so they read the same
-//! wherever they are raised. `takes_data` says whether the caller's first
-//! argument is a data relation, which shapes the call the remedy shows.
+//! Every "which model did you mean" failure: no such name, a duplicated name, an
+//! empty relation, or several models and no name. `takes_data` says whether the
+//! caller's first argument is a data relation, which shapes the call the remedy
+//! shows.
 [[noreturn]] void RejectModelSelection(const char *caller, const std::string &relation, const std::string &name,
                                        int64_t rows, bool takes_data) {
 	// The remedies are SQL to run, so every value they splice is quoted: the
@@ -337,7 +338,7 @@ namespace {
 	                            "             your_feature_col AS feature_id,\n"
 	                            "             your_count_col   AS value\n"
 	                            "      FROM %s;",
-	                            caller, relation, error, relation);
+	                            caller, relation, error, duckdb::KeywordHelper::WriteOptionallyQuoted(relation));
 }
 
 } // namespace
@@ -359,7 +360,7 @@ ScIdTypes ProbeIdTypes(duckdb::Connection &conn, const std::string &relation, co
 			throw InvalidInputException("%s: '%s' field %s has %s, but ids must be %s. Cast it first: CREATE VIEW v "
 			                            "AS SELECT %s FROM %s;",
 			                            caller, relation, column, type.ToString(), duckdb::AllowedIdTypeList(),
-			                            view_select, relation);
+			                            view_select, q);
 		}
 	};
 	// Integers widen to BIGINT, which results return as BIGINT; anything else
@@ -540,7 +541,7 @@ void RequireModelFeatureIdType(const duckdb::LogicalType &model_type, const duck
 	                            "first: CREATE VIEW v AS SELECT sample_id, feature_id::%s AS feature_id, value FROM "
 	                            "%s;",
 	                            caller, model, model_type.ToString(), data_relation, data_type.ToString(),
-	                            model_type.ToString(), data_relation);
+	                            model_type.ToString(), duckdb::KeywordHelper::WriteOptionallyQuoted(data_relation));
 }
 
 void LoadModelFromRelation(duckdb::Connection &conn, const std::string &relation, const std::string &name,
