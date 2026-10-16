@@ -65,8 +65,8 @@ const std::string READ_GFF = // NOLINT
     "  SELECT *, "
     "    CASE "
     // A comment or directive (##gff-version, ##FASTA, ###): a line that starts with '#'.
-    // read_csv's own comment option is not used: it also cuts a feature line at any '#'
-    // inside it, which GFF3 does not ask to be escaped.
+    // GFF3 has no end-of-line comments and a seqid must escape '#', so a '#' later in a line
+    // is data. read_csv's own comment option is not used: it cuts a line at any '#'.
     "        WHEN column0 LIKE '#%' THEN FALSE "
     // A FASTA header line, checked before the field counts because its description may itself
     // contain tabs (e.g. ">ctg1<TAB>some description"), which would otherwise populate
@@ -113,7 +113,11 @@ const std::string READ_GFF = // NOLINT
     "     'column8': 'VARCHAR' "
     "   }, auto_detect=false, "
     "   skip = 0, "
-    "   null_padding = true "
+    "   null_padding = true, "
+    // GFF3 has no quoting, so '"' is an ordinary character; read_csv's default quote would
+    // otherwise join lines across an unmatched one, or reject the file.
+    "   quote = '', "
+    "   escape = '' "
     "  ) "
     ") "
     "WHERE keep; ";

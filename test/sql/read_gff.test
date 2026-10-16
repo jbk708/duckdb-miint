@@ -408,21 +408,47 @@ FROM read_gff('__TEST_DIR__/blank_lines.gff') ORDER BY position;
 ctg1	INTEGER	INTEGER	NULL	DOUBLE	+	VARCHAR	NULL	INTEGER	g1	MAP(VARCHAR, VARCHAR)	VARCHAR
 ctg1	INTEGER	INTEGER	2.5	DOUBLE	NULL	VARCHAR	1	INTEGER	g2	MAP(VARCHAR, VARCHAR)	VARCHAR
 
-# --- '#' inside a feature line ---
+# --- '#' and '"' inside a line ---
 #
-# GFF3 does not ask for '#' to be escaped inside a field, so a feature line keeps every '#'
-# it holds. Only a line that starts with '#' is a comment or directive, and it is skipped,
-# whatever follows it, tabs included.
+# GFF3 has no end-of-line comments, and a seqid must escape '#', so only a line that starts
+# with '#' is a comment or directive; a '#' later in a line is data. A value holding one,
+# as an attribute value often does, comes back whole.
 statement ok
-COPY (SELECT * FROM (VALUES (E'##gff-version 3'), (E'# a comment'), (E'#\twith\ttabs'), (E'###'),
-                            (E'ctg1\tsrc#2\tgene\t1\t50\t.\t+\t.\tID=g1;Note=see #3 for details;Name=abc')) t(line))
+COPY (SELECT * FROM (VALUES (E'ctg1\tsrc\tgene\t1\t50\t.\t+\t.\tID=g1;Note=see #3 for details;Name=abc')) t(line))
+TO '__TEST_DIR__/hash_attribute.gff' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query TTTI
+SELECT attributes['ID'], attributes['Note'], attributes['Name'], cardinality(attributes)
+FROM read_gff('__TEST_DIR__/hash_attribute.gff');
+----
+g1	see #3 for details	abc	3
+
+# Comment and directive lines are skipped whatever they hold, tabs included. GFF3 has no
+# quoting either, so a '"' is an ordinary character: an unmatched one in a comment must not
+# swallow the feature lines after it, and a field that starts with one reads as written.
+statement ok
+COPY (SELECT * FROM (VALUES (E'##gff-version 3'), (E'# made by "tool"'), (E'#\twith\ttabs'), (E'#\t"open'),
+                            (E'ctg1\tsrc#2\tgene\t1\t50\t.\t+\t.\tID=g1'), (E'###'),
+                            (E'ctg1\t"quoted\tgene\t60\t90\t.\t+\t.\tID=g2;Note=x"'))
+                     t(line))
 TO '__TEST_DIR__/hash.gff' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
 
-query TTTTI
-SELECT source, attributes['ID'], attributes['Note'], attributes['Name'], cardinality(attributes)
-FROM read_gff('__TEST_DIR__/hash.gff');
+query ITT
+SELECT position, source, attributes['Note'] FROM read_gff('__TEST_DIR__/hash.gff') ORDER BY position;
 ----
-src#2	g1	see #3 for details	abc	3
+1	src#2	NULL
+60	"quoted	x"
+
+# Every line is split into fields, comments included, so a comment line with more than the
+# nine fields a feature line may have fails the scan rather than being read in part.
+statement ok
+COPY (SELECT * FROM (VALUES (E'#\ta\tb\tc\td\te\tf\tg\th\ti'), (E'ctg1\tsrc\tgene\t1\t50\t.\t+\t.\tID=g1')) t(line))
+TO '__TEST_DIR__/wide_comment.gff' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT count(*) FROM read_gff('__TEST_DIR__/wide_comment.gff');
+----
+Expected Number of Columns: 9 Found: 10
 
 # --- Composition with genome_coverage (issue #196) ---
 #

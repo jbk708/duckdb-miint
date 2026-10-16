@@ -1114,7 +1114,8 @@ Read GFF3 (General Feature Format) annotation files. GFF is a standard format fo
 
 **Behavior:**
 - Reads tab-delimited GFF3 format files
-- Skips comment and directive lines (those starting with '#'); a '#' inside a feature line is kept
+- Skips comment and directive lines (those starting with '#'); a '#' later in a line is kept as data
+- Every line, comment lines included, must be UTF-8 and have at most nine tab-separated fields; a line that breaks either fails the scan. GFF3 has no quoting, so '"' is an ordinary character
 - Converts '.' to NULL for score, strand, and phase fields
 - Parses the attributes column (semicolon-separated key=value pairs) into a SQL MAP
 - Percent-decodes (`%XX`) attribute keys and values per the GFF3 spec (e.g. `%3D` → `=`, `%2C` → `,`, `%3B` → `;`, `%26` → `&`); the value is everything after the first `=`, so a raw `=` inside a value is preserved rather than truncated
@@ -1212,7 +1213,7 @@ SELECT parse_gff_attributes('ID=gene1;Name=TEST1;biotype=protein_coding');
 - Coordinates **in the file** are 1-based and inclusive (both start and end). miint normalizes them on read — see [Coordinate conventions](#coordinate-conventions).
 - Strand: '+' (forward), '-' (reverse), '.' (unknown/not applicable)
 - Phase: Indicates position within codon (0, 1, or 2) for CDS features
-- Lines starting with '#' (comments and directives such as '##gff-version') are skipped. A '#' inside a feature line, such as in an attribute value, is part of the value.
+- A line starting with '#' is a comment or a directive (such as '##gff-version'). GFF3 has no end-of-line comments, and a seqid must escape '#', so a '#' later in a line, such as in an attribute value, is data.
 - The 9th column (attributes) may be empty; a feature line must carry the 8 mandatory fields
 - **The GFF3 sequence section is honoured**: content after a `##FASTA` directive is not returned as feature rows. prokka and bakta always append the genome, so this is the common case. A feature line carrying only *some* of the 8 mandatory fields is a malformed GFF line and raises an error rather than being silently dropped, as does a feature line with an empty seqid, whichever columns the query selects or filters on. (A query that stops early, such as one with `LIMIT`, may finish before reaching it.)
 
