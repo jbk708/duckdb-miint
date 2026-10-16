@@ -36,7 +36,7 @@ std::string Probe(const std::string &binary, const InterruptCheck &check) {
 }
 
 std::string FindUv() {
-	const std::string on_path = gb::FindExecutableInPath("uv");
+	std::string on_path = gb::FindExecutableInPath("uv");
 	if (!on_path.empty()) {
 		return on_path;
 	}

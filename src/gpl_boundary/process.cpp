@@ -19,7 +19,7 @@
 #if defined(__APPLE__)
 #include <crt_externs.h>
 #else
-extern char **environ;
+extern char **environ; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): POSIX's own
 #endif
 
 namespace duckdb {

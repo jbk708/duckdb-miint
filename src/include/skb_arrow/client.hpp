@@ -161,7 +161,8 @@ struct CallResult {
 /// bytes stay valid until this is destroyed.
 class MappedSegment {
 public:
-	MappedSegment(const uint8_t *data, std::size_t size);
+	/// Takes ownership of an mmap(2) mapping.
+	MappedSegment(void *data, std::size_t size);
 	~MappedSegment();
 	MappedSegment(MappedSegment &&other) noexcept;
 	MappedSegment &operator=(MappedSegment &&other) noexcept;
@@ -169,14 +170,14 @@ public:
 	MappedSegment &operator=(const MappedSegment &) = delete;
 
 	const uint8_t *data() const {
-		return data_;
+		return static_cast<const uint8_t *>(data_);
 	}
 	std::size_t size() const {
 		return size_;
 	}
 
 private:
-	const uint8_t *data_ = nullptr;
+	void *data_ = nullptr;
 	std::size_t size_ = 0;
 };
 

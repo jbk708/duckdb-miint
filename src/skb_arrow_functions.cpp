@@ -324,6 +324,7 @@ void RunCall(ClientContext &context, const SkbArrowCallData &data, ColumnDataCol
 		sk::Host host(options, check);
 		auto conn = MakeReadOnlyHelperConnection(context);
 		std::vector<std::pair<std::string, std::vector<std::string>>> tables;
+		tables.reserve(data.inputs.size());
 		for (const auto &input : data.inputs) {
 			tables.emplace_back(input.table, WriteInput(context, conn, data.function, input, host.dir()));
 		}

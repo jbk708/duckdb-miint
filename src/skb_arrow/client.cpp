@@ -236,7 +236,7 @@ std::string FindSkbArrow() {
 	if (const char *override_path = ::getenv("MIINT_SKB_ARROW_PATH"); override_path && override_path[0] != '\0') {
 		return override_path;
 	}
-	const std::string cached = MiintSkbArrowCacheBinary();
+	std::string cached = MiintSkbArrowCacheBinary();
 	if (!cached.empty() && ::access(cached.c_str(), X_OK) == 0) {
 		return cached;
 	}
@@ -498,12 +498,12 @@ void Params::SetStrings(const std::string &name, std::vector<std::string> value)
 // MappedSegment
 // =============================================================================
 
-MappedSegment::MappedSegment(const uint8_t *data, std::size_t size) : data_(data), size_(size) {
+MappedSegment::MappedSegment(void *data, std::size_t size) : data_(data), size_(size) {
 }
 
 MappedSegment::~MappedSegment() {
 	if (data_) {
-		::munmap(const_cast<uint8_t *>(data_), size_);
+		::munmap(data_, size_);
 	}
 }
 
@@ -692,7 +692,7 @@ MappedSegment Host::MapOutput(const std::string &name) {
 		throw Error(IsResourceErrno(map_err) ? "resource" : "internal",
 		            "cannot map skb-arrow output segment " + path + ": " + Errno(map_err));
 	}
-	return MappedSegment(static_cast<const uint8_t *>(p), size);
+	return MappedSegment(p, size);
 }
 
 void Host::Shutdown() {
