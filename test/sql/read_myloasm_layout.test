@@ -20,9 +20,9 @@ piece_length	BIGINT
 query_start	BIGINT
 query_stop	BIGINT
 strand	VARCHAR
-read_depth_id99	DOUBLE
-read_depth_id99_75	DOUBLE
-read_depth_id100	DOUBLE
+read_depth_identity_99	DOUBLE
+read_depth_identity_99_75	DOUBLE
+read_depth_identity_100	DOUBLE
 next_overlap_length	BIGINT
 next_shared_snpmers	BIGINT
 next_differing_snpmers	BIGINT

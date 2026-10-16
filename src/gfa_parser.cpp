@@ -34,6 +34,15 @@ int MandatoryFieldCount(std::string_view type) {
 	}
 }
 
+// L, C and J join two segments, each with an orientation: fields 2 and 4 after the type.
+bool JoinsOrientedSegments(std::string_view type) {
+	return type == "L" || type == "C" || type == "J";
+}
+
+bool IsOrientation(std::string_view s) {
+	return s == "+" || s == "-";
+}
+
 // "an S record", "a C record": the article follows how the letter is spoken.
 std::string RecordName(std::string_view type) {
 	bool vowel_sound = type == "H" || type == "L" || type == "S";
@@ -76,6 +85,10 @@ bool GfaParser::Parse(std::string_view line, GfaRecord &record) {
 	if (available < static_cast<size_t>(mandatory)) {
 		throw std::runtime_error(RecordName(fields_[0]) + " needs " + std::to_string(mandatory) +
 		                         " fields after the record type, found " + std::to_string(available));
+	}
+	if (JoinsOrientedSegments(fields_[0]) && !(IsOrientation(fields_[2]) && IsOrientation(fields_[4]))) {
+		throw std::runtime_error(RecordName(fields_[0]) + "'s orientations must be + or -, found '" +
+		                         std::string(fields_[2]) + "' and '" + std::string(fields_[4]) + "'");
 	}
 	for (int i = 1; i <= mandatory; i++) {
 		record.fields.emplace_back(fields_[i]);

@@ -111,6 +111,18 @@ TEST_CASE("GfaParser rejects malformed records with a message naming the defect"
 		CHECK_THROWS_WITH(parser.Parse("W\tsample1\t1\tchr1\t0\t1016", record), ContainsSubstring("W record needs 6"));
 		CHECK_THROWS_WITH(parser.Parse("J\ts1\t+\ts2\t-", record), ContainsSubstring("a J record needs 5"));
 	}
+	SECTION("an orientation other than + or -") {
+		// L, C and J join two oriented segments; any other orientation is not one GFA can
+		// express. Each end is checked on its own.
+		CHECK_THROWS_WITH(parser.Parse("L\ts1\t+\ts2\tx\t0M", record),
+		                  ContainsSubstring("an L record's orientations must be + or -, found '+' and 'x'"));
+		CHECK_THROWS_WITH(parser.Parse("L\ts1\t*\ts2\t-\t0M", record),
+		                  ContainsSubstring("an L record's orientations must be + or -, found '*' and '-'"));
+		CHECK_THROWS_WITH(parser.Parse("C\ts1\t+\ts3\t\t2\t6M", record),
+		                  ContainsSubstring("a C record's orientations must be + or -, found '+' and ''"));
+		CHECK_THROWS_WITH(parser.Parse("J\ts1\t++\ts2\t-\t*", record),
+		                  ContainsSubstring("a J record's orientations must be + or -, found '++' and '-'"));
+	}
 	SECTION("a tag that is untyped, malformed, or repeated") {
 		// GFA tags are always typed, so the lenient form PAF needs is not accepted here.
 		CHECK_THROWS_WITH(parser.Parse("S\ts1\tACGT\tLN:4", record), ContainsSubstring("LN:4"));

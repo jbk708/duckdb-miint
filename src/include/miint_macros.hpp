@@ -136,16 +136,9 @@ const std::string READ_GFA_LINKS = // NOLINT
     "       fields[4] AS to_orientation, "
     "       CASE WHEN fields[5] = '*' THEN NULL ELSE fields[5] END AS overlap, "
     "       tags "
+    // read_gfa refuses an orientation other than + or -, naming the file and line.
     "FROM read_gfa(path) "
-    // One CASE in the WHERE clause (docs/internals/duckdb-engine-notes.md, "Validation in a
-    // table macro"): an S record's second field is a sequence, not an orientation.
-    "WHERE CASE "
-    "        WHEN record_type <> 'L' THEN FALSE "
-    "        WHEN fields[2] NOT IN ('+', '-') OR fields[4] NOT IN ('+', '-') "
-    "        THEN error(printf('read_gfa_links: line %d: orientation must be + or -, found ''%s'' and ''%s''', "
-    "                          line_number, fields[2], fields[4])) "
-    "        ELSE TRUE "
-    "      END; ";
+    "WHERE record_type = 'L'; ";
 
 // read_myloasm_contigs / _layout / _links / _splits / _mappings / _run (dir)
 //
@@ -342,9 +335,9 @@ const std::string READ_MYLOASM_LAYOUT = // NOLINT
     "       _miint_myloasm_query_stop(coalesce(o.piece_offset, 0), a.strand, a.stats.read_len::BIGINT, "
     "                                 a.slice.start::BIGINT, a.slice.stop::BIGINT) AS query_stop, "
     "       a.strand, "
-    "       a.stats.dp1::DOUBLE AS read_depth_id99, "
-    "       a.stats.dp2::DOUBLE AS read_depth_id99_75, "
-    "       a.stats.dp3::DOUBLE AS read_depth_id100, "
+    "       a.stats.dp1::DOUBLE AS read_depth_identity_99, "
+    "       a.stats.dp2::DOUBLE AS read_depth_identity_99_75, "
+    "       a.stats.dp3::DOUBLE AS read_depth_identity_100, "
     "       CASE WHEN NOT a.is_last THEN a.stats.ol::BIGINT END AS next_overlap_length, "
     "       CASE WHEN NOT a.is_last THEN a.stats.share::BIGINT END AS next_shared_snpmers, "
     "       CASE WHEN NOT a.is_last THEN a.stats.diff::BIGINT END AS next_differing_snpmers "
@@ -470,10 +463,10 @@ const std::string READ_MYLOASM_CONTIGS = // NOLINT
     "       h.hdr.len::BIGINT AS polished_length, "
     "       g.tags['LN']::BIGINT AS unpolished_length, "
     "       h.hdr.circular AS circularity, "
-    "       g.tags['DP']::DOUBLE AS depth_id99, "
-    "       g.tags['DP2']::DOUBLE AS depth_id99_75, "
-    "       g.tags['DP3']::DOUBLE AS depth_id100, "
-    "       g.tags['MEDIAN_DP1']::DOUBLE AS median_depth_id100, "
+    "       g.tags['DP']::DOUBLE AS depth_identity_99, "
+    "       g.tags['DP2']::DOUBLE AS depth_identity_99_75, "
+    "       g.tags['DP3']::DOUBLE AS depth_identity_100, "
+    "       g.tags['MEDIAN_DP1']::DOUBLE AS median_depth_identity_100, "
     "       h.cmt.mult::DOUBLE AS kmer_multiplicity, "
     "       h.hdr.flag AS kmer_multiplicity_flag, "
     "       nullif(h.cmt.secondary, '') AS secondary_to_contig_id, "

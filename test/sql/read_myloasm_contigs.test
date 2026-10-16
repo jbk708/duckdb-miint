@@ -15,10 +15,10 @@ fasta_id	VARCHAR
 polished_length	BIGINT
 unpolished_length	BIGINT
 circularity	VARCHAR
-depth_id99	DOUBLE
-depth_id99_75	DOUBLE
-depth_id100	DOUBLE
-median_depth_id100	DOUBLE
+depth_identity_99	DOUBLE
+depth_identity_99_75	DOUBLE
+depth_identity_100	DOUBLE
+median_depth_identity_100	DOUBLE
 kmer_multiplicity	DOUBLE
 kmer_multiplicity_flag	VARCHAR
 secondary_to_contig_id	VARCHAR
@@ -86,7 +86,7 @@ query I
 SELECT count(*)
 FROM read_myloasm_contigs('data/myloasm/ecoli_sim')
 WHERE string_split(regexp_extract(fasta_id, '_depth-([0-9.-]+)_', 1), '-')::DOUBLE[]
-      = [depth_id99, depth_id99_75, depth_id100];
+      = [depth_identity_99, depth_identity_99_75, depth_identity_100];
 ----
 5
 

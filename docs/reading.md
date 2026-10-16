@@ -397,7 +397,7 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 - One thread reads each file; several files are read in parallel.
 - An empty file returns no rows. stdin is not supported.
 
-**Malformed records fail the scan.** The error names the file, the line and the defect: a blank line, an empty record type, a record type that is not printable text (as when a gzipped file is named without `.gz`), a known record type with fewer positional fields than it needs, a malformed or untyped tag, or a tag that appears twice on one line.
+**Malformed records fail the scan.** The error names the file, the line and the defect: a blank line, an empty record type, a record type that is not printable text (as when a gzipped file is named without `.gz`), a known record type with fewer positional fields than it needs, an `L`, `C` or `J` orientation other than `+` or `-`, a malformed or untyped tag, or a tag that appears twice on one line.
 
 #### `read_gfa_segments(filename)`
 
@@ -416,7 +416,7 @@ The `L` records of a GFA file.
 - `overlap` (VARCHAR, nullable): The overlap CIGAR; NULL when the file stores `*`
 - `tags` (MAP(VARCHAR, VARCHAR)): The link's tags
 
-An orientation other than `+` or `-` fails the scan. Both views accept the same paths as `read_gfa` (a path, a glob, or a list); for a `filepath` column, query `read_gfa` directly.
+Both views read through `read_gfa`, so a malformed record anywhere in the file fails either one, as it fails `read_gfa`. Both views accept the same paths as `read_gfa` (a path, a glob, or a list); for a `filepath` column, query `read_gfa` directly.
 
 **Examples:**
 ```sql
@@ -481,8 +481,8 @@ Every contig in the GFA, with its FASTA header's values. myloasm writes the GFA 
 - `polished_length` (BIGINT, nullable): Length of the polished FASTA sequence
 - `unpolished_length` (BIGINT): The GFA's `LN`, the length every coordinate in these tables refers to
 - `circularity` (VARCHAR, nullable): `yes`, `possibly` or `no`
-- `depth_id99`, `depth_id99_75`, `depth_id100` (DOUBLE): The contig's depth at three SNPmer-identity tiers: the median, over its reads, of each read's minimum depth counting only reads at ≥ 99%, ≥ 99.75% and 100% identity to it. These are the GFA's `DP`, `DP2` and `DP3` and the header's `depth-<d1>-<d2>-<d3>`.
-- `median_depth_id100` (DOUBLE): The median of the reads' median depths at the 100% tier: the GFA's `MEDIAN_DP1`, although the GFA's read placements use `DP1` for the 99% tier
+- `depth_identity_99`, `depth_identity_99_75`, `depth_identity_100` (DOUBLE): The contig's depth at three SNPmer-identity tiers: the median, over its reads, of each read's minimum depth counting only reads at ≥ 99%, ≥ 99.75% and 100% identity to it. These are the GFA's `DP`, `DP2` and `DP3` and the header's `depth-<d1>-<d2>-<d3>`.
+- `median_depth_identity_100` (DOUBLE): The median of the reads' median depths at the 100% tier: the GFA's `MEDIAN_DP1`, although the GFA's read placements use `DP1` for the 99% tier
 - `kmer_multiplicity` (DOUBLE, nullable) and `kmer_multiplicity_flag` (VARCHAR, nullable): The header's `mult=` and `duplicated-<no|possibly|yes>`: how repetitive the contig's own k-mers are (below 1.10 is `no`, below 1.50 `possibly`). **This is not the dereplication status**: a contig in `duplicated_contigs.fa` can say `duplicated-no`.
 - `secondary_to_contig_id` (VARCHAR, nullable): For an alternate or duplicated contig, the contig myloasm compared it to and kept in its place. That contig can itself be an alternate.
 - `secondary_aligned_percent`, `secondary_ani_percent` (DOUBLE, nullable): The aligned fraction and ANI of that comparison, in percent
@@ -496,7 +496,7 @@ The read slices each unpolished contig is built from, in order: the contig is th
 - `read_id` (VARCHAR), `split_suffix` (VARCHAR, nullable), `piece_offset` (BIGINT), `piece_length` (BIGINT): The read, and the piece of it this is
 - `query_start`, `query_stop` (BIGINT): The slice on the original read
 - `strand` (VARCHAR): `-` when the read runs reverse-complemented along the contig
-- `read_depth_id99`, `read_depth_id99_75`, `read_depth_id100` (DOUBLE): The read's minimum depth at each identity tier
+- `read_depth_identity_99`, `read_depth_identity_99_75`, `read_depth_identity_100` (DOUBLE): The read's minimum depth at each identity tier
 - `next_overlap_length`, `next_shared_snpmers`, `next_differing_snpmers` (BIGINT, nullable): The overlap with the next read in the layout. NULL on a contig's last read, where myloasm writes 0.
 
 #### `read_myloasm_mappings(dir)`
@@ -573,7 +573,7 @@ FROM read_myloasm_mappings('myloasm_out') m
 JOIN read_fastx('reads.fastq.gz') r USING (read_id);
 
 -- Primary contigs with their sequences
-SELECT c.contig_id, c.depth_id100, f.sequence1
+SELECT c.contig_id, c.depth_identity_100, f.sequence1
 FROM read_myloasm_contigs('myloasm_out') c
 JOIN read_fastx('myloasm_out/assembly_primary.fa') f ON f.read_id = c.fasta_id;
 ```

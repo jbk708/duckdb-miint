@@ -216,8 +216,8 @@ raises its errors as `WHERE CASE WHEN <excluded> THEN FALSE WHEN <bad> THEN erro
 TRUE END` (or the same CASE in HAVING or QUALIFY), with any cast placed after the WHEN that
 proves it safe. The check still sees only the rows that reach it. A query that stops early,
 such as one with `LIMIT`, does not read the rest of the file, and the same pushdown can put a
-caller's own filter ahead of the macro's CASE (`WHERE from_segment LIKE 's1%'` over
-`read_gfa_links` did), so a malformed record either one skips raises nothing.
+caller's own filter ahead of the macro's CASE (`WHERE seqid LIKE 'ctg1%'` over `read_gff`
+did), so a malformed record either one skips raises nothing.
 
 Passes worth knowing about for our workloads:
 - `late_materialization` — keeps rows narrow through the heavy operators, then joins wide
