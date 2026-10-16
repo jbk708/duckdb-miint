@@ -2029,6 +2029,7 @@ if(MIINT_ENABLE_GPL_BOUNDARY)
     src/skb_arrow/install.cpp
     src/install_gpl_boundary.cpp
     src/install_skb_arrow.cpp
+    src/skb_arrow_functions.cpp
     src/phylogeny_fasttree.cpp
     src/align_bowtie2_daemon_common.cpp
     src/align_bowtie2.cpp

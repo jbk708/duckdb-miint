@@ -428,6 +428,10 @@ fi
 if echo "SELECT 1 FROM duckdb_functions() WHERE function_name = 'align_sortmerna_rrna';" | ./build/release/duckdb -csv -noheader 2>/dev/null | grep -q 1; then
     export SORTMERNA_AVAILABLE=1
 fi
+# The skb-arrow table functions (MIINT_HAS_GPL_BOUNDARY), for tests that need them bound but not run.
+if echo "SELECT 1 FROM duckdb_functions() WHERE function_name = 'skb_mantel' AND function_type = 'table';" | ./build/release/duckdb -csv -noheader 2>/dev/null | grep -q 1; then
+    export SKB_ARROW_COMPILED=1
+fi
 if echo "SELECT 1 FROM duckdb_functions() WHERE function_name = 'unifrac_pcoa' AND function_type = 'table';" | ./build/release/duckdb -csv -noheader 2>/dev/null | grep -q 1; then
     export UNIFRAC_AVAILABLE=1
 fi

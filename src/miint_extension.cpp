@@ -141,6 +141,7 @@
 #include <install_gpl_boundary.hpp>
 #include <install_skb_arrow.hpp>
 #include <phylogeny_fasttree.hpp>
+#include <skb_arrow_functions.hpp>
 #else
 #include <install_report.hpp>
 #endif
@@ -443,6 +444,7 @@ static void LoadInternal(ExtensionLoader &loader) {
 	PhylogenyFastTreeAvailableScalar::Register(loader);
 	InstallGplBoundaryScalar::Register(loader);
 	RegisterSkbArrowInstallFunctions(loader);
+	RegisterSkbArrowFunctions(loader);
 #else
 	// Stub: phylogeny_fasttree_available() always returns false when gpl-boundary
 	// support is compiled out (e.g., on WASM/Windows).
