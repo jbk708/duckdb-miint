@@ -120,6 +120,19 @@ FROM read_gfa('data/gfa/spec_example.gfa') WHERE line_number IN (7, 11) ORDER BY
 7	L	0
 11	x	NULL
 
+# A float tag may be nan or an infinity, as htslib reads one (a depth over no reads, say).
+# Values stay text, and casting them gives the float they name.
+statement ok
+COPY (SELECT * FROM (VALUES (E'S\ts1\t*\tDP:f:nan\tDP2:f:-inf\tDP3:f:Infinity')) t(line))
+TO '__TEST_DIR__/nonfinite.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query TTTTTT
+SELECT tags['DP'], tags['DP2'], tags['DP3'],
+       isnan(tags['DP']::DOUBLE), tags['DP2']::DOUBLE = '-inf'::DOUBLE, tags['DP3']::DOUBLE = 'inf'::DOUBLE
+FROM read_gfa('__TEST_DIR__/nonfinite.gfa');
+----
+nan	-inf	Infinity	true	true	true
+
 # --- Real assembler output ---
 
 # Record counts must match a line count taken without read_gfa: myloasm's graph has a

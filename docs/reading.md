@@ -318,7 +318,7 @@ SELECT * FROM read_paf('alignments.paf');
 **Behavior:**
 - Coordinates follow the two axes in [Coordinate conventions](#coordinate-conventions). The target interval moves to the 1-based reference axis, matching `read_alignments`, so `stop_position - position` is the aligned target length. The query interval stays 0-based on the read as sequenced, matching `cigar_query_intervals`, even on the `-` strand (see [Read axis](#read-axis)).
 - An unmapped record (`minimap2 --paf-no-hit`) reports `strand` and `reference` as `*` and `position` / `stop_position` as 0, as `read_alignments` does for an unplaced unmapped SAM record (RNAME `*`, POS 0).
-- Tags such as `NM:i:3` become `tags['NM'] = '3'`. The type letter is validated and dropped, so cast values when you need numbers: `tags['NM']::INTEGER`. Untyped `key:value` fields, which some tools write instead of SAM-style tags, are accepted as well.
+- Tags such as `NM:i:3` become `tags['NM'] = '3'`. The type letter is validated and dropped, so cast values when you need numbers: `tags['NM']::INTEGER`. A float (`f`) may also be `nan`, `inf` or `infinity`, as htslib (and so `read_alignments`) reads one. Untyped `key:value` fields, which some tools write instead of SAM-style tags, are accepted as well.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths (`s3://`, `https://`) are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.
 - An empty file returns no rows.
@@ -391,7 +391,7 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 **Behavior:**
 - Lines starting with `#` are comments and produce no row.
 - `fields` are the file's own text. No coordinate conversion is applied: a `W` walk's start and end, and a `C` containment's position, stay 0-based as GFA writes them. See [Coordinate conventions](#coordinate-conventions).
-- Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped, so cast values when you need numbers: `tags['LN']::BIGINT`. A tag name may be any identifier (letters, digits and `_`, not starting with a digit), not only the specification's two characters: assemblers write longer ones, such as myloasm's `MEDIAN_DP1:f:33.0`.
+- Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped, so cast values when you need numbers: `tags['LN']::BIGINT`. A float (`f`) may also be `nan`, `inf` or `infinity`, as htslib reads one. A tag name may be any identifier (letters, digits and `_`, not starting with a digit), not only the specification's two characters: assemblers write longer ones, such as myloasm's `MEDIAN_DP1:f:33.0`.
 - A header that declares a version other than GFA 1 (`VN:Z:1` or `VN:Z:1.x`) is rejected rather than read as GFA 1. GFA 2 (`VN:Z:2.0`) redefines the record types.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.

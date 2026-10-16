@@ -68,13 +68,29 @@ TEST_CASE("Tags keep field order and start at the requested field", "[sam_style_
 TEST_CASE("A value that does not match its declared type is an error", "[sam_style_tags]") {
 	// Accepting these would hand downstream casts a value the type letter promised was
 	// valid; failing here names the field instead of a later, anonymous cast error.
-	for (const char *field : {"NM:i:abc", "NM:i:", "NM:i:1.5", "de:f:nan", "de:f:2.", "de:f:", "tp:A:PP", "tp:A:",
-	                          "hx:H:1AE", "hx:H:1ae3", "ba:B:x,1", "ba:B:i,1,a", "ba:B:i,", "ba:B:", "nm:Z:bad\x01"}) {
+	// Of strtod's non-numeric forms only nan and inf (below) are floats here: "nanx", a
+	// truncated "infinit", strtod's nan(chars) and hex floats are not.
+	for (const char *field :
+	     {"NM:i:abc",   "NM:i:",      "NM:i:1.5", "de:f:nanx", "de:f:in",       "de:f:infinit", "de:f:nan(1)",
+	      "de:f:0x1p3", "de:f:2.",    "de:f:",    "tp:A:PP",   "tp:A:",         "hx:H:1AE",     "hx:H:1ae3",
+	      "ba:B:x,1",   "ba:B:i,1,a", "ba:B:i,",  "ba:B:",     "ba:B:f,1,nanx", "nm:Z:bad\x01"}) {
 		INFO(field);
 		CHECK_THROWS_WITH(Parse({field}), ContainsSubstring(field));
 		// A typed-shaped field stays typed when untyped fields are also allowed.
 		CHECK_THROWS_WITH(Parse({field}, TagSyntax::TypedOrUntyped), ContainsSubstring(field));
 	}
+}
+
+TEST_CASE("A float may be nan or an infinity, as htslib reads one", "[sam_style_tags]") {
+	// The SAM specification's float grammar has no nan or inf, but htslib parses f values and
+	// B:f elements with strtod, which accepts them, and tools write them. read_alignments reads
+	// them through htslib; refusing them here would fail a whole scan on such a file. Values
+	// stay text, and DuckDB casts each of these forms to DOUBLE.
+	for (const char *value : {"nan", "NaN", "-nan", "inf", "-inf", "+Inf", "INF", "infinity", "-Infinity"}) {
+		INFO(value);
+		CHECK(Parse({std::string("de:f:") + value}) == Pairs {{"de", value}});
+	}
+	CHECK(Parse({"ba:B:f,1.5,nan,-inf"}) == Pairs {{"ba", "f,1.5,nan,-inf"}});
 }
 
 TEST_CASE("Untyped key:value fields are accepted only when asked for", "[sam_style_tags]") {

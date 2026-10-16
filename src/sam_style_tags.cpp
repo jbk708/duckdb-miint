@@ -57,12 +57,33 @@ bool IsInteger(std::string_view s) {
 	return true;
 }
 
-// [-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?
+// `s` equals the lowercase `word`, ignoring the case of ASCII letters.
+bool EqualsLowercase(std::string_view s, std::string_view word) {
+	if (s.size() != word.size()) {
+		return false;
+	}
+	for (size_t i = 0; i < s.size(); ++i) {
+		const char c = (s[i] >= 'A' && s[i] <= 'Z') ? static_cast<char>(s[i] - 'A' + 'a') : s[i];
+		if (c != word[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+// [-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?, or a sign then nan, inf or infinity in any case.
+// The specification's grammar stops at the first form, but htslib parses floats with strtod,
+// which accepts the named ones, and tools write them. strtod's nan(chars) and hex floats are
+// not accepted.
 bool IsFloat(std::string_view s) {
 	size_t i = 0;
 	const size_t n = s.size();
 	if (i < n && (s[i] == '-' || s[i] == '+')) {
 		++i;
+	}
+	const std::string_view named = s.substr(i);
+	if (EqualsLowercase(named, "nan") || EqualsLowercase(named, "inf") || EqualsLowercase(named, "infinity")) {
+		return true;
 	}
 	size_t int_digits = 0;
 	while (i < n && IsDigit(s[i])) {
@@ -112,8 +133,7 @@ bool IsHexBytes(std::string_view s) {
 	return true;
 }
 
-// [cCsSiIf](,[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?)*, with integer elements for the
-// integer subtypes.
+// [cCsSiIf](,<element>)*: integer elements for the integer subtypes, IsFloat ones for f.
 bool IsNumericArray(std::string_view s) {
 	if (s.empty()) {
 		return false;
