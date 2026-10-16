@@ -122,8 +122,8 @@ VARCHAR	BIGINT	UTINYINT	MAP(VARCHAR, VARCHAR)
 # --- Reference axis: 1-based half-open, derived from each read's name ---
 
 # Every mapped read must land exactly where it was cut from. The CASE keeps the name
-# parsing off the unmapped read, whose name carries no coordinates; a WHERE conjunct
-# would not, since DuckDB may evaluate AND terms in any order.
+# parsing off the unmapped read, whose name carries no coordinates (a WHERE conjunct would
+# not; see docs/internals/duckdb-engine-notes.md, "Validation in a table macro").
 query I
 SELECT count(*) FROM (
     SELECT *,
@@ -225,9 +225,8 @@ WHERE sam.reference = p.reference AND sam.position = p.position AND sam.stop_pos
 
 # --- Inputs ---
 
-# The optimizer sizes a scan from its row estimate. With none, DuckDB assumes one row and can
-# put a multi-gigabyte PAF on the build side of a hash join instead of streaming it, so the
-# estimate grows with the file.
+# The scan has a row estimate that grows with the file, not DuckDB's default of one row (why:
+# EstimateFileScanCardinality in src/include/table_function_common.hpp).
 query II
 EXPLAIN SELECT * FROM read_paf('data/paf/k12_minimap2.paf');
 ----

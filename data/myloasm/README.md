@@ -81,12 +81,13 @@ Generated with **myloasm 0.7.0** (bioconda build `h7f49ad2_1`), as
 `myloasm reads.fa -o run1 --hifi -t 1`.
 
 ```bash
-conda create -n myloasm-070 -c conda-forge -c bioconda myloasm=0.7.0
+conda create -n myloasm-070 -c conda-forge -c bioconda myloasm=0.7.0=h7f49ad2_1
 bash build.sh
 bash test/scripts/generate_myloasm_fixture.sh /path/to/fresh/work_dir
 git diff --stat data/myloasm/   # expect a diff only in myloasm.log's timestamps
 ```
 
-The generator runs myloasm twice and fails unless every file above except the log is
-identical between the runs. It uses one thread because myloasm writes the PAF and the
-breakpoint logs in thread order. Both full runs are left in the work directory.
+The generator refuses any other myloasm version. It runs myloasm twice and fails unless every
+file above except the log is identical between the runs. It uses one thread because myloasm
+writes the PAF and the breakpoint logs in thread order. Both full runs are left in the work
+directory.

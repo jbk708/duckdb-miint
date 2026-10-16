@@ -22,8 +22,9 @@ public:
 
 	// Advance to the next line. Returns false at end of input. `line` excludes the
 	// terminating '\n' and a '\r' immediately before it, and stays valid until the next
-	// call. A final line with no terminating '\n' is still returned; an empty input has
-	// no lines, and an empty line in the middle of the input is returned as empty.
+	// call. A final line with no terminating '\n' is still returned, without a trailing
+	// '\r'; an empty input has no lines, and an empty line in the middle of the input is
+	// returned as empty.
 	bool Next(std::string_view &line);
 
 	// 1-based number of the line most recently returned by Next.

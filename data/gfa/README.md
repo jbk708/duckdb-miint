@@ -2,8 +2,9 @@
 
 ## `spec_example.gfa`
 
-A hand-written GFA 1.1 file containing every record type `read_gfa` splits into positional
-fields and tags, plus the cases that make the split matter:
+A hand-written GFA 1.1 file containing every GFA 1.1 record type, each of which `read_gfa`
+splits into positional fields and tags, plus the cases that make the split matter. The
+GFA 1.2 jump record `J` is not in it; the C++ parser tests cover it.
 
 | Line | Record | What it covers |
 |---|---|---|

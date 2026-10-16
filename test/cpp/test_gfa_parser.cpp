@@ -74,8 +74,9 @@ TEST_CASE("GfaParser gives a known record with no tags an empty tag list", "[gfa
 }
 
 TEST_CASE("GfaParser keeps every field of an unknown record type positional", "[gfa]") {
-	// myloasm's read-placement line: its last field looks tag-like but is not a SAM-style
-	// tag. With no specification saying where positional fields end, none are parsed.
+	// A line in the format of myloasm's read placements: its last field looks tag-like but is
+	// not a SAM-style tag. With no specification saying where positional fields end, none are
+	// parsed.
 	auto a = Parse("a\tu491ctg,0-2247\t517\t0\ts00517_linb_1009712_1023324_r+split0\t-\t2247\t"
 	               "DP1:44,DP2:18,DP3:18,READ_LEN:13612");
 	CHECK(a.record_type == "a");
@@ -121,4 +122,20 @@ TEST_CASE("GfaParser rejects malformed records with a message naming the defect"
 		// GFA 2 redefines S and adds record types; reading it as GFA 1 would mislabel fields.
 		CHECK_THROWS_WITH(parser.Parse("H\tVN:Z:2.0", record), ContainsSubstring("GFA 2"));
 	}
+	SECTION("a header naming any version other than GFA 1") {
+		// Only GFA 1's layout is known; any other declared version is refused, not guessed at.
+		CHECK_THROWS_WITH(parser.Parse("H\tVN:Z:3.0", record), ContainsSubstring("VN:Z:3.0"));
+		CHECK_THROWS_WITH(parser.Parse("H\tVN:Z:abc", record), ContainsSubstring("VN:Z:abc"));
+	}
+	SECTION("a record type that is not text") {
+		// Compressed bytes read as text, e.g. a gzipped graph without a .gz name. An unknown
+		// record type is otherwise kept as written, so this would come back as rows.
+		CHECK_THROWS_WITH(parser.Parse(std::string("\x1f\x8b\x08\x00\tx"), record), ContainsSubstring("not text"));
+	}
+}
+
+TEST_CASE("GfaParser reads a GFA 1 header, or none", "[gfa]") {
+	CHECK(Parse("H\tVN:Z:1.0").record_type == "H");
+	CHECK(Parse("H\tVN:Z:1.2").record_type == "H");
+	CHECK(Parse("H\tTS:i:100").record_type == "H");
 }

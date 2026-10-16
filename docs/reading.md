@@ -316,15 +316,22 @@ SELECT * FROM read_paf('alignments.paf');
 - `filepath` (VARCHAR, optional): File path when `include_filepath=true`
 
 **Behavior:**
-- Coordinates follow the two axes in [Coordinate conventions](#coordinate-conventions). The target interval moves to the 1-based reference axis, matching `read_alignments`, so `stop_position - position` is the aligned target length. The query interval stays 0-based on the read as sequenced, matching `cigar_query_intervals`, even on the `-` strand. A reverse-strand alignment of a read's last 3000 of 4500 bases is `[1500, 4500)`.
-- An unmapped record (`minimap2 --paf-no-hit`) reports `strand` and `reference` as `*` and `position` / `stop_position` as 0, as `read_alignments` does for an unmapped SAM record.
+- Coordinates follow the two axes in [Coordinate conventions](#coordinate-conventions). The target interval moves to the 1-based reference axis, matching `read_alignments`, so `stop_position - position` is the aligned target length. The query interval stays 0-based on the read as sequenced, matching `cigar_query_intervals`, even on the `-` strand (see [Read axis](#read-axis)).
+- An unmapped record (`minimap2 --paf-no-hit`) reports `strand` and `reference` as `*` and `position` / `stop_position` as 0, as `read_alignments` does for an unplaced unmapped SAM record (RNAME `*`, POS 0).
 - Tags such as `NM:i:3` become `tags['NM'] = '3'`. The type letter is validated and dropped, so cast values when you need numbers: `tags['NM']::INTEGER`. Untyped `key:value` fields, which some tools write instead of SAM-style tags, are accepted as well.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths (`s3://`, `https://`) are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.
 - An empty file returns no rows.
 - stdin is not supported.
 
-**Malformed records fail the scan.** The error names the file, the line and the defect: fewer than 12 fields, a blank line, a field that is not a whole non-negative integer, an interval that runs backwards or past its sequence's length, a strand other than `+`/`-`, a malformed tag, or a tag that appears twice on one line.
+**Malformed records fail the scan.** The error names the file, the line and the defect:
+- fewer than 12 fields, or a blank line
+- an empty query or target name
+- a field that is not a whole non-negative integer, or a mapping quality above 255
+- an interval that runs backwards or past its sequence's length
+- a strand other than `+` or `-`, except `*` on an unmapped record
+- `*` as only one of strand and target name, or an unmapped record with a non-zero target start or end
+- a malformed tag, or a tag that appears twice on one line
 
 **Examples:**
 ```sql
@@ -436,23 +443,26 @@ Read one [myloasm](https://github.com/bluenote-1577/myloasm) output directory (i
 
 | Function | Reads | One row per |
 |---|---|---|
-| [`read_myloasm_contigs(dir)`](#read_myloasm_contigsdir) | `assembly_primary.fa`, `alternate_assemblies/*.fa`, `final_contig_graph.gfa` | contig |
+| [`read_myloasm_contigs(dir)`](#read_myloasm_contigsdir) | `assembly_primary.fa`, `alternate_assemblies/assembly_alternate.fa`, `alternate_assemblies/duplicated_contigs.fa`, `final_contig_graph.gfa` | contig |
 | [`read_myloasm_layout(dir)`](#read_myloasm_layoutdir) | `final_contig_graph.gfa` (`a` lines), breakpoint logs | read slice in a contig's backbone |
 | [`read_myloasm_mappings(dir)`](#read_myloasm_mappingsdir) | `3-mapping/map_to_unitigs.paf.gz`, breakpoint logs | alignment of a read to a contig |
 | [`read_myloasm_links(dir)`](#read_myloasm_linksdir) | `final_contig_graph.gfa` (`L` lines) | contig graph edge |
 | [`read_myloasm_splits(dir)`](#read_myloasm_splitsdir) | `0-cleaning_and_unitigs/read_coverages.txt.gz`, `0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz` | chimera breakpoint |
 | [`read_myloasm_run(dir)`](#read_myloasm_rundir) | `myloasm*.log` | myloasm invocation |
 
-The formats were verified against myloasm 0.7.0's source and its real output; another version may write them differently. No function returns sequences. Contig sequences, alternates included, are in the FASTA files: join `read_fastx` on `fasta_id`.
+The formats were verified against myloasm 0.7.0's source and its real output; another version may write them differently. What the values mean (the depth tiers, thresholds and split conditions below) comes from myloasm's source. No function returns sequences. Contig sequences, alternates included, are in the FASTA files: join `read_fastx` on `fasta_id`.
 
-**Coordinates.** Contig intervals (`position`, `stop_position`) are on the **reference axis**, 1-based half-open, on the **unpolished** contig: the coordinates of the GFA and the PAF. Polishing shifts positions slightly, and joins a circular contig's overlapping ends, so `u840ctg` is 51274 bp unpolished and 40000 bp polished. Use the polished FASTA for which contig a read belongs to, not for positions in it. Read intervals (`query_start`, `query_stop`) are on the **read axis**, 0-based half-open, on the **original read as sequenced**. myloasm writes neither directly, and these functions convert both:
+myloasm tells strains apart with **SNPmers**: k-mers that span a variable site. Two reads, or a read and a contig, that share many SNPmers and contradict few come from the same strain.
+
+**Coordinates.** Contig intervals (`position`, `stop_position`) are on the **reference axis**, 1-based half-open, on the **unpolished** contig: the coordinates of the GFA and the PAF. Polishing shifts positions slightly, and trims the overlapping ends of a circular contig, whose unpolished length then exceeds its polished length by the overlap. Use the polished FASTA for which contig a read belongs to, not for positions in it. Read intervals (`query_start`, `query_stop`) are on the **read axis**, 0-based half-open, on the **original read as sequenced**. myloasm writes neither directly, and these functions convert both:
 - For a `-` alignment, myloasm writes the query interval on the reverse complement of the read. It is flipped back.
-- myloasm splits reads it judges chimeric and renames each piece `<read>+split<i>`. A second cleaning round can split a piece again, giving `<read>+split<i>+split<j>`. Coordinates are written relative to the piece. `read_id` is the read's own name, `split_suffix` keeps the suffix, `piece_offset` is where the piece starts in the read, and `query_start` / `query_stop` are moved onto the read. A `+split0` suffix does not by itself mean the read was split: every read that served as an outer read in a cleaning round gets one, and a read with no breakpoint becomes a single full-length `+split0` piece.
+- myloasm splits reads it judges chimeric and renames each piece `<read>+split<i>`. A second cleaning round can split a piece again, giving `<read>+split<i>+split<j>`. Coordinates are written relative to the piece. `read_id` is the read's own name, `split_suffix` keeps the suffix, `piece_offset` is where the piece starts in the read, and `query_start` / `query_stop` are moved onto the read. A `+split0` suffix does not by itself mean the read was split. In each cleaning round, myloasm checks for chimeras only the reads no other read contains (its "outer" reads); each of those gets a suffix, and one with no breakpoint becomes a single full-length `+split0` piece.
 
 See [Coordinate conventions](#coordinate-conventions).
 
 **Behavior:**
 - Every member file a function reads is required. A missing one fails with the reader's file error, which names it.
+- A directory path containing `*`, `?` or `[` is refused: the readers would expand it as a glob, so `run[1]` would read a directory named `run1`.
 - Values that are not in myloasm's format fail the scan, naming the record. This covers headers, `a` lines, tags, breakpoint lines and PAF names, as well as files that contradict each other: a FASTA contig with no `S` record, or a split piece no breakpoint creates. The checks fire whichever columns are selected.
 - myloasm writes its three FASTA files even when it has no contigs for one, so an empty one is read as no contigs.
 - myloasm drops reads under 1 kb and reads it finds repetitive before assembling. They appear in no output.
@@ -471,14 +481,14 @@ Every contig in the GFA, with its FASTA header's values. myloasm writes the GFA 
 - `unpolished_length` (BIGINT): The GFA's `LN`, the length every coordinate in these tables refers to
 - `circularity` (VARCHAR, nullable): `yes`, `possibly` or `no`
 - `depth_id99`, `depth_id99_75`, `depth_id100` (DOUBLE): The contig's depth at three SNPmer-identity tiers: the median, over its reads, of each read's minimum depth counting only reads at ≥ 99%, ≥ 99.75% and 100% identity to it. These are the GFA's `DP`, `DP2` and `DP3` and the header's `depth-<d1>-<d2>-<d3>`.
-- `median_depth_id100` (DOUBLE): The median of the reads' median depths at the 100% tier (the GFA's `MEDIAN_DP1`, which myloasm misnames)
-- `kmer_multiplicity` (DOUBLE, nullable) and `kmer_multiplicity_flag` (VARCHAR, nullable): The header's `mult=` and `duplicated-<no|possibly|yes>`: how repetitive the contig's own k-mers are (below 1.10 is `no`, below 1.50 `possibly`). **This is not the dereplication status**: a contig in `duplicated_contigs.fa` can say `duplicated-no`, as `u840ctg` in this repository's test run does.
-- `secondary_to_contig_id` (VARCHAR, nullable): For an alternate or duplicated contig, the larger contig myloasm compared it to. That contig can itself be an alternate.
+- `median_depth_id100` (DOUBLE): The median of the reads' median depths at the 100% tier: the GFA's `MEDIAN_DP1`, despite its name
+- `kmer_multiplicity` (DOUBLE, nullable) and `kmer_multiplicity_flag` (VARCHAR, nullable): The header's `mult=` and `duplicated-<no|possibly|yes>`: how repetitive the contig's own k-mers are (below 1.10 is `no`, below 1.50 `possibly`). **This is not the dereplication status**: a contig in `duplicated_contigs.fa` can say `duplicated-no`.
+- `secondary_to_contig_id` (VARCHAR, nullable): For an alternate or duplicated contig, the contig myloasm compared it to and kept in its place. That contig can itself be an alternate.
 - `secondary_aligned_percent`, `secondary_ani_percent` (DOUBLE, nullable): The aligned fraction and ANI of that comparison, in percent
 
 #### `read_myloasm_layout(dir)`
 
-The read slices each unpolished contig is built from, in order: the contig is literally these slices laid end to end. Only backbone reads are listed, a small fraction of the reads; `read_myloasm_mappings` has every read.
+The read slices each unpolished contig is built from, in order: the contig is these slices laid end to end. Only backbone reads are listed, a small fraction of the reads; `read_myloasm_mappings` has every read.
 
 - `contig_id` (VARCHAR), `layout_order` (BIGINT): The contig and the slice's 1-based place in it
 - `position`, `stop_position` (BIGINT): The slice on the unpolished contig. Consecutive slices abut, and the last stops at `unpolished_length + 1`. A slice can be empty when its neighbours cover the read entirely.
@@ -497,9 +507,9 @@ myloasm's final mapping of every read, contained ones included, to the unpolishe
 - `strand` (VARCHAR): `+` or `-`
 - `contig_id` (VARCHAR), `position`, `stop_position` (BIGINT): The aligned block on the unpolished contig
 - `query_anchor_span`, `contig_anchor_span` (BIGINT): PAF columns 10 and 11, which myloasm fills with the distance from the first anchor's start to the last anchor's end, not residue matches and block length
-- `shared_minimizers`, `shared_snpmers`, `differing_snpmers` (BIGINT): The strain-level evidence: minimizers the read shares with the contig, and SNPmers (k-mers at variable sites) it shares and contradicts
+- `shared_minimizers`, `shared_snpmers`, `differing_snpmers` (BIGINT): The strain-level evidence: minimizers the read shares with the contig, and SNPmers it shares and contradicts
 
-myloasm's SNPmer identity estimate (`mapping.rs::id_est`) is `1 / (1 + differing_snpmers / shared_minimizers / c)`, with `c` from `read_myloasm_run`'s `compression`.
+myloasm's own SNPmer identity estimate for a mapping is `1 / (1 + differing_snpmers / shared_minimizers / c)`, with `c` from `read_myloasm_run`'s `compression`.
 
 #### `read_myloasm_links(dir)`
 
@@ -529,7 +539,7 @@ One row per `myloasm*.log`, one per invocation; a resumed run has several.
 - `log_file` (VARCHAR): The log's path
 - `started_at` (TIMESTAMP): When the invocation began, in the log's local time
 - `myloasm_version` (VARCHAR), `command` (VARCHAR): myloasm's version and command line
-- `kmer_size` (INTEGER), `compression` (INTEGER): The k and c the run used. myloasm logs its command line, not these, so they are derived by its own rules: `--nano-r9` sets k = 17 and c = 7; `-c`/`--compression` then sets c; the defaults are k = 21 and c = 11. The log's "Setting -c to N" line prints c before `-c` is applied. Arguments containing spaces cannot be told apart in the logged command line.
+- `kmer_size` (INTEGER), `compression` (INTEGER): The run's k-mer size k, and its compression ratio c: myloasm keeps 1 in c k-mers as minimizers. myloasm logs its command line, not these, so they are derived by its own rules, checked against real runs: `--nano-r9` sets k = 17, overriding `-k`/`--kmer-size`, and c = 7; `-c`/`--compression` then sets c; otherwise c is the hidden `--c` and k is `-k`/`--kmer-size`, defaulting to 11 and 21. The log's "Setting -c to N" line prints c before `-c` is applied. Arguments containing spaces cannot be told apart in the logged command line.
 - `hifi` (BOOLEAN): Whether `--hifi` was given
 
 **Examples:**
@@ -567,7 +577,7 @@ FROM read_myloasm_contigs('myloasm_out') c
 JOIN read_fastx('myloasm_out/assembly_primary.fa') f ON f.read_id = c.fasta_id;
 ```
 
-**Assembling pooled reads with myloasm.** myloasm 0.7.0 sizes its Bloom filter by applying a ×1.5 gzip factor to its running total once per input file, so the estimate compounds with the number of files. 50 GB of gzipped reads is sized at 37.5 GB as one file, about 76 GB as four, and the 200 GB cap as ten, and that memory is really allocated. When co-assembling reads gathered with these tables, write them to one FASTQ or set `-b` explicitly.
+**Assembling pooled reads with myloasm.** myloasm 0.7.0 sizes its Bloom filter by applying a ×1.5 gzip factor to its running total once per input file, so the estimate compounds with the number of files. By its sizing code (`seq_parse.rs`, `estimate_bf_size`), 50 GB of gzipped reads is sized at 37.5 GB as one file, about 76 GB as four, and the 200 GB cap as ten, and that size is allocated. When co-assembling reads gathered with these tables, write them to one FASTQ or set `-b` explicitly.
 
 ### SFF
 
@@ -1224,14 +1234,14 @@ SELECT parse_gff_attributes('ID=gene1;Name=TEST1;biotype=protein_coding');
 
 ### Coordinate conventions
 
-miint reports positions on two axes, and the column name says which one. Every reader converts the file's own convention when it reads, so intervals from different functions compose without adjustment.
+miint reports positions on two axes. A reader converts the file's own convention when it reads, so intervals from different readers compose without adjustment; the [exceptions](#exceptions) are listed below.
 
 | Axis | Columns | Convention | Length |
 |---|---|---|---|
 | **Reference**: a reference, contig or annotated sequence | `position`, `stop_position` | 1-based half-open `[position, stop_position)` | `stop_position - position` |
-| **Read**: offsets into a read, in the orientation it was sequenced | `start`, `stop`, or `query_start`, `query_stop` | 0-based half-open `[start, stop)` | `stop - start` |
+| **Read**: offsets into a read, in the orientation it was sequenced | `query_start`, `query_stop`; `cigar_query_intervals`' `start`, `stop` | 0-based half-open `[query_start, query_stop)` | `query_stop - query_start` |
 
-Neither length takes a `+ 1`.
+Neither length takes a `+ 1`. `position`/`stop_position` and `query_start`/`query_stop` always name their axis. A bare `start`/`stop` does not: `alignment_slice` and `interval_bins` take reference-axis `start`/`stop`, so each function's documentation says which axis its parameters use.
 
 #### Reference axis
 
@@ -1243,7 +1253,7 @@ Neither length takes a `+ 1`.
 | 0-based half-open `[start, end)` | PAF target columns | `position = start + 1`, `stop_position = end + 1` |
 | 1-based `POS` plus the CIGAR's reference span | SAM / BAM | `position = POS`, `stop_position = POS + span` |
 
-The value a file contained is always recoverable: GFF's closed `end` is `stop_position - 1`, and PAF's 0-based `start` is `position - 1`. An unmapped record, a SAM record with `POS` 0 or a PAF record with target `*`, reports `position = 0` and `stop_position = 0`.
+The value a file contained is always recoverable: GFF's closed `end` is `stop_position - 1`, and PAF's 0-based `start` is `position - 1`. An unplaced unmapped record, a SAM record with RNAME `*` and `POS` 0 or a PAF record with target `*`, reports `position = 0` and `stop_position = 0`.
 
 > **Changed behaviour.** `read_gff` and `read_ncbi_annotation` previously emitted the source format's closed `end` directly under the same `stop_position` column name. Queries that consumed it now see a value one larger. Anything computing a length as `stop_position - position + 1` should drop the `+ 1`; anything that compensated with its own `+ 1` before feeding another miint function should remove that compensation. The motivation was that the mismatch was silent: feeding `read_gff` output to `genome_coverage` (which computes `SUM(stop - start)`) type-checked, ran, raised nothing, and under-counted every feature by exactly one base.
 
@@ -1255,7 +1265,8 @@ Read-axis intervals are always on the read **as sequenced**, whatever strand the
 
 DuckDB's `substr` is 1-based, so the aligned bases of a read are `substr(sequence1, query_start + 1, query_stop - query_start)`.
 
-#### Deliberate exceptions
+#### Exceptions
 
+- `read_gfa` returns a file's fields as written, so a `W` walk's start and end and a `C` containment's position stay 0-based. See [GFA](#gfa).
 - Bin indices from `bin_of` / `bin_start` / `interval_bins` ([Genome bins](alignment_analysis.md#genome-bins)) are 0-based array positions, not coordinates.
 - `absquant_orf_copies` takes 1-based **closed** ORF coordinates, the convention woltka's `coords.txt` uses; see [Absolute quantification](absolute_quantification.md).

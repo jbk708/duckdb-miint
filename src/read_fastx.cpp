@@ -315,9 +315,9 @@ void ReadFastxTableFunction::Execute(ClientContext &context, TableFunctionInput 
 }
 
 // Cardinality estimate so joins stream read_fastx rather than hash it; see
-// EstimateFileScanCardinality. 50 bytes/record is intentionally small so that
-// bacterial-genome FASTA (~5 MB/record) and short-read FASTQ (~300 B/record) both resolve to
-// "big" when the file is big.
+// EstimateFileScanCardinality. 50 bytes/record is below both bacterial-genome FASTA
+// (~5 MB/record) and short-read FASTQ (~300 B/record), so both resolve to "big" when the file
+// is big.
 static unique_ptr<NodeStatistics> ReadFastxCardinality(ClientContext &context, const FunctionData *bind_data_p) {
 	constexpr idx_t AVG_BYTES_PER_RECORD = 50;
 	auto &bind_data = bind_data_p->Cast<ReadFastxTableFunction::Data>();

@@ -137,9 +137,8 @@ const std::string READ_GFA_LINKS = // NOLINT
     "       CASE WHEN fields[5] = '*' THEN NULL ELSE fields[5] END AS overlap, "
     "       tags "
     "FROM read_gfa(path) "
-    // One CASE rather than `record_type = 'L' AND <check>`: DuckDB may evaluate AND terms
-    // in any order, and an S record's second field is a sequence, not an orientation. In
-    // the WHERE clause, not a projection, so pruning the orientation columns cannot skip it.
+    // One CASE in the WHERE clause (docs/internals/duckdb-engine-notes.md, "Validation in a
+    // table macro"): an S record's second field is a sequence, not an orientation.
     "WHERE CASE "
     "        WHEN record_type <> 'L' THEN FALSE "
     "        WHEN fields[2] NOT IN ('+', '-') OR fields[4] NOT IN ('+', '-') "
@@ -156,25 +155,27 @@ const std::string READ_GFA_LINKS = // NOLINT
 // macro reads only the member files it needs, and a missing one is the reader's file error.
 //
 // Coordinates follow miint's two axes: contig `position`/`stop_position` are 1-based
-// half-open on the UNPOLISHED contig (the GFA's and PAF's); read `query_start`/`query_stop`
-// are 0-based half-open on the ORIGINAL read as sequenced. myloasm gives neither directly:
+// half-open on the unpolished contig (the GFA's and PAF's); read `query_start`/`query_stop`
+// are 0-based half-open on the original read as sequenced. myloasm gives neither directly:
 //   * '-' query intervals (PAF and GFA 'a' lines) are on the reverse complement of the read;
 //   * a chimera split renames each piece <read>+split<i> (a second cleaning round appends a
 //     second suffix) and gives coordinates on the piece. A piece's offset in the read comes
 //     from the breakpoint logs: piece i >= 1 starts at breakpoint i's stop, and +split0
 //     starts where its parent does.
-// Malformed values raise error() from a single CASE in the WHERE clause, as read_gff does:
-// DuckDB may evaluate AND terms in any order, and pruning cannot skip a WHERE clause.
+// Malformed values raise error() from one CASE in the WHERE clause; see "Validation in a
+// table macro" in docs/internals/duckdb-engine-notes.md.
 
-// The member file `member` of a myloasm directory.
+// The member file `member` of a myloasm directory. The readers expand globs, so a directory
+// name with a glob character would read some other directory's files; it is refused.
 const std::string MIINT_MYLOASM_PATH = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_path(dir, member) AS "
     "CASE WHEN dir IS NULL THEN error('read_myloasm: the myloasm output directory cannot be NULL') "
+    "     WHEN contains(dir, '*') OR contains(dir, '?') OR contains(dir, '[') "
+    "     THEN error(printf('read_myloasm: the output directory ''%s'' contains a glob character (*, ? or [)', dir)) "
     "     ELSE rtrim(dir, '/') || '/' || member END; ";
 
 // A myloasm read name is the read's first header word plus zero or more +split<i> suffixes.
-// Most reads carry none, so each helper skips its regex when the name has no '+split': on a
-// mappings PAF that is most of the macro's time.
+// Most reads carry none, so each helper skips its regex when the name has no '+split'.
 const std::string MIINT_MYLOASM_READ_ID = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_read_id(name) AS "
     "CASE WHEN contains(name, '+split') THEN regexp_replace(name, '([+]split[0-9]+)+$', '') ELSE name END; ";
@@ -261,8 +262,8 @@ const std::string MIINT_MYLOASM_BREAKPOINTS = // NOLINT
     "          END "
     ") "
     "SELECT split_key, cleaning_round, e.ordinality AS breakpoint_order, "
-    "       regexp_extract(e.unnest, '^([0-9]+)-', 1)::BIGINT AS start, "
-    "       regexp_extract(e.unnest, '-([0-9]+)-COND', 1)::BIGINT AS stop, "
+    "       regexp_extract(e.unnest, '^([0-9]+)-', 1)::BIGINT AS piece_start, "
+    "       regexp_extract(e.unnest, '-([0-9]+)-COND', 1)::BIGINT AS piece_stop, "
     "       regexp_extract(e.unnest, 'COND:(-?[0-9]+)$', 1)::INTEGER AS split_condition "
     "FROM checked, unnest(entries) WITH ORDINALITY e; ";
 
@@ -276,24 +277,20 @@ const std::string READ_MYLOASM_SPLITS = // NOLINT
     "       _miint_myloasm_split_suffix(b.split_key) AS parent_split_suffix, "
     "       b.cleaning_round, "
     "       b.breakpoint_order, "
-    "       coalesce(parent.stop, 0) + b.start AS query_start, "
-    "       coalesce(parent.stop, 0) + b.stop AS query_stop, "
+    "       coalesce(parent.piece_stop, 0) + b.piece_start AS query_start, "
+    "       coalesce(parent.piece_stop, 0) + b.piece_stop AS query_stop, "
     "       b.split_condition "
     "FROM b "
     "LEFT JOIN b AS parent "
     "  ON parent.split_key || '+split' || parent.breakpoint_order = _miint_myloasm_offset_piece(b.split_key) "
     "WHERE CASE "
-    "        WHEN b.start > b.stop "
+    "        WHEN b.piece_start > b.piece_stop "
     "        THEN error(printf('read_myloasm: breakpoint logs: read ''%s'': "
-    "breakpoint %d starts after it stops (%d-%d)', b.split_key, b.breakpoint_order, b.start, b.stop)) "
+    "breakpoint %d starts after it stops (%d-%d)', b.split_key, b.breakpoint_order, b.piece_start, b.piece_stop)) "
     "        WHEN _miint_myloasm_split_depth(b.split_key) > 1 "
     "        THEN error(printf('read_myloasm: breakpoint logs: read ''%s'' is split again after two cleaning rounds', "
     "                          b.split_key)) "
-    "        WHEN _miint_myloasm_offset_piece(b.split_key) <> _miint_myloasm_read_id(b.split_key) "
-    "         AND parent.stop IS NULL "
-    "        THEN error(printf('read_myloasm: breakpoint logs: piece ''%s'' has no breakpoint that starts it', "
-    "                          b.split_key)) "
-    "        ELSE TRUE "
+    "        ELSE _miint_myloasm_check_piece(b.split_key, parent.piece_stop, 'read_myloasm: breakpoint logs: ') "
     "      END; ";
 
 // Every piece that starts at a breakpoint, with that start on the original read.
@@ -440,8 +437,8 @@ const std::string READ_MYLOASM_MAPPINGS = // NOLINT
 //   u<N>ctg_len-<polished length>_circular-<yes|possibly|no>_depth-<d1>-<d2>-<d3>_duplicated-<flag>
 //   comment: mult=<k-mer multiplicity>[ secondary_to:|<full header>| aligned_frac:<%> ani:<%>]
 // d1-d3 are the GFA's DP, DP2 and DP3: the median, over the contig's reads, of each read's
-// minimum depth counting reads at >= 99%, 99.75% and 100% SNPmer identity. MEDIAN_DP1 is
-// misnamed by myloasm: it is the median of the reads' median depths at the 100% tier.
+// minimum depth counting reads at >= 99%, 99.75% and 100% SNPmer identity. MEDIAN_DP1, despite
+// its name, is the median of the reads' median depths at the 100% tier.
 // myloasm writes all three FASTAs whether or not it has contigs for them, hence allow_empty.
 const std::string READ_MYLOASM_CONTIGS = // NOLINT
     "CREATE OR REPLACE MACRO read_myloasm_contigs(dir) AS TABLE "

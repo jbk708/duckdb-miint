@@ -24,6 +24,13 @@ DUCKDB=${DUCKDB:-$REPO/build/release/duckdb}
 MINIMAP2=${MINIMAP2:-minimap2}
 DEST=$REPO/data/paf
 
+# data/paf/README.md describes what this version writes; another may align differently.
+FOUND=$("$MINIMAP2" --version)
+if [ "$FOUND" != "2.31-r1302" ]; then
+    echo "ERROR: expected minimap2 2.31-r1302, found $FOUND" >&2
+    exit 1
+fi
+
 mkdir -p "$DEST"
 cd "$REPO"
 "$DUCKDB" -batch <<SQL

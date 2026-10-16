@@ -18,7 +18,8 @@ compression	INTEGER
 hifi	BOOLEAN
 
 query TTTTIIT
-SELECT * FROM read_myloasm_run('data/myloasm/ecoli_sim');
+SELECT replace(log_file, '\', '/'), started_at, myloasm_version, command, kmer_size, compression, hifi
+FROM read_myloasm_run('data/myloasm/ecoli_sim');
 ----
 data/myloasm/ecoli_sim/myloasm.log	2026-10-15 12:44:45.889	0.7.0	myloasm reads.fa -o run1 --hifi -t 1	21	11	true
 

@@ -18,8 +18,10 @@ PafRecord Parse(const std::string &line) {
 	return record;
 }
 
-// Lines copied from data/paf/k12_minimap2.paf (minimap2 2.31) and from myloasm 0.7.0's
-// map_to_unitigs.paf.gz; see the READMEs there for how the reads were built.
+// kForward and kUnmapped are copied from data/paf/k12_minimap2.paf (minimap2 2.31), and
+// kReverseOverhang is its ovhrev line with some tags dropped; data/paf/README.md says how the
+// reads were built. kMyloasm is a made-up record in the format of myloasm 0.7.0's
+// map_to_unitigs.paf.gz (untyped tags, a reverse-strand piece).
 const std::string kForward = "fwd_1000_3000\t2000\t0\t2000\t+\tk12_100000_120000\t20000\t1000\t3000\t2000\t2000\t60\t"
                              "NM:i:0\tms:i:2000\tAS:i:2000\tnn:i:0\ttp:A:P\tcm:i:185\ts1:i:1973\ts2:i:0\tde:f:0\t"
                              "rl:i:0\tcg:Z:2000M";
@@ -148,6 +150,12 @@ TEST_CASE("PafParser rejects malformed records with a message naming the defect"
 		CHECK_THROWS_WITH(Parse(WithField(3, "2001")), ContainsSubstring("query"));   // stop > length
 		CHECK_THROWS_WITH(Parse(WithField(7, "3001")), ContainsSubstring("target"));  // start > stop
 		CHECK_THROWS_WITH(Parse(WithField(8, "20001")), ContainsSubstring("target")); // stop > length
+	}
+	SECTION("a target end with no 1-based position") {
+		// stop_position is target end + 1, which the largest integer does not have.
+		CHECK_THROWS_WITH(Parse("r\t10\t0\t10\t+\tref\t9223372036854775807\t9223372036854775797\t"
+		                        "9223372036854775807\t10\t10\t60"),
+		                  ContainsSubstring("too large"));
 	}
 	SECTION("a strand that is not + or -") {
 		CHECK_THROWS_WITH(Parse(WithField(4, "x")), ContainsSubstring("strand"));

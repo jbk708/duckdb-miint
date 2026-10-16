@@ -150,9 +150,8 @@ FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa') WHERE record_type
 
 # --- Inputs ---
 
-# The optimizer sizes a scan from its row estimate. With none, DuckDB assumes one row and can
-# put a large graph on the build side of a hash join instead of streaming it, so the estimate
-# grows with the file.
+# The scan has a row estimate that grows with the file, not DuckDB's default of one row (why:
+# EstimateFileScanCardinality in src/include/table_function_common.hpp).
 query II
 EXPLAIN SELECT * FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa');
 ----
@@ -218,8 +217,13 @@ SELECT count(*), sum(line_number), sum(tags['LN']::BIGINT) FROM read_gfa('__TEST
 ----
 3000	4501500	4498500
 
-# A chunk that continues a file from the previous chunk still names that file: all 3000 of
-# many.gfa's records, and the specification example's 10.
+# A chunk that continues a file from the previous chunk still names that file, and a chunk
+# that reaches the end of a file stops there rather than taking rows from the next file: all
+# 3000 of many.gfa's records, and the specification example's 10. One thread reads both files
+# in order, so many.gfa's second chunk ends at its last record whatever the scheduling.
+statement ok
+SET threads = 1;
+
 query TI
 SELECT replace(filepath, '__TEST_DIR__/', ''), count(*)
 FROM read_gfa(['__TEST_DIR__/many.gfa', 'data/gfa/spec_example.gfa'], include_filepath := true)
@@ -227,6 +231,9 @@ GROUP BY ALL ORDER BY ALL;
 ----
 data/gfa/spec_example.gfa	10
 many.gfa	3000
+
+statement ok
+RESET threads;
 
 statement ok
 COPY (SELECT CASE WHEN i = 2499 THEN E'S\tdamaged' ELSE printf(E'S\ts%d\t*', i) END FROM range(3000) t(i) ORDER BY i)

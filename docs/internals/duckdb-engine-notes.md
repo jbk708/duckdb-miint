@@ -205,6 +205,15 @@ are integers. Compare in the column's type and cast the literals instead:
 whose text round trip is exact, and keeps the cast for FLOAT, DOUBLE and DECIMAL ids, whose
 text form is not.
 
+**Validation in a table macro goes in one CASE in its WHERE clause.** Two engine behaviours
+decide this. The terms of `cond AND check` are not guaranteed to run in the order written, so
+a cast or `error()` that `cond` was meant to guard can run on rows `cond` excludes; a CASE
+tests its WHENs in order. And a check written in the SELECT list is pruned when the query
+does not select that column, while a WHERE clause always runs. So a macro raises its errors as
+`WHERE CASE WHEN <excluded> THEN FALSE WHEN <bad> THEN error(...) ELSE TRUE END`, with any cast
+placed after the WHEN that proves it safe. `read_gff`, `read_gfa_links` and the
+`read_myloasm_*` macros in `src/include/miint_macros.hpp` follow it.
+
 Passes worth knowing about for our workloads:
 - `late_materialization` — keeps rows narrow through the heavy operators, then joins wide
   payload columns back by row ID. This is exactly the shape our wide records

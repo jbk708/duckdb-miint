@@ -3,6 +3,7 @@
 #include "line_splitter.hpp"
 
 #include <charconv>
+#include <limits>
 #include <stdexcept>
 #include <system_error>
 
@@ -67,7 +68,8 @@ void PafParser::Parse(std::string_view line, PafRecord &record) {
 	record.mapq = static_cast<uint8_t>(mapq);
 
 	if (record.strand != "+" && record.strand != "-" && record.strand != "*") {
-		throw std::runtime_error("strand must be '+' or '-', found '" + record.strand + "'");
+		throw std::runtime_error("strand must be '+', '-', or '*' for an unmapped record, found '" + record.strand +
+		                         "'");
 	}
 	// minimap2 --paf-no-hit marks an unmapped query with '*' for both. One without the
 	// other is not a record any aligner writes.
@@ -83,11 +85,16 @@ void PafParser::Parse(std::string_view line, PafRecord &record) {
 			throw std::runtime_error("an unmapped record must have target start and end 0, found [" +
 			                         std::to_string(target_start) + ", " + std::to_string(target_end) + ")");
 		}
-		// read_alignments reports an unmapped record at position 0; match it.
+		// read_alignments reports an unplaced unmapped record (RNAME *, POS 0) at position 0;
+		// match it.
 		record.position = 0;
 		record.stop_position = 0;
 	} else {
 		CheckInterval("target", target_start, target_end, record.reference_length);
+		if (target_end == std::numeric_limits<int64_t>::max()) {
+			throw std::runtime_error("target end " + std::to_string(target_end) +
+			                         " is too large for a 1-based position");
+		}
 		// PAF targets are 0-based half-open; miint's reference axis is 1-based half-open.
 		record.position = target_start + 1;
 		record.stop_position = target_end + 1;

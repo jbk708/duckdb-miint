@@ -167,9 +167,7 @@ bool IsValidValue(char type, std::string_view value) {
 	}
 }
 
-// [A-Za-z_][A-Za-z0-9_]*. The specifications define tag names as exactly two characters,
-// [A-Za-z][A-Za-z0-9], but myloasm's GFA writes longer typed names (DP2:f:30.0,
-// MEDIAN_DP1:f:33.0), so a typed field accepts any name of this form, as an untyped one does.
+// [A-Za-z_][A-Za-z0-9_]*, for typed and untyped fields alike (why: TagSyntax::Typed).
 bool IsTagName(std::string_view key) {
 	if (key.empty() || !(IsAlpha(key[0]) || key[0] == '_')) {
 		return false;

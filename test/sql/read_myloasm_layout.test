@@ -118,8 +118,9 @@ FROM (SELECT *, max(layout_order) OVER (PARTITION BY contig_id) AS last_order
 
 # --- Two-level pieces, constructed from the real run ---
 
-# Round-2 breakpoints as in read_myloasm_splits.test, and a GFA with one more contig built
-# from two of the pieces they create:
+# Round-2 breakpoint lines, written below (s00913 +split1 cut at [1000, 1200) and
+# [3000, 3100); s00000 cut at [4000, 4100)), and a GFA with one more contig built from two of
+# the pieces they create:
 #   s00913 +split1+split1 is [7317, 9117) of its read (1800 bp). Its slice 0-1500 is on the
 #     piece's reverse complement, so [300, 1800) forward             -> [7617, 9117)
 #   s00000 +split1 is [4100, 8000) of its read. Slice 300-1500, '+'  -> [4400, 5600)

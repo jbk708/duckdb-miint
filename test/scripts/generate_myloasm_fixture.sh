@@ -41,6 +41,13 @@ MYLOASM_ENV=${MYLOASM_ENV:-myloasm-070}
 WORK=${1:?usage: generate_myloasm_fixture.sh WORK_DIR}
 DEST=$REPO/data/myloasm/ecoli_sim
 
+# data/myloasm/README.md describes what this version writes; another may assemble differently.
+FOUND=$(conda run -n "$MYLOASM_ENV" myloasm --version)
+if [ "$FOUND" != "myloasm 0.7.0" ]; then
+    echo "ERROR: expected myloasm 0.7.0 in $MYLOASM_ENV, found $FOUND" >&2
+    exit 1
+fi
+
 if [ -e "$WORK" ]; then
     echo "ERROR: $WORK already exists; pass a fresh directory" >&2
     exit 1

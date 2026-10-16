@@ -67,6 +67,8 @@ TEST_CASE("LineSplitter strips CRLF line endings, and only those", "[line_splitt
 	CHECK(AllLines("a\rb\n", 1024) == std::vector<Line> {{"a\rb", 1}});
 	// A read boundary between '\r' and '\n' must not leave the '\r' on the line.
 	CHECK(AllLines("ab\r\ncd\n", 3) == std::vector<Line> {{"ab", 1}, {"cd", 2}});
+	// A CRLF file whose last line lost its '\n' still ends that line with '\r'.
+	CHECK(AllLines("a\r\nb\r", 1024) == std::vector<Line> {{"a", 1}, {"b", 2}});
 }
 
 TEST_CASE("LineSplitter output does not depend on where reads or the buffer end", "[line_splitter]") {
@@ -75,7 +77,10 @@ TEST_CASE("LineSplitter output does not depend on where reads or the buffer end"
 	// against reading the input in one piece.
 	const std::string input = "first line\n\nCRLF line\r\na line much longer than the tiny buffer\nlast";
 	const auto expected = AllLines(input, input.size());
-	REQUIRE(expected.size() == 5);
+	REQUIRE(
+	    expected ==
+	    std::vector<Line> {
+	        {"first line", 1}, {"", 2}, {"CRLF line", 3}, {"a line much longer than the tiny buffer", 4}, {"last", 5}});
 	for (size_t chunk = 1; chunk <= 7; chunk++) {
 		for (size_t buffer : {size_t(1), size_t(2), size_t(4), size_t(16)}) {
 			INFO("chunk " << chunk << ", buffer " << buffer);

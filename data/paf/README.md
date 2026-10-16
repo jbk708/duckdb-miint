@@ -32,12 +32,14 @@ forward-strand query coordinates put the aligned block at the read's 3' end. A r
 mirrored the coordinates would report `[0, 3000)` instead. Both overhang slices end at the
 reference's end, so chance matches cannot extend an alignment into the foreign tail.
 
-minimap2 writes the unmapped read (`--paf-no-hit`) as strand `*`, target `*`, and zeros
-for every coordinate, length and count. Its only tag is `rl:i:0`.
+minimap2 writes the unmapped read (`--paf-no-hit`) with its query length (3000), strand `*`,
+target `*`, and zeros for every other coordinate, length and count. Its only tag is `rl:i:0`.
 
 ## Regenerating
 
-Generated with **minimap2 2.31-r1302** as `minimap2 -x map-hifi -c --paf-no-hit -t 1`.
+Generated with **minimap2 2.31-r1302** as `minimap2 -x map-hifi -c --paf-no-hit -t 1`. This is
+the command-line minimap2, not the 2.30 that miint embeds for `align_minimap2`: the tests compare
+the two, so the fixture comes from a separate build. The generator refuses any other version.
 
 ```bash
 bash build.sh

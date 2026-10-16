@@ -128,9 +128,7 @@ SAM alignments compute `stop_position` using HTSlib's `bam_endpos()`:
 - Critical for interval operations and coverage analysis
 
 ### Coordinate Axes for Readers
-A reader converts coordinates to miint's convention when it reads, and names each interval column after its axis. The user-facing rule, with the per-format conversions, is [Coordinate conventions](../reading.md#coordinate-conventions).
-- **Reference axis**: `position` / `stop_position`, 1-based half-open. A 0-based half-open source (PAF targets) adds 1 to both ends; a 1-based closed source (GFF3) adds 1 to the end only. An unmapped record reports 0 for both, matching `read_alignments`.
-- **Read axis**: `start` / `stop`, or `query_start` / `query_stop` when the row also has reference coordinates. These are 0-based half-open offsets on the read as sequenced, so they compose with `cigar_query_intervals` and `compress_intervals`. A reverse-strand alignment is still reported on the forward read; a format that writes reverse-complement offsets is mirrored on read.
+A reader converts coordinates to miint's convention when it reads, and names each interval column after its axis: `position` / `stop_position` for the reference axis, `query_start` / `query_stop` for the read axis. A bare `start` / `stop` names neither (`alignment_slice` takes reference-axis ones). The rule and the per-format conversions are in [Coordinate conventions](../reading.md#coordinate-conventions).
 - A column that leaves the file's convention in place, or an interval column named for neither axis, means every caller has to know the source format to use it correctly — the off-by-one this rule exists to prevent.
 
 ### Identifier-column Codec (`id_column_codec` / `id_column_utils`)

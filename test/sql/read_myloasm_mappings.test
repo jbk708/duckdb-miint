@@ -85,10 +85,12 @@ WHERE p[2] = 'ovh';
 ----
 20	20	20
 
-# Each chimera is strain A joined to the circle, at a junction known from its name (see
-# read_myloasm_splits.test). Every alignment must lie on the side of the junction that
-# matches what it aligns to: strain A contigs (u491ctg, u826ctg) or the circle (u840ctg,
-# u982ctg).
+# Each chimera is strain A joined to the circle, at a junction known from its name (the read
+# kinds are in data/myloasm/README.md, "The reads"). A forward read starts with its strain A
+# part, so the junction is that part's length; a reverse read is the reverse complement, so it
+# starts with the circle part, and the junction is that part's length. Every alignment must
+# lie on the side of the junction that matches what it aligns to: strain A contigs (u491ctg,
+# u826ctg) or the circle (u840ctg, u982ctg).
 query II
 SELECT count(*),
        count(*) FILTER (CASE WHEN (contig_id IN ('u491ctg', 'u826ctg')) = (p[7] = 'f')
@@ -134,8 +136,8 @@ WHERE read_id = 's00007_lina_1002721_1016739_r';
 
 # --- Two-level pieces, constructed from the real run ---
 
-# Round-2 breakpoints as in read_myloasm_splits.test, plus PAF records for the pieces they
-# create, appended to the real PAF in myloasm's format. Expected read intervals:
+# Round-2 breakpoint lines, written below, plus PAF records for the pieces they create,
+# appended to the real PAF in myloasm's format. Expected read intervals:
 #   s00913 +split1 is [6117, 12000). Round 2 cuts it at [1000, 1200) and [3000, 3100):
 #     +split1+split0  starts with its parent:  offset 6117,  [0, 1000) +  -> [6117, 7117)
 #     +split1+split1  offset 6117 + 1200:      [100, 1800) - on its 1800 bp reverse

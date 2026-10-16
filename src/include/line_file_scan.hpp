@@ -32,9 +32,10 @@ struct LineScanData : public TableFunctionData {
 constexpr idx_t LINE_SCAN_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
 
 // Resolve a reader's arguments: a VARCHAR path or glob, or a VARCHAR[] of literal paths,
-// plus include_filepath. Rejects NULL, an empty list, stdin, and a local path that does not
-// exist, with messages prefixed by the function's name. `names` and `return_types` are the
-// reader's own columns; a filepath column is appended when requested.
+// plus include_filepath. Rejects NULL, an empty list and stdin with messages prefixed by the
+// function's name, and a local path that does not exist with "File not found: <path>", as
+// read_fastx does. `names` and `return_types` are the reader's own columns; a filepath column
+// is appended when requested.
 unique_ptr<FunctionData> BindLineScan(ClientContext &context, TableFunctionBindInput &input, vector<std::string> &names,
                                       vector<LogicalType> &return_types);
 
@@ -59,6 +60,7 @@ struct LineScanGlobalState : public GlobalTableFunctionState {
 struct LineFile {
 	std::string path;
 	miint::DuckDBSeqStreamHandle stream;
+	// Reads through `stream`, so it must be declared after it: members are built in order.
 	miint::LineSplitter lines;
 
 	LineFile(FileSystem &fs, const std::string &path, const std::string &function_name);
