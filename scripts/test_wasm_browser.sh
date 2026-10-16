@@ -2,9 +2,9 @@
 # Browser check for the miint WASM extension: load it into duckdb-wasm the way
 # the playground does, in headless Chrome, and run scripts/wasm_browser/steps.json.
 #
-# This, not test_wasm_load.sh, is the check for Rust code paths: its harness is a
-# different main module and JS glue from the duckdb-wasm release users run, and
-# Rust code depends on exactly the helpers that differ (docs/wasm-testing.md).
+# This, not test_wasm_load.sh, is the check for Rust code paths: the load test
+# links a main module and JS glue built from the duckdb/ submodule, while this
+# runs the duckdb-wasm release users get (docs/wasm-testing.md).
 #
 # Prerequisites:
 #   - Node.js 22.12 or newer and npm (puppeteer-core is installed into scripts/wasm_browser/)

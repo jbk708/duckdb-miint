@@ -4,7 +4,8 @@
 # Prerequisites:
 #   - emscripten (emsdk) installed and activated
 #   - VCPKG_TOOLCHAIN_PATH set (or vcpkg/ symlink in repo root)
-#   - Rust with wasm32-unknown-emscripten target: rustup target add wasm32-unknown-emscripten
+#   - rustup: the build installs the pinned toolchain, its wasm32-unknown-emscripten
+#     target and, for wasm_eh, its rust-src component
 #   - Node.js (for import verification)
 #
 # Usage:
