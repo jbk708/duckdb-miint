@@ -65,21 +65,32 @@ for (const s of steps) {
 let passed = 0;
 let failed = 0;
 let aborted = null;
-// r is {ok, value, alive} or {ok: false, error, alive}; alive says whether the
-// database answered SELECT 'alive' after the step.
+// A line DuckDB writes for an error: "<Kind> Error: ..." or the shell's fixed
+// message for a statement with unbound parameters.
+const DUCKDB_ERROR_LINE = /^([A-Za-z][A-Za-z ]*Error: |Prepared statement parameters cannot be used directly)/;
+
+// r is {ok, value, varchar, shape, alive} or {ok: false, error, alive}. varchar
+// says the step returned one VARCHAR column; alive says whether the database
+// answered SELECT 'alive' after the step.
 function report(step, r) {
   let why = null;
   if (step.expect_error !== undefined) {
+    const errors = r.ok ? [] : r.error.split('\n').filter(l => DUCKDB_ERROR_LINE.test(l));
     if (r.ok) why = `expected an error containing "${step.expect_error}", but the step succeeded`;
-    else if (!r.error.includes(step.expect_error)) why = `expected an error containing "${step.expect_error}", got: ${r.error}`;
+    else if (!errors.some(l => l.includes(step.expect_error))) {
+      why = `expected a DuckDB error containing "${step.expect_error}", got: ${r.error}`;
+    }
   } else if (!r.ok) {
     why = r.error;
+  } else if (step.expect !== undefined && !r.varchar) {
+    why = `an expect step must return one VARCHAR column (got ${r.shape}); cast it to VARCHAR`;
   } else if (step.expect !== undefined && r.value !== step.expect) {
     why = `\n  expected ${step.expect}\n  got      ${r.value}`;
   }
-  if (why === null && !r.alive) {
-    why = r.ok ? 'the database no longer answers after this step'
-               : `failed as expected, but the database no longer answers: ${r.error}`;
+  if (!r.alive) {
+    const dead = 'the database no longer answers';
+    if (why === null) why = r.ok ? `${dead} after this step` : `failed as expected, but ${dead}: ${r.error}`;
+    else why += `\n  and ${dead}`;
   }
   if (why === null) {
     passed++;
@@ -93,40 +104,46 @@ function report(step, r) {
 const NATIVE_TIMEOUT_MS = 900_000;
 const NATIVE_MAX_BUFFER = 256 * 1024 * 1024;
 
-// The first JSON document in a step's output (a multi-statement step prints one
-// per statement, and duckdb-wasm likewise returns the first statement's result),
-// as the first cell of its first row. JSON null prints as NULL, as in the page.
-function firstCell(lines) {
-  const doc = [];
-  for (const line of lines) {
-    if (line === '') continue;
-    doc.push(line);
-    if (line.endsWith(']')) break;
+// A step's result from its JSON output: one document per statement that returns
+// rows, each starting on a line that begins with '['. The first such statement's
+// first row is the step's result, as duckdb-wasm reports it. Throws if the
+// output is not JSON. JSON null prints as NULL, as in the page. A one-column
+// row whose value is a string or null is what a VARCHAR column prints; numbers
+// print bare, and JSON.parse would round a BIGINT above 2^53.
+function nativeResult(lines) {
+  const docs = [];
+  for (const line of lines.filter(l => l !== '')) {
+    if (line.startsWith('[') || docs.length === 0) docs.push([line]);
+    else docs.at(-1).push(line);
   }
-  if (doc.length === 0) return null;
-  const rows = JSON.parse(doc.join('\n'));
-  if (rows.length === 0) return null;
-  const v = Object.values(rows[0])[0];
-  return v === null ? 'NULL' : String(v);
+  const parsed = docs.map(d => JSON.parse(d.join('\n')));
+  const row = parsed[0]?.[0];
+  if (row === undefined) return { value: null, varchar: true, shape: 'no rows' };
+  const keys = Object.keys(row);
+  const v = row[keys[0]];
+  return { value: v === null ? 'NULL' : String(v), varchar: keys.length === 1 && (v === null || typeof v === 'string'),
+           shape: `${keys.length} column(s), the first a JSON ${v === null ? 'null' : typeof v}` };
 }
 
 function runNative(duckdb) {
-  // One shell session. Results print as JSON (.mode json), so any output line
-  // that is not JSON is error text, however it is worded. All output goes to
-  // stderr (.output stderr), so errors stay in order with the markers. After
-  // each step the shell runs SELECT 'alive'. No -bail: a step expected to fail
-  // must not end the run.
+  // One shell session, with no ~/.duckdbrc (-no-init). Results print as JSON
+  // (.mode json), so a step whose output has a line that does not start with
+  // '[' or '{' failed, however the line is worded. All output goes to stderr
+  // (.output stderr), so errors stay in order with the markers. After each step
+  // the shell runs SELECT 'alive'. No -bail: a step expected to fail must not
+  // end the run.
   const script = ['.output stderr', '.mode json',
     ...steps.flatMap(s => [`.print @@step ${s.name}`, s.sql.trim().replace(/;?$/, ';'),
                            '.print @@alive', "SELECT 'alive' AS alive;"]),
     '.print @@end', ''].join('\n');
-  const r = spawnSync(duckdb, [':memory:'], { input: script, encoding: 'utf8',
+  const r = spawnSync(duckdb, ['-no-init', ':memory:'], { input: script, encoding: 'utf8',
                                               timeout: NATIVE_TIMEOUT_MS, maxBuffer: NATIVE_MAX_BUFFER });
   if (r.error && r.error.code !== 'ETIMEDOUT' && r.error.code !== 'ENOBUFS') {
     aborted = `could not run ${duckdb}: ${r.error.message}`;
     return;
   }
   const sections = new Map();
+  const outside = [];
   let cur = null;
   let ended = false;
   for (const line of (r.stderr ?? '').split('\n')) {
@@ -141,6 +158,8 @@ function runNative(duckdb) {
       cur = null;
     } else if (cur) {
       (cur.aliveSeen ? cur.alive : cur.out).push(line);
+    } else if (line.trim() !== '') {
+      outside.push(line);
     }
   }
   const stopped = r.error?.code === 'ETIMEDOUT' ? `the shell timed out after ${NATIVE_TIMEOUT_MS / 1000} s`
@@ -163,14 +182,24 @@ function runNative(duckdb) {
     if (at >= 0 || (sec.aliveSeen && !alive)) sawError = true;
     if (at >= 0) report(s, { ok: false, error: sec.out.slice(at).join('\n').trim(), alive });
     else if (!sec.aliveSeen) report(s, { ok: false, error: `${stopped} during this step`, alive: false });
-    else report(s, { ok: true, value: firstCell(sec.out), alive });
+    else {
+      let result;
+      try {
+        result = nativeResult(sec.out);
+      } catch {
+        result = null;
+      }
+      if (result) report(s, { ok: true, ...result, alive });
+      else report(s, { ok: false, error: `output is not JSON:\n${sec.out.join('\n').trim()}`, alive });
+    }
     if (!alive) break;
   }
-  // The shell exits 1 after any error, expected ones included. Any other nonzero
-  // status, a signal, or 1 with no error on any step means something failed that
-  // no step showed.
-  if (ended && (r.signal || (r.status !== 0 && !(r.status === 1 && sawError)))) {
-    aborted = `${stopped}, which no step's output explains; the last step it started was '${[...sections.keys()].at(-1)}'`;
+  if (outside.length > 0) {
+    aborted = `the shell printed outside any step: ${outside.slice(0, 5).map(l => JSON.stringify(l)).join(', ')}`;
+  } else if (ended && (r.signal || (r.status !== 0 && !(r.status === 1 && sawError)))) {
+    // The shell exits 1 after any error, expected ones included. Any other
+    // nonzero status, a signal, or 1 with no error shown is unexplained.
+    aborted = `${stopped}, and no step's output explains it`;
   }
 }
 

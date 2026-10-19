@@ -74,8 +74,11 @@ window.__step = async sql => {
   try {
     const t = await withTimeout(conn.query(sql), 180000, sql.slice(0, 60));
     const rows = t.toArray();
-    const col = t.schema.fields.length ? t.schema.fields[0].name : null;
-    r = { ok: true, value: rows.length && col !== null ? fmt(rows[0][col]) : null };
+    const fields = t.schema.fields;
+    const col = fields.length ? fields[0].name : null;
+    r = { ok: true, value: rows.length && col !== null ? fmt(rows[0][col]) : null,
+          varchar: fields.length === 1 && String(fields[0].type) === 'Utf8',
+          shape: `${fields.length} column(s): ${fields.map(f => String(f.type)).join(', ')}` };
   } catch (e) {
     r = { ok: false, error: String(e && e.message || e) };
   }
