@@ -29,7 +29,7 @@ SELECT * FROM predict('new_counts', 'models', name := 'site');
 - [Explaining a prediction](#explaining-a-prediction) - `shap`
 - [Feature importances](#feature-importances) - `feature_importances`, `model_features`
 - [Unknown and absent features](#unknown-and-absent-features) - what `known_feature_fraction` means
-- [Reproducibility](#reproducibility) - `sc_version`
+- [Reproducibility](#reproducibility) - `random_state`, threads, and the sc commit
 - [Scale and memory](#scale-and-memory)
 - [Citations](#citations)
 
@@ -196,7 +196,7 @@ CREATE TABLE b AS SELECT * FROM fit_regressor('counts', 'meta', name := 'b', ran
 SELECT (SELECT md5(model_blob) FROM a) = (SELECT md5(model_blob) FROM b) AS identical;
 ```
 
-Reproducing a fit also needs the same sc. `SELECT version FROM miint_versions() WHERE library = 'sc'` reports the sc commit this build embeds. `sc_version()` returns sc's crate version, which names a release rather than a commit, so two builds can share it and still differ.
+Reproducing a fit also needs the same sc. `SELECT version FROM miint_versions() WHERE library = 'sc'` reports the sc commit this build embeds.
 
 ### Scale and memory
 

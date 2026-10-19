@@ -963,8 +963,8 @@ path-dependent TreeSHAP, consumed through its C API and the Arrow C Data
 Interface. Its symbols ship inside the same merged `libmiint_rust_glue.a`
 archive as rype and sylph. Used by `fit_classifier`, `fit_regressor`,
 `predict`, `predict_proba`, `cross_validate_classifier`,
-`cross_validate_regressor`, `shap`, `feature_importances`, `model_features`
-and `sc_version`. Reported as the `sc` row in `miint_versions()`.
+`cross_validate_regressor`, `shap`, `feature_importances` and
+`model_features`. Reported as the `sc` row in `miint_versions()`.
 
 - Repository: https://github.com/the-miint/sc (pinned at the submodule SHA that `git submodule status ext/sc` reports)
 - License: BSD 3-Clause. The text ships at `ext/sc/LICENSE` and is reproduced below.

@@ -1518,7 +1518,6 @@ if(MIINT_ENABLE_GPL_BOUNDARY)
     add_subdirectory(third_party/nanoarrow_ipc)
 endif()
 set(EXTENSION_SOURCES
-    src/sc_version_function.cpp
     src/sc_coo_builder.cpp
     src/sc_rf_common.cpp
     src/sc_fit_function.cpp

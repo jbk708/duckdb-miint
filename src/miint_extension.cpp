@@ -100,7 +100,6 @@
 #include <rype_extract.hpp>
 #include <rype_index_create.hpp>
 #include <rype_log_ratio.hpp>
-#include <sc_version_function.hpp>
 #include <sc_fit_function.hpp>
 #include <sc_feature_importances_function.hpp>
 #include <sc_predict_function.hpp>
@@ -551,7 +550,6 @@ static void LoadInternal(ExtensionLoader &loader) {
 	RypeLogRatioTableFunction::Register(loader);
 	RypeIndexCreateTableFunction::Register(loader);
 
-	ScVersionFunction::Register(loader);
 	ScFitFunction::Register(loader);
 	ScFeatureImportancesFunction::Register(loader);
 	ScPredictFunction::Register(loader);
