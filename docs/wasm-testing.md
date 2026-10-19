@@ -147,14 +147,16 @@ reuse the cached build:
 ### Why build DuckDB here rather than use the npm package?
 
 A C++ extension loads only into a DuckDB WASM of the same core version, built
-with the same emsdk; otherwise loading fails with
+with a compatible emsdk. A core mismatch stops at `LOAD` with DuckDB's own error
+that the extension was built for another version; builds from emsdk versions
+that generate different function signatures fail with
 `LinkError: imported function does not match the expected type`. Building the
 core from the submodule matches both by construction. An npm
-`@duckdb/duckdb-wasm` release matches only when it reports the same core and was
+`@duckdb/duckdb-wasm` release matches when it reports the same core and was
 built with a compatible emsdk; the release the playground loads is one, since
 the extension built here with emsdk 3.1.71 loads into it. Level 4 uses that
-release, pinned in `scripts/wasm_browser/index.html`, and fails when its core
-differs.
+release, pinned in `scripts/wasm_browser/index.html`, and stops at boot when its
+core differs.
 
 ## Level 4: Browser Check
 
@@ -189,9 +191,13 @@ It checks one of three things:
 - `expect`: the first cell of its first row equals this. Make the step return
   one VARCHAR cell (an `md5` over an ordered `string_agg` for anything bigger),
   so both runtimes print it the same way.
-- `expect_error`: it fails with an error containing this text, and the database
-  still answers afterwards.
+- `expect_error`: it fails with an error containing this text.
 - neither (setup): it succeeds.
+
+After every step, in both modes, the database must still answer
+`SELECT 'alive'`; a step after which it does not fails, and the run stops there.
+The first committed step, `self_check_expected_error`, raises an error on
+purpose, so every run goes through that path.
 
 Take `expect` from a native build, which runs the same steps:
 
@@ -199,10 +205,8 @@ Take `expect` from a native build, which runs the same steps:
 ./scripts/test_wasm_browser.sh --native   # build/release/duckdb
 ```
 
-The committed steps do not yet include one that fails when the Rust glue is
-built with JS exceptions: the rype extract functions they cover work either way,
-in the v1.5.5 release too. Until the sample-classifier cross-validation steps
-arrive (#277), check 4 in Level 2 is what fails without wasm-native exceptions.
+The committed steps pass whether the Rust glue is built with JS or wasm-native
+exceptions, so check 4 in Level 2 is what fails a build with JS exceptions.
 
 ## CI Integration
 
@@ -243,11 +247,11 @@ external library needs `-fPIC` in its compile flags.
 
 ### `imported function does not match the expected type`
 
-The extension and the DuckDB WASM runtime disagree on the core version or the
-emsdk that built them. In Level 4, the duckdb-wasm pin does not match the
-extension's DuckDB; the check reports a core mismatch at boot, naming the file to
-bump. In Level 3, `build/wasm_shell/` is left over from an older DuckDB; rerun
-with `--clean`.
+The extension and the DuckDB WASM runtime were built with emsdk versions that
+generate different function signatures. A different core version does not get
+this far: Level 4 stops at boot, naming the pin's file, and DuckDB refuses the
+`LOAD` with its own version error (in Level 3, when `build/wasm_shell/` is left
+over from an older DuckDB; rerun with `--clean`).
 
 ### `function signature mismatch` from a Rust function
 
