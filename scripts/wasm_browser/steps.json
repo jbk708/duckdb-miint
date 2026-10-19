@@ -1,5 +1,10 @@
 [
   {
+    "name": "self_check_expected_error",
+    "sql": "SELECT error('miint browser check')",
+    "expect_error": "miint browser check"
+  },
+  {
     "name": "setup_playground_seqs",
     "sql": "CREATE TABLE seqs AS SELECT * FROM (VALUES ('foo', 'AAATATAGATGAGTGTGCTGTGTAGTGATCGTAGTGATCGATGTGATGTGTGAACCACACACCACCACACCGAGCTAGTCTG')) AS t(read_id, sequence1)"
   },
