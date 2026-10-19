@@ -176,7 +176,9 @@ with no cross-origin isolation headers, like GitHub Pages, `LOAD`s it, and runs
 value. The run passes only when every step ran and passed; a mismatch, an
 error, a step left unrun because the database died, duckdb-wasm picking a
 bundle other than eh, or the pin running a DuckDB core other than the
-workflow's `duckdb_version` fails it.
+workflow's `duckdb_version` fails it. Timeouts: in the browser, 2 min for boot
+and for `LOAD`, 3 min per step and 20 s for the alive check after it; in native
+mode, 15 min for the whole run and 256 MiB of shell output.
 
 **This is the check for Rust code paths.** Level 3 links a main module and JS
 glue built from the `duckdb/` submodule; this check runs the duckdb-wasm release
@@ -249,9 +251,14 @@ external library needs `-fPIC` in its compile flags.
 
 The extension and the DuckDB WASM runtime were built with emsdk versions that
 generate different function signatures. A different core version does not get
-this far: Level 4 stops at boot, naming the pin's file, and DuckDB refuses the
-`LOAD` with its own version error (in Level 3, when `build/wasm_shell/` is left
-over from an older DuckDB; rerun with `--clean`).
+this far; see the next entry.
+
+### `The file was built specifically for DuckDB version ...`
+
+DuckDB refuses the `LOAD` because the extension was built for another core
+version. In Level 3, `build/wasm_shell/` is left over from an older DuckDB;
+rerun with `--clean`. Level 4 stops before `LOAD`, at boot, naming the pin's file
+to bump.
 
 ### `function signature mismatch` from a Rust function
 
