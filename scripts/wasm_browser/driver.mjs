@@ -9,16 +9,20 @@
 // like GitHub Pages, so duckdb-wasm picks the same bundle the playground gets.
 // --duckdb-version is the core the extension targets; the run fails if the
 // pinned duckdb-wasm reports another.
-// --native runs the same steps in a native shell. That is where expected values
-// come from: after adding a step or bumping rype or sc, run it by hand and update
-// any `expect` that changed.
+// --native runs the same steps in a native shell. A new step's `expect` comes
+// from there. Run it again after changing code a step exercises: a value that
+// changes is a finding to raise, not a value to update (CLAUDE.md: expected
+// values change only with a maintainer's permission), and the SQL test under
+// test/sql/ that owns the behaviour is where to look first.
 //
 // A step is {name, sql, expect?, expect_error?}, and names are unique. Steps run
 // in order on one connection. A step with `expect` must return it as the first
 // cell of its first row; cast the result to VARCHAR in the SQL so both runtimes
 // print it the same way. A step with `expect_error` must fail with an error
-// containing that text and leave the database answering. A step with neither
-// (setup) must only succeed. The run passes only when every step ran and passed.
+// containing that text. A step with neither (setup) must only succeed. After
+// every step, in both modes, the database must still answer SELECT 'alive'; a
+// step after which it does not fails, and the steps after it are not run. The
+// run passes only when every step ran and passed.
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -61,17 +65,21 @@ for (const s of steps) {
 let passed = 0;
 let failed = 0;
 let aborted = null;
-// r is {ok, value} or {ok: false, error, alive}.
+// r is {ok, value, alive} or {ok: false, error, alive}; alive says whether the
+// database answered SELECT 'alive' after the step.
 function report(step, r) {
   let why = null;
   if (step.expect_error !== undefined) {
     if (r.ok) why = `expected an error containing "${step.expect_error}", but the step succeeded`;
     else if (!r.error.includes(step.expect_error)) why = `expected an error containing "${step.expect_error}", got: ${r.error}`;
-    else if (!r.alive) why = `failed as expected, but the database no longer answers: ${r.error}`;
   } else if (!r.ok) {
     why = r.error;
   } else if (step.expect !== undefined && r.value !== step.expect) {
     why = `\n  expected ${step.expect}\n  got      ${r.value}`;
+  }
+  if (why === null && !r.alive) {
+    why = r.ok ? 'the database no longer answers after this step'
+               : `failed as expected, but the database no longer answers: ${r.error}`;
   }
   if (why === null) {
     passed++;
@@ -82,41 +90,88 @@ function report(step, r) {
   }
 }
 
-// The shell prints an error's first line as "<Kind> Error: ...".
-const ERROR_LINE = /^[A-Za-z][A-Za-z ]*Error: /;
+const NATIVE_TIMEOUT_MS = 900_000;
+const NATIVE_MAX_BUFFER = 256 * 1024 * 1024;
+
+// The first JSON document in a step's output (a multi-statement step prints one
+// per statement, and duckdb-wasm likewise returns the first statement's result),
+// as the first cell of its first row. JSON null prints as NULL, as in the page.
+function firstCell(lines) {
+  const doc = [];
+  for (const line of lines) {
+    if (line === '') continue;
+    doc.push(line);
+    if (line.endsWith(']')) break;
+  }
+  if (doc.length === 0) return null;
+  const rows = JSON.parse(doc.join('\n'));
+  if (rows.length === 0) return null;
+  const v = Object.values(rows[0])[0];
+  return v === null ? 'NULL' : String(v);
+}
 
 function runNative(duckdb) {
-  // One shell session with a marker before each step. Its output goes to stderr
-  // (.output /dev/stderr), so each step's errors land between its markers in
-  // order. No -bail: a step expected to fail must not end the run, and a step
-  // that fails unexpectedly is reported without stopping the rest.
-  const script = '.output /dev/stderr\n'
-    + steps.map(s => `.print @@step ${s.name}\n${s.sql.trim().replace(/;?$/, ';')}`).join('\n') + '\n.print @@end\n';
-  const r = spawnSync(duckdb, ['-noheader', '-list', ':memory:'], { input: script, encoding: 'utf8' });
-  if (r.error) {
+  // One shell session. Results print as JSON (.mode json), so any output line
+  // that is not JSON is error text, however it is worded. All output goes to
+  // stderr (.output stderr), so errors stay in order with the markers. After
+  // each step the shell runs SELECT 'alive'. No -bail: a step expected to fail
+  // must not end the run.
+  const script = ['.output stderr', '.mode json',
+    ...steps.flatMap(s => [`.print @@step ${s.name}`, s.sql.trim().replace(/;?$/, ';'),
+                           '.print @@alive', "SELECT 'alive' AS alive;"]),
+    '.print @@end', ''].join('\n');
+  const r = spawnSync(duckdb, [':memory:'], { input: script, encoding: 'utf8',
+                                              timeout: NATIVE_TIMEOUT_MS, maxBuffer: NATIVE_MAX_BUFFER });
+  if (r.error && r.error.code !== 'ETIMEDOUT' && r.error.code !== 'ENOBUFS') {
     aborted = `could not run ${duckdb}: ${r.error.message}`;
     return;
   }
-  const out = new Map();
+  const sections = new Map();
   let cur = null;
   let ended = false;
-  for (const line of r.stderr.split('\n')) {
+  for (const line of (r.stderr ?? '').split('\n')) {
     const m = line.match(/^@@step (.*)$/);
-    if (m) { cur = m[1]; out.set(cur, []); } else if (line === '@@end') { ended = true; cur = null; } else if (cur) out.get(cur).push(line);
+    if (m) {
+      cur = { out: [], alive: [], aliveSeen: false };
+      sections.set(m[1], cur);
+    } else if (line === '@@alive' && cur) {
+      cur.aliveSeen = true;
+    } else if (line === '@@end') {
+      ended = true;
+      cur = null;
+    } else if (cur) {
+      (cur.aliveSeen ? cur.alive : cur.out).push(line);
+    }
   }
-  const started = [...out.keys()];
-  const stopped = `shell stopped (${r.signal ? `signal ${r.signal}` : `status ${r.status}`})`;
-  for (const [i, s] of steps.entries()) {
-    if (!out.has(s.name)) break;
-    const lines = out.get(s.name);
-    // The shell went on to another step or the end marker, so it still answers.
-    const alive = ended || i < started.length - 1;
-    const at = lines.findIndex(l => ERROR_LINE.test(l));
-    if (at >= 0) report(s, { ok: false, error: lines.slice(at).join('\n').trim(), alive });
-    else if (!alive) report(s, { ok: false, error: `${stopped} during this step`, alive });
-    else report(s, { ok: true, value: lines[0] ?? null });
+  const stopped = r.error?.code === 'ETIMEDOUT' ? `the shell timed out after ${NATIVE_TIMEOUT_MS / 1000} s`
+    : r.error?.code === 'ENOBUFS' ? `the shell printed more than ${NATIVE_MAX_BUFFER} bytes`
+    : `the shell stopped (${r.signal ? `signal ${r.signal}` : `status ${r.status}`})`;
+  if (sections.size === 0) {
+    aborted = `${stopped} before the first step: ${(r.stderr ?? '').trim() || '(no output)'}`;
+    return;
   }
-  if (out.size === 0) aborted = `${stopped} before the first step: ${r.stdout.trim() || '(no message)'}`;
+  const isJson = l => l === '' || l.startsWith('[') || l.startsWith('{');
+  const answered = lines => {
+    try { return JSON.stringify(JSON.parse(lines.join('\n'))) === '[{"alive":"alive"}]'; } catch { return false; }
+  };
+  let sawError = false;
+  for (const s of steps) {
+    const sec = sections.get(s.name);
+    if (!sec) break;
+    const at = sec.out.findIndex(l => !isJson(l));
+    const alive = sec.aliveSeen && answered(sec.alive);
+    if (at >= 0 || (sec.aliveSeen && !alive)) sawError = true;
+    if (at >= 0) report(s, { ok: false, error: sec.out.slice(at).join('\n').trim(), alive });
+    else if (!sec.aliveSeen) report(s, { ok: false, error: `${stopped} during this step`, alive: false });
+    else report(s, { ok: true, value: firstCell(sec.out), alive });
+    if (!alive) break;
+  }
+  // The shell exits 1 after any error, expected ones included. Any other nonzero
+  // status, a signal, or 1 with no error on any step means something failed that
+  // no step showed.
+  if (ended && (r.signal || (r.status !== 0 && !(r.status === 1 && sawError)))) {
+    aborted = `${stopped}, which no step's output explains; the last step it started was '${[...sections.keys()].at(-1)}'`;
+  }
 }
 
 async function runWasm(wasmFile, chrome, duckdbVersion) {
@@ -156,14 +211,11 @@ async function runWasm(wasmFile, chrome, duckdbVersion) {
       const before = log.length;
       const r = await page.evaluate(q => window.__step(q), s.sql);
       report(s, r);
-      if (!r.ok && !(s.expect_error !== undefined && r.alive)) {
+      if ((!r.ok && s.expect_error === undefined) || !r.alive) {
         const worker = log.slice(before).filter(l => l.trim());
         if (worker.length) console.log(worker.slice(0, 12).map(l => `  [worker] ${l}`).join('\n'));
-        if (!r.alive) {
-          console.log('  the database no longer answers');
-          break;
-        }
       }
+      if (!r.alive) break;
     }
   } finally {
     await browser.close();

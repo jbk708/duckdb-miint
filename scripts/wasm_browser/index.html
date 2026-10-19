@@ -31,7 +31,8 @@ async function boot(expectedVersion) {
   const platform = (await conn.query('PRAGMA platform')).toArray()[0].platform;
   if (platform !== 'wasm_eh') throw new Error(`expected platform wasm_eh, got ${platform}`);
   const v = (await conn.query('SELECT library_version, source_id FROM pragma_version()')).toArray()[0];
-  if (v.library_version !== expectedVersion) {
+  const bare = s => String(s).replace(/^v/, '');
+  if (bare(v.library_version) !== bare(expectedVersion)) {
     throw new Error(`duckdb-wasm runs DuckDB ${v.library_version}, but the extension targets ${expectedVersion}; `
       + 'bump the @duckdb/duckdb-wasm pin in scripts/wasm_browser/index.html');
   }
@@ -49,25 +50,36 @@ window.__boot = async expectedVersion => {
 window.__load = async url => {
   try {
     await withTimeout(conn.query(`LOAD '${url}'`), 120000, 'LOAD');
-    return { ok: true, version: fmt((await conn.query('SELECT miint_version() AS v')).toArray()[0].v) };
+    const t = await withTimeout(conn.query('SELECT miint_version() AS v'), 60000, 'miint_version() after LOAD');
+    return { ok: true, version: fmt(t.toArray()[0].v) };
   } catch (e) {
     return { ok: false, error: String(e && e.message || e) };
   }
 };
 
-// Run one step and return the first cell of its first row. After an error, say
-// whether the database still answers, so the driver can stop if it does not.
+// Whether the database still answers, asked the same way native mode asks.
+async function alive() {
+  try {
+    const t = await withTimeout(conn.query("SELECT 'alive' AS alive"), 20000, 'alive');
+    return fmt(t.toArray()[0].alive) === 'alive';
+  } catch {
+    return false;
+  }
+}
+
+// Run one step and return the first cell of its first row, or its error, and
+// whether the database still answers afterwards.
 window.__step = async sql => {
+  let r;
   try {
     const t = await withTimeout(conn.query(sql), 180000, sql.slice(0, 60));
     const rows = t.toArray();
     const col = t.schema.fields.length ? t.schema.fields[0].name : null;
-    return { ok: true, value: rows.length && col !== null ? fmt(rows[0][col]) : null };
+    r = { ok: true, value: rows.length && col !== null ? fmt(rows[0][col]) : null };
   } catch (e) {
-    let alive = true;
-    try { await withTimeout(conn.query('SELECT 1'), 20000, 'liveness'); } catch { alive = false; }
-    return { ok: false, error: String(e && e.message || e), alive };
+    r = { ok: false, error: String(e && e.message || e) };
   }
+  return { ...r, alive: await alive() };
 };
 window.__ready = true;
 </script>
