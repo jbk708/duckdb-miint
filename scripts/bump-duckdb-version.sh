@@ -191,6 +191,9 @@ Next:
   5. WASM is only built by CI on tag pushes, so verify it locally:
        bash scripts/build_wasm.sh        # build + unresolved-import check
        bash scripts/test_wasm_load.sh    # true ABI load test
+       bash scripts/test_wasm_browser.sh # the playground's runtime; first bump the
+                                         # @duckdb/duckdb-wasm pin in
+                                         # scripts/wasm_browser/index.html (docs/UPDATING.md)
      If build/wasm_shell/ is left over from an older DuckDB, test_wasm_load.sh
      reuses it and fails with a version-lock error that looks like a real
      incompatibility but is not. Clear it first.
