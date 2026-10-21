@@ -296,6 +296,9 @@ The two depths apply to different things, in SourceTracker2's order:
   because the mean is taken feature by feature and rounded down to whole sequences, as
   SourceTracker2 does. A source depth of 250 therefore passes with `'sum'` and is refused
   with `'mean'`.
+- Under [`loo`](#leave-one-out) there are no sinks, and `source_rarefaction_depth` subsamples
+  each source **sample** before any is held out. A source sample shallower than that stops the
+  run, naming the shallowest.
 
 Either depth may be `0` to skip that subsampling. Rarefaction is a source of randomness in
 its own right, so a seeded run with rarefaction on is reproducible but two seeds will differ a
@@ -394,6 +397,14 @@ rarefy, the `Unknown` source, and the shallow-sample error.
   SourceTracker2's `proportions_std` divides each draw's counts by the total over all draws
   rather than by the sink's depth, so it understates the spread by a factor of the number of
   draws; the means are unaffected and agree.
+- **[Leave-one-out](#leave-one-out) holds out source samples, not environments.** Here each
+  source sample is predicted from the other source samples, its own environment's remaining
+  members included, so a row is a sample and says whether it comes back as its environment.
+  SourceTracker2's `loo` collapses the sources first and then holds out each whole
+  environment, predicting it from the other environments only: its rows are environments,
+  and the held-out environment has no column. The two answer different questions, so their
+  results are not comparable row for row. `source_rarefaction_depth` follows suit: here it
+  subsamples each source sample, there each collapsed environment.
 - **`collapse := 'sum'`** is reachable. SourceTracker2's collapse helper knows a sum as well, but
   its `gibbs` entry point and command line always average.
 - **`seed`** exists. SourceTracker2 has none.

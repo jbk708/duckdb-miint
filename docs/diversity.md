@@ -34,7 +34,7 @@ Most of these methods are powered by the embedded [`unifrac-binaries`](https://g
 
 ### Feature table
 
-A long-form `(sample_id VARCHAR, feature_id VARCHAR, value DOUBLE)` relation — the same schema produced by [`read_biom`](reading.md#biom). Duplicate `(sample_id, feature_id)` rows are summed; rows with NULL or zero values are silently dropped (sparse-storage invariant).
+A long-form `(sample_id VARCHAR, feature_id VARCHAR, value DOUBLE)` relation — the same schema produced by [`read_biom`](reading.md#biom). Duplicate `(sample_id, feature_id)` rows are summed; rows with NULL or zero values are silently dropped (sparse-storage invariant). A NaN value is an error naming its cell: NaN is not a missing count but the trace of a failed upstream computation (0/0, a failed normalisation). Earlier builds dropped it like NULL, so a table that used to load with NaN cells is now refused; replace them with NULL, or 0, if missing is what they mean.
 
 ```sql
 CREATE TABLE observations AS SELECT * FROM read_biom('data/biom/test.biom');
