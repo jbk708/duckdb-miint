@@ -197,10 +197,10 @@ FROM read_paf('data/myloasm/ecoli_sim/3-mapping/map_to_unitigs.paf.gz');
 # must match read_paf's query interval -- which is what lets PAF and SAM intervals for
 # one read be pooled without conversion.
 statement ok
-CREATE TEMP TABLE paf_reads AS SELECT * FROM read_fastx('data/paf/k12_reads.fa');
+CREATE TEMP TABLE paf_reads AS SELECT * FROM read_fastx('data/paf/k12_reads.fa.gz');
 
 statement ok
-CREATE TEMP TABLE paf_ref AS SELECT * FROM read_fastx('data/paf/k12_ref.fa');
+CREATE TEMP TABLE paf_ref AS SELECT * FROM read_fastx('data/paf/k12_ref.fa.gz');
 
 statement ok
 CREATE TEMP TABLE sam AS

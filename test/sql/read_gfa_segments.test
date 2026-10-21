@@ -21,7 +21,7 @@ SELECT count(*) FROM read_gfa_segments('data/gfa/spec_example.gfa') WHERE sequen
 # myloasm stores no sequences, only lengths and depths as tags.
 query TIT
 SELECT segment_id, tags['LN']::BIGINT, tags['DP']
-FROM read_gfa_segments('data/myloasm/ecoli_sim/final_contig_graph.gfa') ORDER BY segment_id;
+FROM read_gfa_segments('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz') ORDER BY segment_id;
 ----
 u491ctg	196466	51.0
 u826ctg	195577	51.0
@@ -30,6 +30,6 @@ u912ctg	55666	2.0
 u982ctg	50902	32.0
 
 query I
-SELECT count(*) FROM read_gfa_segments('data/myloasm/ecoli_sim/final_contig_graph.gfa') WHERE sequence IS NOT NULL;
+SELECT count(*) FROM read_gfa_segments('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz') WHERE sequence IS NOT NULL;
 ----
 0

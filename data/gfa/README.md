@@ -23,6 +23,6 @@ GFA 1.2 jump record `J` is not in it; the C++ parser tests cover it.
 Positional field counts follow the GFA 1.1 specification
 (https://github.com/GFA-spec/GFA-spec/blob/master/GFA1.md).
 
-Real assembler output is covered by `data/myloasm/ecoli_sim/final_contig_graph.gfa`.
+Real assembler output is covered by `data/myloasm/ecoli_sim/final_contig_graph.gfa.gz`.
 Malformed inputs are written by the tests themselves, so each defect sits next to the
 assertion that names it.

@@ -4,10 +4,38 @@
 
 require miint
 
+# The fixture's text files are committed gzipped (data/myloasm/README.md). The functions read
+# a directory as myloasm writes it, so rebuild one: create its directories, then decompress
+# the files myloasm writes as text and copy the ones it writes gzipped.
+foreach dir ecoli_sim ecoli_sim/alternate_assemblies ecoli_sim/3-mapping ecoli_sim/0-cleaning_and_unitigs ecoli_sim/0-cleaning_and_unitigs/remap_temp
+
+statement ok
+COPY (SELECT 1 AS x) TO '__TEST_DIR__/${dir}' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
+
+endloop
+
+unzip data/myloasm/ecoli_sim/assembly_primary.fa.gz __TEST_DIR__/ecoli_sim/assembly_primary.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa.gz __TEST_DIR__/ecoli_sim/alternate_assemblies/assembly_alternate.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa.gz __TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa
+
+unzip data/myloasm/ecoli_sim/final_contig_graph.gfa.gz __TEST_DIR__/ecoli_sim/final_contig_graph.gfa
+
+unzip data/myloasm/ecoli_sim/myloasm.log.gz __TEST_DIR__/ecoli_sim/myloasm.log
+
+foreach member 3-mapping/map_to_unitigs.paf.gz 0-cleaning_and_unitigs/read_coverages.txt.gz 0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz
+
+statement ok
+COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/${member}', columns = {'line': 'VARCHAR'}, delim = E'\x01', quote = '', escape = '', header = false))
+TO '__TEST_DIR__/ecoli_sim/${member}' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01', COMPRESSION gzip);
+
+endloop
+
 # --- Schema ---
 
 query TT
-SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_myloasm_mappings('data/myloasm/ecoli_sim'));
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'));
 ----
 read_id	VARCHAR
 split_suffix	VARCHAR
@@ -27,15 +55,15 @@ differing_snpmers	BIGINT
 
 # One row per PAF record, read independently.
 query I
-SELECT count(*) = (SELECT count(*) FROM read_paf('data/myloasm/ecoli_sim/3-mapping/map_to_unitigs.paf.gz'))
-FROM read_myloasm_mappings('data/myloasm/ecoli_sim');
+SELECT count(*) = (SELECT count(*) FROM read_paf('__TEST_DIR__/ecoli_sim/3-mapping/map_to_unitigs.paf.gz'))
+FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim');
 ----
 true
 
 # The PAF's 'r<index>-' prefix is myloasm's internal read number, not part of the read's name.
 query TTIIIITTII
 SELECT read_id, split_suffix, piece_offset, piece_length, query_start, query_stop, strand, contig_id, position, stop_position
-FROM read_myloasm_mappings('data/myloasm/ecoli_sim')
+FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim')
 WHERE read_id = 's00000_lina_1000000_1008000_f';
 ----
 s00000_lina_1000000_1008000_f	NULL	0	8000	487	8000	-	u491ctg	188954	196467
@@ -62,7 +90,7 @@ FROM (
          (position - 1 - CASE WHEN p[5] = 'f' THEN p[3]::BIGINT - 2000000 + query_start
                               ELSE p[3]::BIGINT - 2000000 + p[4]::BIGINT - query_stop END + 400000) % 40000
            AS offset_on_circle
-  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('data/myloasm/ecoli_sim'))
+  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'))
   WHERE p[2] IN ('circ', 'circb')
 )
 GROUP BY contig_id ORDER BY contig_id;
@@ -80,13 +108,13 @@ query III
 SELECT count(DISTINCT read_id),
        count(*),
        count(*) FILTER (CASE WHEN p[6] = 'f' THEN query_stop <= 9000 ELSE query_start >= 3000 END)
-FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('data/myloasm/ecoli_sim'))
+FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'))
 WHERE p[2] = 'ovh';
 ----
 20	20	20
 
 # Each chimera is strain A joined to the circle, at a junction known from its name (the name
-# fields are described in test/scripts/generate_myloasm_fixture.sh). A forward read starts
+# fields are described in data/myloasm/README.md). A forward read starts
 # with its strain A part, so the junction is that part's length; a reverse read is the
 # reverse complement, so it starts with the circle part, and the junction is that part's
 # length. Every alignment must lie on the side of the junction that matches what it aligns
@@ -97,7 +125,7 @@ SELECT count(*),
                              THEN query_stop <= junction ELSE query_start >= junction END)
 FROM (
   SELECT *, CASE WHEN p[7] = 'f' THEN p[4]::BIGINT - p[3]::BIGINT ELSE p[6]::BIGINT END AS junction
-  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('data/myloasm/ecoli_sim'))
+  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'))
   WHERE p[2] = 'chim'
 );
 ----
@@ -114,12 +142,12 @@ FROM (
   SELECT *,
          regexp_extract(split_suffix, '[0-9]+$')::BIGINT AS piece_index,
          CASE WHEN p[2] = 'chim' THEN p[4]::BIGINT - p[3]::BIGINT + p[6]::BIGINT ELSE 12000 END AS read_length
-  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('data/myloasm/ecoli_sim'))
-  WHERE read_id IN (SELECT read_id FROM read_myloasm_splits('data/myloasm/ecoli_sim'))
+  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'))
+  WHERE read_id IN (SELECT read_id FROM read_myloasm_splits('__TEST_DIR__/ecoli_sim'))
 ) m
-LEFT JOIN read_myloasm_splits('data/myloasm/ecoli_sim') next_bp
+LEFT JOIN read_myloasm_splits('__TEST_DIR__/ecoli_sim') next_bp
   ON next_bp.read_id = m.read_id AND next_bp.breakpoint_order = m.piece_index + 1
-LEFT JOIN read_myloasm_splits('data/myloasm/ecoli_sim') this_bp
+LEFT JOIN read_myloasm_splits('__TEST_DIR__/ecoli_sim') this_bp
   ON this_bp.read_id = m.read_id AND this_bp.breakpoint_order = m.piece_index;
 ----
 66	66
@@ -129,7 +157,7 @@ LEFT JOIN read_myloasm_splits('data/myloasm/ecoli_sim') this_bp
 # has a differing SNPmer; the constructed r2001 record below does.
 query IIIII
 SELECT query_anchor_span, contig_anchor_span, shared_minimizers, shared_snpmers, differing_snpmers
-FROM read_myloasm_mappings('data/myloasm/ecoli_sim')
+FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim')
 WHERE read_id = 's00007_lina_1002721_1016739_r';
 ----
 13977	13979	1260	93	0
@@ -160,7 +188,7 @@ statement ok
 COPY (SELECT 1 AS x) TO '__TEST_DIR__/mappings_round2/3-mapping' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
 
 statement ok
-COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/0-cleaning_and_unitigs/read_coverages.txt.gz',
+COPY (SELECT line FROM read_csv('__TEST_DIR__/ecoli_sim/0-cleaning_and_unitigs/read_coverages.txt.gz',
                                 delim = E'\x01', quote = '', escape = '', header = false,
                                 columns = {'line': 'VARCHAR'}, auto_detect = false))
 TO '__TEST_DIR__/mappings_round2/0-cleaning_and_unitigs/read_coverages.txt.gz'
@@ -176,7 +204,7 @@ TO '__TEST_DIR__/mappings_round2/0-cleaning_and_unitigs/remap_temp/read_coverage
 
 statement ok
 CREATE TABLE constructed_paf AS
-SELECT line FROM read_csv('data/myloasm/ecoli_sim/3-mapping/map_to_unitigs.paf.gz',
+SELECT line FROM read_csv('__TEST_DIR__/ecoli_sim/3-mapping/map_to_unitigs.paf.gz',
                           delim = E'\x01', quote = '', escape = '', header = false,
                           columns = {'line': 'VARCHAR'}, auto_detect = false)
 UNION ALL

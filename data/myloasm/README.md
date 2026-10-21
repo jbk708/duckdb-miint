@@ -2,42 +2,46 @@
 
 ## `ecoli_sim/`
 
-Real myloasm output for simulated HiFi-like reads. Each read's name records where it came
-from, so the myloasm reader tests can check their results against how the reads were built
-rather than against myloasm's own description of its output.
+Real myloasm output for simulated HiFi-like reads (`ecoli_sim_reads.fa.gz`). Each read's
+name records where it came from, so the myloasm reader tests can check their results against
+how the reads were built rather than against myloasm's own description of its output.
 
-Only the files miint reads are kept, at the paths myloasm writes them:
+Only the files miint reads are kept, at the paths myloasm writes them. The ones myloasm writes
+as text are committed gzipped, with `.gz` added to the name. The functions read a directory as
+myloasm writes it, so each myloasm test first decompresses these into a test directory.
 
 | File | What it is |
 |---|---|
-| `assembly_primary.fa` | Polished primary contigs |
-| `alternate_assemblies/assembly_alternate.fa` | Contigs myloasm set aside as alternates of a primary; sequences included |
-| `alternate_assemblies/duplicated_contigs.fa` | Contigs myloasm set aside as duplicates; sequences included |
-| `final_contig_graph.gfa` | Contig graph: `S`, read-placement `a` lines, and `L` links, on the unpolished contigs |
-| `3-mapping/map_to_unitigs.paf.gz` | The final mapping of every read to the unpolished contigs |
-| `0-cleaning_and_unitigs/read_coverages.txt.gz` | Round-1 chimera breakpoints |
-| `0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz` | Round-2 chimera breakpoints (empty here; see below) |
-| `myloasm.log` | The run's log, renamed from myloasm's `myloasm_<timestamp>.log`, with the `SYSTEM HOST NAME` value replaced by `redacted` |
+| `assembly_primary.fa.gz` | Polished primary contigs |
+| `alternate_assemblies/assembly_alternate.fa.gz` | Contigs myloasm set aside as alternates of a primary; sequences included |
+| `alternate_assemblies/duplicated_contigs.fa.gz` | Contigs myloasm set aside as duplicates; sequences included |
+| `final_contig_graph.gfa.gz` | Contig graph: `S`, read-placement `a` lines, and `L` links, on the unpolished contigs |
+| `3-mapping/map_to_unitigs.paf.gz` | The final mapping of every read to the unpolished contigs; gzipped by myloasm |
+| `0-cleaning_and_unitigs/read_coverages.txt.gz` | Round-1 chimera breakpoints; gzipped by myloasm |
+| `0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz` | Round-2 chimera breakpoints (empty here; see below); gzipped by myloasm |
+| `myloasm.log.gz` | The run's log, renamed from myloasm's `myloasm_<timestamp>.log`, with the `SYSTEM HOST NAME` value replaced by `redacted` |
 
 ### The reads
 
-The 1006 reads (11.6 Mb) are not committed. The generator rebuilds them from E. coli K-12
-W3110 (`data/sylph/tiny_refs/e.coli-K12.fasta.gz`). Each name is
+`ecoli_sim_reads.fa.gz` holds the 1006 reads (11.6 Mb) the output was assembled from, each
+cut from E. coli K-12 W3110 (`data/sylph/tiny_refs/e.coli-K12.fasta.gz`). Each name is
 `s<index>_<kind>_<fields>_<f|r>`, with coordinates 0-based half-open on that genome. `r`
-means the read is the reverse complement of the described sequence; odd indices are
-reversed. The comment block at the top of `test/scripts/generate_myloasm_fixture.sh` defines
-every kind:
+means the read is the reverse complement of the sequence its fields describe; odd indices
+are reversed. A `chim` or `ovh` read is reversed as a whole, so on an `r` read the junction
+sits at the length of the second part from the read's start.
 
-| Kind | Reads | Built from | Purpose |
-|---|---|---|---|
-| `lina` | 500 | strain A of `[1000000, 1200000)`, about 30× | primary contig |
-| `linb` | 333 | strain B: the same region with a substitution every 150 bp, about 20× | alternate contig |
-| `circ` | 67 | a 40 kb circle at `[2000000, 2040000)`, reads wrapping past its end | circular contig |
-| `circb` | 50 | a variant of that circle with a substitution every 1000 bp | duplicated contig |
-| `low` | 13 | `[3000000, 3060000)`, about 2.5× | low-depth contig |
-| `iso` | 3 | three non-overlapping reads from `[3300000, 3400000)` | reads myloasm assembles into nothing; absent from every output |
-| `chim` | 20 | strain A then a circle read, joined | chimera splits at the junction |
-| `ovh` | 20 | 9 kb of strain A then 3 kb of uncovered genome | a split that leaves a partial alignment, in both orientations |
+| Kind | Reads | Fields | Built from | Purpose |
+|---|---|---|---|---|
+| `lina` | 500 | `<start>_<stop>` | strain A of `[1000000, 1200000)`, about 30× | primary contig |
+| `linb` | 333 | `<start>_<stop>` | strain B: the same region with a substitution at every offset where offset mod 150 = 75, about 20× | alternate contig |
+| `circ` | 67 | `<start>_<length>` | a read starting at `<start>` in the 40 kb circle `[2000000, 2040000)`, wrapping past its end | circular contig |
+| `circb` | 50 | `<start>_<length>` | as `circ`, from a variant of the circle with a substitution at every offset where offset mod 1000 = 7 | duplicated contig |
+| `low` | 13 | `<start>_<stop>` | `[3000000, 3060000)`, about 2.5× | low-depth contig |
+| `iso` | 3 | `<start>_<stop>` | three non-overlapping reads from `[3300000, 3400000)` | reads myloasm assembles into nothing; absent from every output |
+| `chim` | 20 | `<a_start>_<a_stop>_<c_start>_<c_length>` | strain A `[a_start, a_stop)` joined to the circle read `<c_start>_<c_length>` | chimera splits at the junction |
+| `ovh` | 20 | `<start>_<stop>_<tail_start>` | 9 kb of strain A `[start, stop)`, then 3000 bp from `[tail_start, tail_start + 3000)`, which no other read covers | a split that leaves a partial alignment, in both orientations |
+
+A substitution replaces A, C, G and T with C, G, T and A.
 
 ### What myloasm produced
 
@@ -77,19 +81,34 @@ These are checked against myloasm 0.7.0's source.
 
 ## Regenerating
 
-Generated with **myloasm 0.7.0** (bioconda build `h7f49ad2_1`, linux-64), as
-`myloasm reads.fa -o run1 --hifi -t 1`. On other platforms, which have their own 0.7.0 builds,
-drop the build string from the command below; whether another build reproduces these files
-exactly has not been checked.
+Generated with **myloasm 0.7.0** (bioconda build `h7f49ad2_1`, linux-64). Run it in a
+directory outside the repository that holds the decompressed reads, so the command line the
+log records carries no machine paths. One thread, because with more myloasm writes the PAF and
+the breakpoint logs in thread order. From the repository root:
 
 ```bash
 conda create -n myloasm-070 -c conda-forge -c bioconda myloasm=0.7.0=h7f49ad2_1   # linux-64
-bash build.sh
-bash test/scripts/generate_myloasm_fixture.sh /path/to/fresh/work_dir
-git diff --stat data/myloasm/   # expect a diff only in myloasm.log's timestamps
+REPO=$PWD
+mkdir ../myloasm_work && cd ../myloasm_work
+gzip -dc "$REPO/data/myloasm/ecoli_sim_reads.fa.gz" > reads.fa
+conda run -n myloasm-070 myloasm reads.fa -o run1 --hifi -t 1
+
+DEST=$REPO/data/myloasm/ecoli_sim
+for f in assembly_primary.fa alternate_assemblies/assembly_alternate.fa \
+         alternate_assemblies/duplicated_contigs.fa final_contig_graph.gfa; do
+    gzip -9 -n -c "run1/$f" > "$DEST/$f.gz"
+done
+for f in 3-mapping/map_to_unitigs.paf.gz 0-cleaning_and_unitigs/read_coverages.txt.gz \
+         0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz; do
+    cp "run1/$f" "$DEST/$f"
+done
+sed -E 's/(SYSTEM HOST NAME: ).*/\1redacted/' run1/myloasm_*.log | gzip -9 -n > "$DEST/myloasm.log.gz"
+git -C "$REPO" diff --stat data/myloasm/   # expect a diff only in myloasm.log.gz
 ```
 
-The generator refuses any other myloasm version. It runs myloasm twice and fails unless every
-file above except the log is identical between the runs. It uses one thread because myloasm
-writes the PAF and the breakpoint logs in thread order. Both full runs are left in the work
-directory.
+With gzip 1.13, these commands reproduced every committed file except the log byte for byte.
+The log differs only in its timings and memory figures. Two runs from the same reads gave
+identical output. Another gzip can compress differently, so compare decompressed contents when
+`git diff` reports a change. Other platforms have their own 0.7.0 builds (osx-arm64
+`h2797cb0_1`, osx-64 `h565ea35_1`, linux-aarch64 `ha2fee11_1`); for those, drop the build
+string. Whether those builds reproduce these files exactly has not been checked.

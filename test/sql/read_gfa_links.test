@@ -14,7 +14,7 @@ s2	-	s3	+	NULL	(empty)
 # myloasm records circular contigs as self-links and names the junction reads in r1/r2.
 query TTTTTT
 SELECT from_segment, from_orientation, to_segment, to_orientation, overlap, tags['r1']
-FROM read_gfa_links('data/myloasm/ecoli_sim/final_contig_graph.gfa') ORDER BY from_segment;
+FROM read_gfa_links('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz') ORDER BY from_segment;
 ----
 u840ctg	-	u840ctg	-	0M	s00840_circ_2004395_12875_f+split0
 u982ctg	-	u982ctg	-	0M	s00962_circb_2004990_13717_f+split0

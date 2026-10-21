@@ -8,8 +8,8 @@ from how the read was built instead of copying it from minimap2's output.
 
 | File | Contents |
 |---|---|
-| `k12_ref.fa` | One record, `k12_100000_120000`: E. coli K-12 W3110 (`data/sylph/tiny_refs/e.coli-K12.fasta.gz`) bases `[100000, 120000)`, 0-based half-open |
-| `k12_reads.fa` | Seven reads built from that reference; see below |
+| `k12_ref.fa.gz` | One record, `k12_100000_120000`: E. coli K-12 W3110 (`data/sylph/tiny_refs/e.coli-K12.fasta.gz`) bases `[100000, 120000)`, 0-based half-open |
+| `k12_reads.fa.gz` | Seven reads built from that reference; see below |
 | `k12_minimap2.paf` | minimap2's PAF for the reads against the reference |
 | `k12_minimap2.paf.gz` | The same bytes, gzip-compressed with `gzip -n` |
 
@@ -37,12 +37,23 @@ target `*`, and zeros for every other coordinate, length and count. Its only tag
 
 ## Regenerating
 
-Generated with **minimap2 2.31-r1302** as `minimap2 -x map-hifi -c --paf-no-hit -t 1`. This is
-the command-line minimap2, not the 2.30 that miint embeds for `align_minimap2`: the tests compare
-the two, so the fixture comes from a separate build. The generator refuses any other version.
+Generated with the command-line minimap2 built from the `ext/minimap2` submodule (2.30-r1287,
+the-miint fork), the same source `align_minimap2` embeds, as
+`minimap2 -x map-hifi -c --paf-no-hit -t 1`. The build is made in a copy of the source,
+because `make` writes its objects and binary into the source tree. From the repository root:
 
 ```bash
-bash build.sh
-bash test/scripts/generate_paf_fixture.sh
-git diff --stat data/paf/        # expect no diff with minimap2 2.31
+cp -r ext/minimap2 ../minimap2_cli && make -C ../minimap2_cli minimap2
+../minimap2_cli/minimap2 -x map-hifi -c --paf-no-hit -t 1 data/paf/k12_ref.fa.gz data/paf/k12_reads.fa.gz \
+    > data/paf/k12_minimap2.paf
+gzip -n -c data/paf/k12_minimap2.paf > data/paf/k12_minimap2.paf.gz
+git diff --stat data/paf/   # expect no diff
 ```
+
+`align_minimap2` cannot produce this fixture. It returns rows that miint builds from
+minimap2's alignment results and never writes PAF. A fixture made from it would need a PAF
+writer in miint, and the tests would then check miint's reader against miint's own writer.
+`read_paf` has to be tested on what minimap2's own PAF writer emits, and the command-line
+program from the same source is that writer. Because both come from one source, the test
+that compares `read_paf` with `align_minimap2` on these reads compares one minimap2 version
+reached two ways.

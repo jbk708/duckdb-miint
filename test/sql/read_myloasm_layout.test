@@ -4,10 +4,38 @@
 
 require miint
 
+# The fixture's text files are committed gzipped (data/myloasm/README.md). The functions read
+# a directory as myloasm writes it, so rebuild one: create its directories, then decompress
+# the files myloasm writes as text and copy the ones it writes gzipped.
+foreach dir ecoli_sim ecoli_sim/alternate_assemblies ecoli_sim/3-mapping ecoli_sim/0-cleaning_and_unitigs ecoli_sim/0-cleaning_and_unitigs/remap_temp
+
+statement ok
+COPY (SELECT 1 AS x) TO '__TEST_DIR__/${dir}' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
+
+endloop
+
+unzip data/myloasm/ecoli_sim/assembly_primary.fa.gz __TEST_DIR__/ecoli_sim/assembly_primary.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa.gz __TEST_DIR__/ecoli_sim/alternate_assemblies/assembly_alternate.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa.gz __TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa
+
+unzip data/myloasm/ecoli_sim/final_contig_graph.gfa.gz __TEST_DIR__/ecoli_sim/final_contig_graph.gfa
+
+unzip data/myloasm/ecoli_sim/myloasm.log.gz __TEST_DIR__/ecoli_sim/myloasm.log
+
+foreach member 3-mapping/map_to_unitigs.paf.gz 0-cleaning_and_unitigs/read_coverages.txt.gz 0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz
+
+statement ok
+COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/${member}', columns = {'line': 'VARCHAR'}, delim = E'\x01', quote = '', escape = '', header = false))
+TO '__TEST_DIR__/ecoli_sim/${member}' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01', COMPRESSION gzip);
+
+endloop
+
 # --- Schema ---
 
 query TT
-SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_myloasm_layout('data/myloasm/ecoli_sim'));
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim'));
 ----
 contig_id	VARCHAR
 layout_order	BIGINT
@@ -29,13 +57,13 @@ next_differing_snpmers	BIGINT
 
 # One row per GFA 'a' record, read independently.
 query I
-SELECT count(*) = (SELECT count(*) FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa') WHERE record_type = 'a')
-FROM read_myloasm_layout('data/myloasm/ecoli_sim');
+SELECT count(*) = (SELECT count(*) FROM read_gfa('__TEST_DIR__/ecoli_sim/final_contig_graph.gfa') WHERE record_type = 'a')
+FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim');
 ----
 true
 
 query TIIITTIIIITRRRIII
-SELECT * FROM read_myloasm_layout('data/myloasm/ecoli_sim') WHERE contig_id = 'u491ctg' AND layout_order IN (1, 64) ORDER BY layout_order;
+SELECT * FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim') WHERE contig_id = 'u491ctg' AND layout_order IN (1, 64) ORDER BY layout_order;
 ----
 u491ctg	1	1	2408	s00491_lina_1180941_1196827_r	+split0	0	15886	0	2407	+	5.0	4.0	4.0	13480	91	0
 u491ctg	64	180490	196467	s00001_lina_1000487_1016486_r	+split0	0	15999	22	15999	+	4.0	2.0	2.0	NULL	NULL	NULL
@@ -50,8 +78,8 @@ SELECT l.contig_id,
        bool_and(l.position = coalesce(l.previous_stop, 1)),
        max(l.stop_position) = any_value(s.tags['LN']::BIGINT) + 1
 FROM (SELECT *, lag(stop_position) OVER (PARTITION BY contig_id ORDER BY layout_order) AS previous_stop
-      FROM read_myloasm_layout('data/myloasm/ecoli_sim')) l
-JOIN read_gfa_segments('data/myloasm/ecoli_sim/final_contig_graph.gfa') s ON s.segment_id = l.contig_id
+      FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim')) l
+JOIN read_gfa_segments('__TEST_DIR__/ecoli_sim/final_contig_graph.gfa') s ON s.segment_id = l.contig_id
 GROUP BY l.contig_id ORDER BY l.contig_id;
 ----
 u491ctg	true	true
@@ -74,7 +102,7 @@ SELECT contig_id, count(*), max(position - 1 + genome_stop) - min(position - 1 +
 FROM (
   SELECT contig_id, position,
          CASE WHEN p[5] = 'f' THEN p[3]::BIGINT + query_stop ELSE p[4]::BIGINT - query_start END AS genome_stop
-  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_layout('data/myloasm/ecoli_sim'))
+  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim'))
   WHERE p[2] IN ('lina', 'linb', 'low') AND stop_position > position
 )
 GROUP BY contig_id ORDER BY contig_id;
@@ -87,7 +115,7 @@ u912ctg	11	true
 # reversed one '+'.
 query TT
 SELECT DISTINCT strand, string_split(read_id, '_')[5]
-FROM read_myloasm_layout('data/myloasm/ecoli_sim') WHERE contig_id IN ('u491ctg', 'u826ctg', 'u912ctg')
+FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim') WHERE contig_id IN ('u491ctg', 'u826ctg', 'u912ctg')
 ORDER BY ALL;
 ----
 +	r
@@ -101,7 +129,7 @@ SELECT count(*),
        count(*) FILTER (0 <= query_start AND query_start <= query_stop AND query_stop <= read_length)
 FROM (
   SELECT *, CASE WHEN p[2] IN ('circ', 'circb') THEN p[4]::BIGINT ELSE p[4]::BIGINT - p[3]::BIGINT END AS read_length
-  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_layout('data/myloasm/ecoli_sim'))
+  FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim'))
 );
 ----
 173	173	173
@@ -112,7 +140,7 @@ query II
 SELECT count(*) FILTER (next_overlap_length IS NULL AND next_shared_snpmers IS NULL AND next_differing_snpmers IS NULL),
        count(*) FILTER ((next_overlap_length IS NULL) = (layout_order = last_order))
 FROM (SELECT *, max(layout_order) OVER (PARTITION BY contig_id) AS last_order
-      FROM read_myloasm_layout('data/myloasm/ecoli_sim'));
+      FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim'));
 ----
 5	173
 
@@ -134,7 +162,7 @@ statement ok
 COPY (SELECT 1 AS x) TO '__TEST_DIR__/layout_round2/0-cleaning_and_unitigs/remap_temp' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
 
 statement ok
-COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/0-cleaning_and_unitigs/read_coverages.txt.gz',
+COPY (SELECT line FROM read_csv('__TEST_DIR__/ecoli_sim/0-cleaning_and_unitigs/read_coverages.txt.gz',
                                 delim = E'\x01', quote = '', escape = '', header = false,
                                 columns = {'line': 'VARCHAR'}, auto_detect = false))
 TO '__TEST_DIR__/layout_round2/0-cleaning_and_unitigs/read_coverages.txt.gz'
@@ -149,7 +177,7 @@ TO '__TEST_DIR__/layout_round2/0-cleaning_and_unitigs/remap_temp/read_coverages.
 
 statement ok
 CREATE TABLE constructed_gfa AS
-SELECT line FROM read_csv('data/myloasm/ecoli_sim/final_contig_graph.gfa',
+SELECT line FROM read_csv('__TEST_DIR__/ecoli_sim/final_contig_graph.gfa',
                           delim = E'\x01', quote = '', escape = '', header = false,
                           columns = {'line': 'VARCHAR'}, auto_detect = false)
 UNION ALL

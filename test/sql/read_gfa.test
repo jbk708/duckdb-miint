@@ -148,12 +148,12 @@ infinity	false	true	false
 # header, a comment, S and L records, and its own read-placement 'a' records.
 statement ok
 CREATE TEMP TABLE myloasm_lines AS
-SELECT line FROM read_csv('data/myloasm/ecoli_sim/final_contig_graph.gfa', columns = {'line': 'VARCHAR'},
+SELECT line FROM read_csv('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz', columns = {'line': 'VARCHAR'},
                           header = false, delim = E'\x01', quote = '', escape = '', auto_detect = false);
 
 query TII
 SELECT g.record_type, g.n, l.n
-FROM (SELECT record_type, count(*) AS n FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa') GROUP BY ALL) g
+FROM (SELECT record_type, count(*) AS n FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz') GROUP BY ALL) g
 JOIN (SELECT split_part(line, E'\t', 1) AS record_type, count(*) AS n FROM myloasm_lines
       WHERE NOT starts_with(line, '#') GROUP BY ALL) l USING (record_type)
 ORDER BY 1;
@@ -166,7 +166,7 @@ a	173	173
 # myloasm's 'a' records keep all seven fields, including the untyped key list at the end.
 query III
 SELECT count(*), count(tags), min(len(fields))
-FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa') WHERE record_type = 'a';
+FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz') WHERE record_type = 'a';
 ----
 173	0	7
 
@@ -175,7 +175,7 @@ FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa') WHERE record_type
 # The scan has a row estimate that grows with the file, not DuckDB's default of one row (why:
 # EstimateFileScanCardinality in src/include/table_function_common.hpp).
 query II
-EXPLAIN SELECT * FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa');
+EXPLAIN SELECT * FROM read_gfa('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz');
 ----
 physical_plan	<!REGEX>:.*~1 row.*
 
@@ -199,7 +199,7 @@ SELECT count(*) FROM read_gfa('__TEST_DIR__/spec_example.gfa.gz');
 10
 
 query I
-SELECT count(*) FROM read_gfa(['data/gfa/spec_example.gfa', 'data/myloasm/ecoli_sim/final_contig_graph.gfa']);
+SELECT count(*) FROM read_gfa(['data/gfa/spec_example.gfa', 'data/myloasm/ecoli_sim/final_contig_graph.gfa.gz']);
 ----
 191
 

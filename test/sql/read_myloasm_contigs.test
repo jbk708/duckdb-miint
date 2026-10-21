@@ -4,10 +4,38 @@
 
 require miint
 
+# The fixture's text files are committed gzipped (data/myloasm/README.md). The functions read
+# a directory as myloasm writes it, so rebuild one: create its directories, then decompress
+# the files myloasm writes as text and copy the ones it writes gzipped.
+foreach dir ecoli_sim ecoli_sim/alternate_assemblies ecoli_sim/3-mapping ecoli_sim/0-cleaning_and_unitigs ecoli_sim/0-cleaning_and_unitigs/remap_temp
+
+statement ok
+COPY (SELECT 1 AS x) TO '__TEST_DIR__/${dir}' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
+
+endloop
+
+unzip data/myloasm/ecoli_sim/assembly_primary.fa.gz __TEST_DIR__/ecoli_sim/assembly_primary.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa.gz __TEST_DIR__/ecoli_sim/alternate_assemblies/assembly_alternate.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa.gz __TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa
+
+unzip data/myloasm/ecoli_sim/final_contig_graph.gfa.gz __TEST_DIR__/ecoli_sim/final_contig_graph.gfa
+
+unzip data/myloasm/ecoli_sim/myloasm.log.gz __TEST_DIR__/ecoli_sim/myloasm.log
+
+foreach member 3-mapping/map_to_unitigs.paf.gz 0-cleaning_and_unitigs/read_coverages.txt.gz 0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz
+
+statement ok
+COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/${member}', columns = {'line': 'VARCHAR'}, delim = E'\x01', quote = '', escape = '', header = false))
+TO '__TEST_DIR__/ecoli_sim/${member}' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01', COMPRESSION gzip);
+
+endloop
+
 # --- Schema ---
 
 query TT
-SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_myloasm_contigs('data/myloasm/ecoli_sim'));
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_myloasm_contigs('__TEST_DIR__/ecoli_sim'));
 ----
 contig_id	VARCHAR
 dereplication_status	VARCHAR
@@ -26,7 +54,7 @@ secondary_aligned_percent	DOUBLE
 secondary_ani_percent	DOUBLE
 
 query TTIITRRRRRTTRR
-SELECT * EXCLUDE (fasta_id) FROM read_myloasm_contigs('data/myloasm/ecoli_sim') ORDER BY contig_id;
+SELECT * EXCLUDE (fasta_id) FROM read_myloasm_contigs('__TEST_DIR__/ecoli_sim') ORDER BY contig_id;
 ----
 u491ctg	primary	196340	196466	no	51.0	30.0	30.0	33.0	1.0	no	NULL	NULL	NULL
 u826ctg	alternate	195443	195577	no	51.0	19.0	19.0	21.0	1.0	no	u491ctg	99.81	99.18
@@ -43,20 +71,20 @@ u982ctg	primary	40000	50902	yes	32.0	32.0	13.0	15.0	1.0	no	NULL	NULL	NULL
 # and fasta_id joins back to it.
 query III
 SELECT count(*), count(c.contig_id), count(*) FILTER (c.dereplication_status = f.status)
-FROM (SELECT 'primary' AS status, * FROM read_fastx('data/myloasm/ecoli_sim/assembly_primary.fa')
-      UNION ALL SELECT 'alternate', * FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa')
-      UNION ALL SELECT 'duplicated', * FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa')) f
-LEFT JOIN read_myloasm_contigs('data/myloasm/ecoli_sim') c ON c.fasta_id = f.read_id;
+FROM (SELECT 'primary' AS status, * FROM read_fastx('__TEST_DIR__/ecoli_sim/assembly_primary.fa')
+      UNION ALL SELECT 'alternate', * FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/assembly_alternate.fa')
+      UNION ALL SELECT 'duplicated', * FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa')) f
+LEFT JOIN read_myloasm_contigs('__TEST_DIR__/ecoli_sim') c ON c.fasta_id = f.read_id;
 ----
 5	5	5
 
 # The polished length in the header is the length of the sequence it labels.
 query I
 SELECT count(*)
-FROM (SELECT * FROM read_fastx('data/myloasm/ecoli_sim/assembly_primary.fa')
-      UNION ALL SELECT * FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa')
-      UNION ALL SELECT * FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa')) f
-JOIN read_myloasm_contigs('data/myloasm/ecoli_sim') c ON c.fasta_id = f.read_id
+FROM (SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/assembly_primary.fa')
+      UNION ALL SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/assembly_alternate.fa')
+      UNION ALL SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa')) f
+JOIN read_myloasm_contigs('__TEST_DIR__/ecoli_sim') c ON c.fasta_id = f.read_id
 WHERE c.polished_length = length(f.sequence1);
 ----
 5
@@ -65,7 +93,7 @@ WHERE c.polished_length = length(f.sequence1);
 # myloasm's unpolished contig carries, so the polished length is the circle's.
 query TII
 SELECT contig_id, polished_length, unpolished_length > polished_length
-FROM read_myloasm_contigs('data/myloasm/ecoli_sim') WHERE circularity = 'yes' ORDER BY contig_id;
+FROM read_myloasm_contigs('__TEST_DIR__/ecoli_sim') WHERE circularity = 'yes' ORDER BY contig_id;
 ----
 u840ctg	40000	true
 u982ctg	40000	true
@@ -73,7 +101,7 @@ u982ctg	40000	true
 # Dereplication points from the strain B contig to the strain A one, and from the 'circ'
 # circle to its variant 'circb' (contig origins in data/myloasm/README.md).
 query TT
-SELECT contig_id, secondary_to_contig_id FROM read_myloasm_contigs('data/myloasm/ecoli_sim')
+SELECT contig_id, secondary_to_contig_id FROM read_myloasm_contigs('__TEST_DIR__/ecoli_sim')
 WHERE secondary_to_contig_id IS NOT NULL ORDER BY contig_id;
 ----
 u826ctg	u491ctg
@@ -84,7 +112,7 @@ u840ctg	u982ctg
 # independently, they agree, in that order.
 query I
 SELECT count(*)
-FROM read_myloasm_contigs('data/myloasm/ecoli_sim')
+FROM read_myloasm_contigs('__TEST_DIR__/ecoli_sim')
 WHERE string_split(regexp_extract(fasta_id, '_depth-([0-9.-]+)_', 1), '-')::DOUBLE[]
       = [depth_identity_99, depth_identity_99_75, depth_identity_100];
 ----
@@ -92,7 +120,7 @@ WHERE string_split(regexp_extract(fasta_id, '_depth-([0-9.-]+)_', 1), '-')::DOUB
 
 # A trailing slash on the directory reads the same run.
 query I
-SELECT count(*) FROM read_myloasm_contigs('data/myloasm/ecoli_sim/');
+SELECT count(*) FROM read_myloasm_contigs('__TEST_DIR__/ecoli_sim/');
 ----
 5
 
@@ -112,20 +140,20 @@ statement ok
 COPY (SELECT 1 AS x) TO '__TEST_DIR__/contigs_filtered/alternate_assemblies' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
 
 statement ok
-COPY (SELECT * FROM read_fastx('data/myloasm/ecoli_sim/assembly_primary.fa') WHERE read_id NOT LIKE 'u912ctg_%')
+COPY (SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/assembly_primary.fa') WHERE read_id NOT LIKE 'u912ctg_%')
 TO '__TEST_DIR__/contigs_filtered/assembly_primary.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement ok
-COPY (SELECT * FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa'))
+COPY (SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/assembly_alternate.fa'))
 TO '__TEST_DIR__/contigs_filtered/alternate_assemblies/assembly_alternate.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement ok
-COPY (SELECT * FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa'))
+COPY (SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa'))
 TO '__TEST_DIR__/contigs_filtered/alternate_assemblies/duplicated_contigs.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement ok
 CREATE TABLE real_gfa AS
-SELECT line FROM read_csv('data/myloasm/ecoli_sim/final_contig_graph.gfa',
+SELECT line FROM read_csv('__TEST_DIR__/ecoli_sim/final_contig_graph.gfa',
                           delim = E'\x01', quote = '', escape = '', header = false,
                           columns = {'line': 'VARCHAR'}, auto_detect = false);
 
@@ -158,7 +186,7 @@ statement ok
 COPY (SELECT 1 AS x) TO '__TEST_DIR__/contigs_no_alternates/alternate_assemblies' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
 
 statement ok
-COPY (SELECT * FROM read_fastx('data/myloasm/ecoli_sim/assembly_primary.fa'))
+COPY (SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/assembly_primary.fa'))
 TO '__TEST_DIR__/contigs_no_alternates/assembly_primary.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement ok
@@ -222,7 +250,7 @@ read_myloasm_contigs: duplicated contig header is not myloasm's: 'contig_1'
 
 # A primary contig is not secondary to anything, and an alternate or duplicate always is.
 statement ok
-COPY (SELECT read_id, 'mult=1.00' AS comment, sequence1 FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa'))
+COPY (SELECT read_id, 'mult=1.00' AS comment, sequence1 FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa'))
 TO '__TEST_DIR__/contigs_filtered/alternate_assemblies/duplicated_contigs.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement error
@@ -232,10 +260,10 @@ read_myloasm_contigs: duplicated contig header is not myloasm's: 'u840ctg_len-40
 
 # A contig is in at most one FASTA.
 statement ok
-COPY (SELECT read_id, comment, sequence1 FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa')
+COPY (SELECT read_id, comment, sequence1 FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/duplicated_contigs.fa')
       UNION ALL
       SELECT read_id, 'mult=1.00 secondary_to:|u491ctg_x mult=1.00| aligned_frac:99.00 ani:99.00', sequence1
-      FROM read_fastx('data/myloasm/ecoli_sim/assembly_primary.fa') WHERE read_id LIKE 'u982ctg_%')
+      FROM read_fastx('__TEST_DIR__/ecoli_sim/assembly_primary.fa') WHERE read_id LIKE 'u982ctg_%')
 TO '__TEST_DIR__/contigs_filtered/alternate_assemblies/duplicated_contigs.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement error
@@ -251,11 +279,11 @@ statement ok
 COPY (SELECT 1 AS x) TO '__TEST_DIR__/contigs_missing/alternate_assemblies' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
 
 statement ok
-COPY (SELECT * FROM read_fastx('data/myloasm/ecoli_sim/assembly_primary.fa'))
+COPY (SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/assembly_primary.fa'))
 TO '__TEST_DIR__/contigs_missing/assembly_primary.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement ok
-COPY (SELECT * FROM read_fastx('data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa'))
+COPY (SELECT * FROM read_fastx('__TEST_DIR__/ecoli_sim/alternate_assemblies/assembly_alternate.fa'))
 TO '__TEST_DIR__/contigs_missing/alternate_assemblies/assembly_alternate.fa' (FORMAT FASTA, INCLUDE_COMMENT true);
 
 statement ok

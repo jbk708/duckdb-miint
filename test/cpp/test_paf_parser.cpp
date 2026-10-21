@@ -18,7 +18,7 @@ PafRecord Parse(const std::string &line) {
 	return record;
 }
 
-// kForward and kUnmapped are copied from data/paf/k12_minimap2.paf (minimap2 2.31), and
+// kForward and kUnmapped are copied from data/paf/k12_minimap2.paf (minimap2 2.30), and
 // kReverseOverhang is its ovhrev line with some tags dropped; data/paf/README.md says how the
 // reads were built. kMyloasm is a made-up record in the format of myloasm 0.7.0's
 // map_to_unitigs.paf.gz (untyped tags, a reverse-strand piece).
