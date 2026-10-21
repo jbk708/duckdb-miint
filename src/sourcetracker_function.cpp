@@ -459,6 +459,12 @@ struct DenseBatch {
 	throw InvalidInputException("sourcetracker: st3 returned an unexpected %s batch: %s", what, why);
 }
 
+// A struct's children are indexed through the parent's offset, so each must hold
+// at least parent.offset + parent.length values.
+bool CoversParent(const ArrowArray &child, const ArrowArray &parent) {
+	return child.length >= parent.offset + parent.length;
+}
+
 DenseBatch ReadDenseBatch(const St3Result *result,
                           St3Status (*exporter)(const St3Result *, ArrowArray *, ArrowSchema *), const char *what) {
 	ArrowExport out;
@@ -469,7 +475,7 @@ DenseBatch ReadDenseBatch(const St3Result *result,
 	const ArrowArray &arr = out.array;
 	const ArrowSchema &schema = out.schema;
 	if (!schema.format || std::strcmp(schema.format, "+s") != 0 || schema.n_children < 1 ||
-	    arr.n_children != schema.n_children) {
+	    arr.n_children != schema.n_children || arr.null_count != 0) {
 		BadExport(what, "not a struct batch with a sink_id column");
 	}
 	const auto n_rows = static_cast<idx_t>(arr.length);
@@ -481,7 +487,7 @@ DenseBatch ReadDenseBatch(const St3Result *result,
 		const ArrowSchema &ids_schema = *schema.children[0];
 		const bool large = ids_schema.format && std::strcmp(ids_schema.format, "U") == 0;
 		if (!ids_schema.format || (std::strcmp(ids_schema.format, "u") != 0 && !large) || ids.n_buffers != 3 ||
-		    ids.null_count != 0) {
+		    ids.null_count != 0 || !CoversParent(ids, arr)) {
 			BadExport(what, "sink_id is not a non-null string column");
 		}
 		const auto data = static_cast<const char *>(ids.buffers[2]);
@@ -508,7 +514,7 @@ DenseBatch ReadDenseBatch(const St3Result *result,
 		const ArrowArray &col = *arr.children[c + 1];
 		const ArrowSchema &col_schema = *schema.children[c + 1];
 		if (!col_schema.format || std::strcmp(col_schema.format, "g") != 0 || col.n_buffers != 2 ||
-		    col.null_count != 0) {
+		    col.null_count != 0 || !CoversParent(col, arr)) {
 			BadExport(what, "environment columns are not non-null Float64");
 		}
 		batch.columns.emplace_back(col_schema.name ? col_schema.name : "");
@@ -553,7 +559,7 @@ const T *ChildValues(const ArrowArray &batch, idx_t child, const char *format, c
 	const ArrowArray &col = *batch.children[child];
 	const ArrowSchema &col_schema = *schema.children[child];
 	if (!col_schema.format || std::strcmp(col_schema.format, format) != 0 || col.n_buffers != 2 ||
-	    col.null_count != 0 || col.length != batch.length) {
+	    col.null_count != 0 || !CoversParent(col, batch)) {
 		BadExport("contingency", "columns are not non-null (INT32, INT32, INT32, DOUBLE)");
 	}
 	return static_cast<const T *>(col.buffers[1]) + batch.offset + col.offset;
@@ -628,37 +634,47 @@ unique_ptr<GlobalTableFunctionState> SourcetrackerInitGlobal(ClientContext &cont
 	gstate->feature_id_type = data.feature_id_type;
 	gstate->assignments = data.assignments;
 
-	auto cells = ReadFeatureTable(context, data.table_name, kCaller);
-	auto metadata = ReadWideMetadata(context, data.metadata_name, {data.source_sink_column, data.env_column}, kCaller);
-	// The dataset layer knows the two variables by their canonical names; the
-	// reader reports them by the column names it resolved, in requested order.
-	if (metadata.column_names.size() != 2) {
-		throw InvalidInputException("sourcetracker: expected two metadata variables, got %d",
-		                            static_cast<int>(metadata.column_names.size()));
-	}
-	for (auto &row : metadata.rows) {
-		if (row.variable == metadata.column_names[0]) {
-			row.variable = "source_sink";
-		} else if (row.variable == metadata.column_names[1]) {
-			row.variable = "env";
-		}
-	}
-
 	Dataset ds;
-	try {
-		ds = miint::sourcetracker::IngestDataset(cells, metadata.rows);
-		if (!data.loo && std::find(ds.is_source.begin(), ds.is_source.end(), false) == ds.is_source.end()) {
-			throw std::invalid_argument("no sink samples in the metadata; sink mode needs at least one sample with "
-			                            "source_sink = 'sink' (use loo := true to predict source samples instead)");
+	{
+		// Scoped so the string-keyed cells and metadata rows, the largest copy of
+		// the input, are freed before the sampler runs.
+		auto cells = ReadFeatureTable(context, data.table_name, kCaller);
+		auto metadata =
+		    ReadWideMetadata(context, data.metadata_name, {data.source_sink_column, data.env_column}, kCaller);
+		// The dataset layer knows the two variables by their canonical names; the
+		// reader reports them by the column names it resolved, in requested order.
+		if (metadata.column_names.size() != 2) {
+			throw InvalidInputException("sourcetracker: expected two metadata variables, got %d",
+			                            static_cast<int>(metadata.column_names.size()));
 		}
-		miint::sourcetracker::CheckDepths(ds, data.config.source_rarefaction_depth, data.config.sink_rarefaction_depth,
-		                                  data.loo);
-	} catch (const std::invalid_argument &e) {
-		throw InvalidInputException("sourcetracker: %s", e.what());
+		for (auto &row : metadata.rows) {
+			if (row.variable == metadata.column_names[0]) {
+				row.variable = "source_sink";
+			} else if (row.variable == metadata.column_names[1]) {
+				row.variable = "env";
+			}
+		}
+
+		try {
+			ds = miint::sourcetracker::IngestDataset(cells, metadata.rows);
+			if (!data.loo && std::find(ds.is_source.begin(), ds.is_source.end(), false) == ds.is_source.end()) {
+				throw std::invalid_argument("no sink samples in the metadata; sink mode needs at least one sample "
+				                            "with source_sink = 'sink' (use loo := true to predict source samples "
+				                            "instead)");
+			}
+			miint::sourcetracker::CheckDepths(ds, data.config.source_rarefaction_depth,
+			                                  data.config.sink_rarefaction_depth, data.loo);
+		} catch (const std::invalid_argument &e) {
+			throw InvalidInputException("sourcetracker: %s", e.what());
+		}
 	}
 	CheckInterrupt(context);
 
 	auto table = ImportDataset(context, ds);
+	// st3 holds its own copy of the cells now; only the feature ids are read again.
+	std::vector<int32_t>().swap(ds.rows);
+	std::vector<int32_t>().swap(ds.cols);
+	std::vector<double>().swap(ds.vals);
 
 	St3Config config = data.config;
 	config.seed = data.seed >= 0 ? static_cast<uint64_t>(data.seed) : std::random_device {}();
