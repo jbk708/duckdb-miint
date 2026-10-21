@@ -4,7 +4,6 @@
 #include "duckdb/common/string_util.hpp"
 
 #include <stdexcept>
-#include <unordered_map>
 
 namespace duckdb {
 
@@ -60,16 +59,18 @@ LogicalType ColumnType(TagType type) {
 	}
 }
 
-// Index into MINIMAP2_TAGS by key, built once.
-const std::unordered_map<std::string, idx_t> &TypedTagIndex() {
-	static const std::unordered_map<std::string, idx_t> index = [] {
-		std::unordered_map<std::string, idx_t> map;
-		for (idx_t i = 0; i < TYPED_TAG_COUNT; i++) {
-			map.emplace(MINIMAP2_TAGS[i].key, i);
+// The index of `key` in MINIMAP2_TAGS, or TYPED_TAG_COUNT for any other tag. Every minimap2
+// key is two characters, so a longer one, like each of myloasm's, is turned away at once.
+idx_t TypedTagIndex(const std::string &key) {
+	if (key.size() != 2) {
+		return TYPED_TAG_COUNT;
+	}
+	for (idx_t i = 0; i < TYPED_TAG_COUNT; i++) {
+		if (key[0] == MINIMAP2_TAGS[i].key[0] && key[1] == MINIMAP2_TAGS[i].key[1]) {
+			return i;
 		}
-		return map;
-	}();
-	return index;
+	}
+	return TYPED_TAG_COUNT;
 }
 
 // Move minimap2's tags out of `tags` into `typed`, each checked against its column's type,
@@ -79,19 +80,18 @@ void TakeTypedTags(std::vector<miint::SamStyleTag> &tags, std::vector<ReadPafTab
 	for (auto &value : typed) {
 		value.present = false;
 	}
-	const auto &index = TypedTagIndex();
 	size_t kept = 0;
 	for (size_t i = 0; i < tags.size(); i++) {
 		auto &tag = tags[i];
-		const auto found = index.find(tag.key);
-		if (found == index.end()) {
+		const idx_t found = TypedTagIndex(tag.key);
+		if (found == TYPED_TAG_COUNT) {
 			if (kept != i) {
 				tags[kept] = std::move(tag);
 			}
 			kept++;
 			continue;
 		}
-		const TypedTag &spec = MINIMAP2_TAGS[found->second];
+		const TypedTag &spec = MINIMAP2_TAGS[found];
 		const char letter = static_cast<char>(spec.type);
 		if (tag.type) {
 			if (*tag.type != spec.type) {
@@ -103,7 +103,7 @@ void TakeTypedTags(std::vector<miint::SamStyleTag> &tags, std::vector<ReadPafTab
 			throw std::runtime_error("'" + tag.key + ":" + tag.value + "' has a value that is not valid for type '" +
 			                         letter + "', the type of " + ColumnName(spec));
 		}
-		auto &out = typed[found->second];
+		auto &out = typed[found];
 		const string_t text(tag.value.data(), static_cast<uint32_t>(tag.value.size()));
 		switch (spec.type) {
 		case TagType::Integer:
@@ -137,7 +137,7 @@ void SetInt64(Vector &vec, idx_t row, int64_t value) {
 
 void SetTypedTag(Vector &vec, idx_t row, TagType type, const ReadPafTableFunction::TypedTagValue &value) {
 	if (!value.present) {
-		FlatVector::SetNull(vec, row, true);
+		FlatVector::Validity(vec).SetInvalid(row);
 		return;
 	}
 	switch (type) {
