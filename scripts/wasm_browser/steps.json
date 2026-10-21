@@ -113,6 +113,30 @@
     "expect": "mse mean_score=43.885312500000005 std_score=10.638204488673761"
   },
   {
+    "name": "cv_classifier_proba_md5",
+    "sql": "SELECT count(DISTINCT metric || mean_score::VARCHAR || std_score::VARCHAR || fold_scores::VARCHAR) || ' summary, md5=' || md5(string_agg(sample_id || ':' || probabilities::VARCHAR || '|' || classes::VARCHAR, ',' ORDER BY sample_id)) FROM cross_validate_classifier('counts', 'meta', n_folds := 3, n_estimators := 10, random_state := 7)",
+    "expect": "1 summary, md5=274bfc30ad205c2af978a47b31d8a92d"
+  },
+  {
+    "name": "cv_regressor_folds",
+    "sql": "SELECT count(DISTINCT metric || mean_score::VARCHAR || std_score::VARCHAR || fold_scores::VARCHAR) || ' summary, fold_scores=' || any_value(fold_scores)::VARCHAR FROM cross_validate_regressor('counts', 'rmeta', n_folds := 3, n_estimators := 10, random_state := 7)",
+    "expect": "1 summary, fold_scores=[30.306093750000002, 45.06593750000001, 56.28390625]"
+  },
+  {
+    "name": "cv_regressor_oof_md5",
+    "sql": "SELECT count(*) || ' rows, md5=' || md5(string_agg(sample_id || '=' || prediction::VARCHAR || '/' || actual::VARCHAR, ',' ORDER BY sample_id)) FROM cross_validate_regressor('counts', 'rmeta', n_folds := 3, n_estimators := 10, random_state := 7)",
+    "expect": "12 rows, md5=d96556bc6891b6e556756fa29625dc93"
+  },
+  {
+    "name": "setup_huge_targets",
+    "sql": "CREATE TABLE huge AS SELECT sample_id, CASE WHEN y > 9 THEN 1.7e308 ELSE -1.7e308 END AS y FROM rmeta"
+  },
+  {
+    "name": "fit_overflow_refused",
+    "sql": "SELECT * FROM fit_regressor('counts', 'huge', n_estimators := 5, name := 'huge')",
+    "expect_error": "the targets are too large in magnitude for f64 node statistics"
+  },
+  {
     "name": "fit_threads_1",
     "sql": "CREATE TABLE m1 AS SELECT * FROM fit_classifier('counts', 'meta', n_estimators := 25, random_state := 7, name := 'm1', threads := 1)"
   },

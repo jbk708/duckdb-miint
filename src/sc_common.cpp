@@ -171,7 +171,7 @@ void OpenScContext(int32_t n_threads, const char *caller, ScContext &out) {
 	(void)n_threads;
 #endif
 	if (auto st = sc_context_new(&config, &out.ptr); st != SC_OK) {
-		// No context exists yet to carry sc's message.
+		// No context exists yet, so sc's message is on this thread.
 		ThrowSc(caller, nullptr, st);
 	}
 }

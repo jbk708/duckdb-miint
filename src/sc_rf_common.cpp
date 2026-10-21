@@ -59,6 +59,14 @@ bool IsIntegerValue(const Value &v) {
 //! other types too -- `true` reads as 1.0 -- so they are refused rather than
 //! taken for a number.
 double ReadFraction(const Value &v, const char *name, const char *accepted, const char *caller) {
+	// sc floors the count a fraction resolves to, and a FLOAT holds 0.7 as
+	// 0.69999999: 0.7 of 10 features would become 6.
+	if (v.type().id() == LogicalTypeId::FLOAT) {
+		throw InvalidInputException(
+		    "%s: %s is a FLOAT, which holds %s only approximately and can round the count down; "
+		    "pass a DOUBLE or a literal",
+		    caller, name, v.ToString());
+	}
 	if (v.type().IsFloating() || v.type().id() == LogicalTypeId::DECIMAL) {
 		return v.GetValue<double>();
 	}

@@ -99,10 +99,11 @@ private:
 //! the status, so an error path still cleans up.
 void TakeArray(ArrowArray &src, ArrowSchema &src_schema, OwnedArrowArray &dst);
 
-//! Turn a non-zero `sc_status_t` into a DuckDB error, preferring sc's own
-//! message from the context's last-error slot. Pass the context only for a
-//! call that took it: sc records nothing for one that did not, so the slot
-//! could only hold an earlier, unrelated message.
+//! Turn a non-zero `sc_status_t` into a DuckDB error carrying sc's own message:
+//! the context's last error for a call that took one, otherwise the calling
+//! thread's (`sc_thread_last_error`). Pass the context only for a call that
+//! took it; sc records a contextless call's error on the thread, so the
+//! context's slot would hold an earlier, unrelated message.
 [[noreturn]] void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status);
 
 //! Open an sc context with a pool of `n_threads` threads, throwing as `caller`

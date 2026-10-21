@@ -113,7 +113,9 @@ CREATE TABLE counts AS SELECT * FROM train_data;
 statement error
 SELECT * FROM fit_regressor('counts', 'short_metadata', name := 'm8');
 ----
-CREATE VIEW shared_counts AS SELECT * FROM counts SEMI JOIN shared USING (sample_id);
+CREATE VIEW shared AS SELECT DISTINCT sample_id FROM counts SEMI JOIN short_metadata USING (sample_id);
+    CREATE VIEW shared_counts AS SELECT * FROM counts SEMI JOIN shared USING (sample_id);
+    CREATE VIEW shared_labels AS SELECT * FROM short_metadata SEMI JOIN shared USING (sample_id);
 
 statement ok
 CREATE VIEW shared AS SELECT DISTINCT sample_id FROM counts SEMI JOIN short_metadata USING (sample_id);
@@ -407,15 +409,26 @@ SELECT (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_est
 ----
 true	true	true	true
 
-# A fraction in a floating type is the same fraction as the literal, whose type
-# is DECIMAL; a fraction computed in SQL is usually a DOUBLE.
-query II
+# A fraction in a DOUBLE, as one computed in SQL usually is, is the same
+# fraction as the literal, whose type is DECIMAL.
+query I
 SELECT (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 0.5::DOUBLE, name := 'd'))
-     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 0.5, name := 'd')),
-       (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 0.5::FLOAT, name := 'd'))
-     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_features := 0.5, name := 'd'));
+     = (SELECT md5(model_blob) FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, random_state := 1, max_samples := 0.5, name := 'd'));
 ----
-true	true
+true
+
+# A FLOAT holds 0.7 as 0.69999999, and sc floors the count a fraction resolves
+# to, so 0.7 of 10 features would become 6 rather than 7. It is refused rather
+# than rounded down without a word.
+statement error
+SELECT * FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, max_features := 0.7::FLOAT, name := 'd');
+----
+fit_classifier: max_features is a FLOAT, which holds 0.7 only approximately and can round the count down; pass a DOUBLE or a literal
+
+statement error
+SELECT * FROM fit_classifier('hp_counts', 'hp_meta', n_estimators := 8, max_samples := 0.5::FLOAT, name := 'd');
+----
+fit_classifier: max_samples is a FLOAT
 
 query I
 SELECT (SELECT model_blob FROM fit_classifier('train_data','class_metadata', random_state := 1, name := 'm19'))

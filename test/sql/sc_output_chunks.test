@@ -73,7 +73,7 @@ JOIN many_labels m USING (sample_id);
 # importance. An importance emitted one row off, or from a chunk-local index,
 # lands on another feature. max_features := 'all' lets every node consider
 # g2048; under the default a node may draw only constant features and stay a
-# leaf, leaving no importance anywhere.
+# leaf, leaving no importance anywhere (scikit-learn draws on; the-miint/sc#4).
 statement ok
 CREATE TABLE wide_counts AS
   SELECT 's' || i AS sample_id, 'g' || lpad(j::VARCHAR, 4, '0') AS feature_id,

@@ -330,9 +330,10 @@ void LoadBatch(const ScShapData &bind, ScShapGlobalState &gstate, size_t first) 
 	if (bind.classification && shap_classes.ReadUtf8("sc_shap classes") != gstate.classes) {
 		throw InternalException("sc_shap: class order differs between sc_shap and sc_predict_proba");
 	}
-	// sc refuses a model holding a non-finite number, but finite covers can still
-	// overflow inside TreeSHAP. An inf or NaN attribution explains nothing, and a
-	// NaN has no place in waterfall order, so the model is rejected here.
+	// sc's loader refuses non-finite numbers and covers that do not add up, but
+	// nothing guarantees TreeSHAP stays finite on every model it accepts. An inf
+	// or NaN attribution explains nothing, and a NaN has no place in waterfall
+	// order, so the model is rejected here.
 	for (size_t i = 0; i < rows * gstate.n_outputs * gstate.n_features; i++) {
 		if (!std::isfinite(gstate.values[i])) {
 			const auto &sample_id = gstate.table->SampleIds()[first + i / (gstate.n_outputs * gstate.n_features)];

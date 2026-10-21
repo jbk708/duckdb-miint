@@ -69,6 +69,13 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
                                   vector<LogicalType> &return_types, vector<string> &names, bool classification) {
 	auto data = make_uniq<ScCvData>();
 	data->caller = classification ? "cross_validate_classifier" : "cross_validate_regressor";
+#if defined(__EMSCRIPTEN__) && !defined(__wasm_exception_handling__)
+	// Without wasm-native exceptions the Rust glue unwinds through duckdb-wasm's
+	// JS invoke_* path, where cross-validation traps or returns wrong scores.
+	throw NotImplementedException("%s needs a DuckDB-Wasm build with wasm-native exceptions (wasm_eh), and this one "
+	                              "has none",
+	                              data->caller);
+#endif
 	data->classification = classification;
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->metadata_relation = input.inputs[1].GetValue<string>();
