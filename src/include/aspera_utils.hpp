@@ -18,6 +18,11 @@ std::string GetTempDir();
 struct AsperaPath {
 	std::string host;
 	std::string remote_path;
+
+	// How the file is named to the user, in the filepath column and in read errors.
+	std::string HostPath() const {
+		return host + ":" + remote_path;
+	}
 };
 
 struct AsperaConfig {

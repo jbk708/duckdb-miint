@@ -86,6 +86,15 @@ yields `""`, while an inline constant-NULL vector yields bytes that trip an unre
 A test that feeds NULL only one way can pass against the bug, so cover both a NULL stored in
 a table and a literal `NULL`.
 
+**An all-valid validity buffer is not free.** A `ValidityMask` with no buffer already means
+every row is valid; `SetAllValid()` allocates a buffer and fills it with ones. The storage
+append (`validity_uncompressed.cpp`) takes its fast path only when there is no buffer, so a
+column handed an all-ones buffer is appended row by row. On a list column this counts the
+child too: setting the score mask on `read_fastx`'s quality lists sent every score, about 3
+billion on a 10M-pair `CREATE TABLE`, down the row-by-row path. Leave a fresh output mask
+alone: DuckDB resets each output chunk's masks before the source fills it
+(`PipelineExecutor` calls `Reset()`, and `VectorCache::ResetFromCache` drops the buffers).
+
 A **morsel is 122,880 rows (60 data chunks)** — the granularity a thread claims from a
 source.
 

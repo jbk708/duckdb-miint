@@ -81,7 +81,8 @@ static void validate_format_consistency(bool is_fasta1, bool is_fasta2, bool all
 }
 
 // The bytes std::isspace accepts in the "C" locale: ' ' and '\t' through '\r'. Spelled out
-// rather than calling std::isspace, which is an out-of-line, locale-dependent call per byte.
+// rather than calling std::isspace, which is an out-of-line, locale-dependent call per byte,
+// and branch-free, so the loops over a whole sequence that use it vectorize.
 static inline bool is_ascii_space(unsigned char c) {
 	return (c == ' ') | (static_cast<unsigned char>(c - '\t') <= '\r' - '\t');
 }
@@ -91,13 +92,13 @@ static inline bool is_ascii_space(unsigned char c) {
 static constexpr char SEP_SPACE = 0;
 static constexpr char SEP_LINE = 2;
 
-// Parse one record, as kseq++'s operator>> does except that a record whose header starts with
-// '@' is FASTQ and must be exactly four lines: header, sequence, '+', quality. kseq++ reads
-// wrapped FASTQ by appending quality lines until the quality is as long as the sequence, so one
-// short quality line took the next record's header as quality, and that record silently
-// vanished. It skipped anything up to the next '@', so a record whose header had lost its '@'
-// vanished too, and it took a '@' record with no '+' line, as a file cut short leaves, for
-// FASTA. FASTA is parsed as before, wrapped sequence lines included.
+// Parse one record over kseq++'s buffered getc/getuntil. A FASTA record is read as kseq++'s own
+// parser reads it, wrapped sequence lines included. A record whose header starts with '@' is
+// FASTQ and is exactly four lines: header, one sequence line, '+', and one quality line as long
+// as the sequence. kseq++'s parser differs: it appends quality lines until the quality is long
+// enough, so a short quality line takes the next header as quality, and it skips any text
+// before a header. For FASTQ each of those is MALFORMED here, since each loses or misreads a
+// record; FASTA keeps the skip before its first header.
 template <class Stream>
 SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp::KSeq &rec, StreamState &state,
                                                          std::string &problem) {
@@ -105,8 +106,8 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 	state.pending_header = 0;
 	if (!c) {
 		if (state.at_start) {
-			// Skip to the first header, as kseq++ does: old FASTA files can open with ';' comments.
-			// FASTQ has no such preamble, so text before a first '@' is a record that lost its '@'.
+			// Skip to the first header: old FASTA files can open with ';' comments. FASTQ has no
+			// such preamble, so text before a first '@' is a record that has lost its '@'.
 			bool skipped_text = false;
 			while ((c = stream.getc()) && c != '>' && c != '@') {
 				skipped_text |= !is_ascii_space(c);
@@ -116,8 +117,9 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 				return ParseResult::MALFORMED;
 			}
 		} else {
-			// Only after a FASTQ record: the next line must be a header, though blank lines, and
-			// lines of nothing but whitespace, may come first.
+			// The previous record did not end at the next header: it was FASTQ, or it ended at a
+			// NUL or the end of the input. The next line must be a header, though blank lines,
+			// and lines of nothing but whitespace, may come first.
 			while (true) {
 				while ((c = stream.getc()) && (c == '\n' || c == '\r')) {
 				}
@@ -167,9 +169,10 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 	}
 	if (c != '+') {
 		if (fastq) {
-			problem = record() +
-			          (c ? "no '+' line before the next record" : "the input ends before the record's '+' line") +
-			          "; FASTQ records must be four lines";
+			problem = record() + (c ? "no '+' line before the next record; FASTQ records must be four lines"
+			                      : stream.eof()
+			                          ? "the input ends before the record's '+' line; FASTQ records must be four lines"
+			                          : "unexpected NUL byte before the record's '+' line");
 			return ParseResult::MALFORMED;
 		}
 		return ParseResult::RECORD; // FASTA
@@ -190,13 +193,13 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 	return ParseResult::RECORD;
 }
 
-// Read from whichever stream variant is active, one record at a time, asking each failure
-// what it was: kseq++'s own read(n) took any failure for the end of the file.
+// Read from whichever stream variant is active, one record at a time, asking the input why it
+// stopped whenever a record fails or ends with the input.
 //
 // Errors that originate in our kseq++ read callbacks (duckdb_seq_read /
 // aspera_seq_read) are reported via the thread-local g_seq_read_error
-// channel: the callback writes a message and returns -1, kseq++ surfaces -1
-// as err()/empty-result, and we raise IOException from here. This keeps the
+// channel: the callback writes a message and returns -1, which getc() reads
+// as the end of the input, and we raise IOException from here. This keeps the
 // throw out of kseq++'s template-instantiated frames, which previously caused
 // a recursive-terminate abort on the aspera path under some failure modes.
 std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, const std::string &source,
@@ -211,13 +214,16 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 		    for (int i = 0; i < n; i++) {
 			    std::string problem;
 			    const auto parsed = parse_record(*reader, result.emplace_back(), state, problem);
-			    if (parsed == ParseResult::RECORD) {
+			    if (parsed == ParseResult::RECORD && !reader->eof()) {
 				    state.records_read++;
 				    continue;
 			    }
-			    result.pop_back();
+			// The record is malformed, or the input has stopped. A record that ends with the
+			// input is kept only once the input says it ended cleanly: a FASTA record has no
+			// terminator, so one that a truncation or a read error cut short looks complete.
 #ifdef MIINT_STATIC_BUILD
 			    if (!g_seq_read_error.empty()) {
+				    result.pop_back();
 				    return; // the callback's own message is raised below
 			    }
 #endif
@@ -228,12 +234,17 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 				    input_error = reader->EndOfInputError();
 			    }
 			    if (input_error.empty() && reader->err()) {
-				    input_error = "the stream reported a read error";
+				    input_error = "the input reported a read error";
 			    }
 			    if (!input_error.empty()) {
 				    throw std::runtime_error(source + ": read failed after record " +
 				                             std::to_string(state.records_read) + ": " + input_error);
 			    }
+			    if (parsed == ParseResult::RECORD) {
+				    state.records_read++;
+				    continue; // the input ended cleanly just after it
+			    }
+			    result.pop_back();
 			    if (parsed == ParseResult::MALFORMED) {
 				    throw std::runtime_error(source + ": " + problem);
 			    }
@@ -250,7 +261,8 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 	    var);
 #ifdef MIINT_STATIC_BUILD
 	if (!g_seq_read_error.empty()) {
-		std::string msg = std::move(g_seq_read_error);
+		std::string msg =
+		    source + ": read failed after record " + std::to_string(state.records_read) + ": " + g_seq_read_error;
 		g_seq_read_error.clear();
 		throw duckdb::IOException(msg);
 	}

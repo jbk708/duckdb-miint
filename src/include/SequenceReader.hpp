@@ -95,8 +95,8 @@ private:
 		// The next header's '>' or '@' when the previous record's sequence lines ended by
 		// consuming it, otherwise 0.
 		char pending_header = 0;
-		// Nothing parsed yet. Text before the first header is skipped for FASTA, as kseq++
-		// always has, and is an error for FASTQ.
+		// Nothing parsed yet. Text before the first header is skipped for FASTA, which can open
+		// with ';' comments, and is an error for FASTQ.
 		bool at_start = true;
 	};
 

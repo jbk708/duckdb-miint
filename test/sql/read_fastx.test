@@ -74,10 +74,10 @@ SELECT * FROM read_fastx('data/fastq/sequence_with_spaces.fasta')
 2	bar	NULL	GGTTAACCGGTTAATTGG	NULL	NULL	NULL
 3	baz	NULL	AAAAAAAAAA	NULL	NULL	NULL
 
-# Every ASCII whitespace byte is stripped from a sequence, not only spaces. CRLF line
-# endings are the case that matters in practice: the line splitter stops at '\n', so each
-# line of a Windows-written FASTA keeps its '\r'. The fixture also carries tab, vertical
-# tab and form feed. Run single-end and paired, since the two paths strip separately.
+# Every ASCII whitespace byte inside a sequence line is stripped, not only spaces: the
+# fixture carries tab, vertical tab, form feed, a space and a lone '\r' inside lines, as well
+# as CRLF line endings, whose '\r' the line reader drops. Run single-end and paired, since the
+# two paths strip separately.
 query II
 SELECT sequence_index, sequence1 FROM read_fastx('data/fastq/sequence_with_ascii_whitespace.fasta')
 ----

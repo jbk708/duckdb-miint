@@ -198,6 +198,18 @@ if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] && error_has "fasp.sra.ebi.ac.uk:" &&
 fi
 check "the error names the Aspera path and the record" "$ok"
 
+# R1 is valid and pairs with R2 by read ID, so the error is R2's malformed record.
+echo "Running: a paired transfer whose R2 file has a malformed record"
+run_query "SELECT COUNT(*) FROM read_ena_sequences('ERR10682882', download_method => 'aspera');" \
+    MIINT_ASCP_STUB_MODE=data "MIINT_ASCP_STUB_DATA_R1=$ROOT/data/fastq/malformed_qual_longer_mate.fq" \
+    "MIINT_ASCP_STUB_DATA_R2=$ROOT/data/fastq/malformed_qual_longer.fq"
+ok=0
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] &&
+    error_has "_2.fastq.gz: record 'b' (record 2): sequence length 3 does not match quality length 5"; then
+    ok=1
+fi
+check "the error names the R2 file" "$ok"
+
 # The real ascp and key, against EBI: rows if the key works, ascp's error if it
 # does not, and never a hang, whatever DuckDB's stdin is.
 if [ -z "${ASPERA_AVAILABLE:-}" ]; then

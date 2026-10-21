@@ -233,7 +233,7 @@ Two Rust crates — rype and sylph — are statically linked into the extension.
 
 ### kseq++
 - **Location:** `ext/kseq++/`
-- **Purpose:** Modern C++ FASTA/FASTQ parser
+- **Purpose:** buffered stream reading (`KStream`'s `getc`/`getuntil`) and the `KSeq` record struct. `SequenceReader::parse_record` parses the records itself: kseq++'s own parser reads wrapped FASTQ and takes a malformed record for the end of the input
 - **Integration:** header-only, included directly via `include_directories(ext)`
 - **Requires C++20** (drives the project-wide `CMAKE_CXX_STANDARD 20` setting)
 

@@ -2,14 +2,14 @@
 # description: a malformed record or a damaged gzip file fails the scan, naming the file and the record
 # group: [sql]
 
-# Each of these inputs used to scan "successfully": the reader took a failed record for the
-# end of the file, so the result silently stopped at the record before it.
-# A truncated gzip file read back as a smaller valid file, and a corrupt one as an empty
-# file. A short result here is data loss nobody is told about, so each must be an error.
+# Each of these inputs is damaged. A scan that stops at the damage as if it were the end of
+# the file returns only the records before it: a truncated gzip file reads as a smaller valid
+# file, and a corrupt one as an empty file. A short result here is data loss nobody is told
+# about, so each must be an error.
 
 require miint
 
-# Quality longer than its sequence: record c, which is valid, used to vanish with b.
+# Quality longer than its sequence. Record c is valid, and must not be lost with b.
 statement error
 SELECT * FROM read_fastx('data/fastq/malformed_qual_longer.fq');
 ----
@@ -21,15 +21,15 @@ SELECT * FROM read_fastx('data/fastq/malformed_qual_missing.fq');
 ----
 malformed_qual_missing.fq: record 'b' (record 2): sequence length 4 does not match quality length 0
 
-# Quality shorter than its sequence. This one set no error flag at all: wrapped-FASTQ reading
-# appended the next line, record c's header, to b's quality, so b came back with "@c" as its
-# last two scores and c was gone. FASTQ records are four lines, so the short line is the error.
+# Quality shorter than its sequence. Wrapped-FASTQ reading appends the next line, record c's
+# header, to b's quality, so b gets "@c" as its last two scores and c is lost, with no error at
+# all. FASTQ records are four lines, so the short line is the error.
 statement error
 SELECT * FROM read_fastx('data/fastq/malformed_qual_shorter.fq');
 ----
 malformed_qual_shorter.fq: record 'b' (record 2): sequence length 8 does not match quality length 6
 
-# The same, where the swallowed header would overshoot the sequence length instead.
+# The same, where the next header would overshoot the sequence length instead.
 statement error
 SELECT * FROM read_fastx('data/fastq/malformed_qual_shorter_overshoot.fq');
 ----
@@ -42,9 +42,11 @@ SELECT count(*) FROM read_fastx('data/fastq/truncated.fq.gz');
 ----
 truncated.fq.gz: read failed after record 496: unexpected end of file
 
-# A gzip file with 64 bytes zeroed mid-stream.
+# A gzip file with 64 bytes zeroed mid-stream. Neither the count nor zlib's message is pinned:
+# both depend on how much input the zlib build inflates per read, which decides whether it
+# meets the damage inside the data or only at the closing checksum.
 statement error
 SELECT count(*) FROM read_fastx('data/fastq/corrupt.fq.gz');
 ----
-corrupt.fq.gz: read failed after record 0: incorrect data check
+<REGEX>:.*corrupt\.fq\.gz: read failed after record [0-9]+: .*
 

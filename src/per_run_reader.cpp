@@ -372,9 +372,8 @@ std::string PerRunReader::OpenAspera() {
 		std::string gz_hint = filename.empty() ? run_.aspera_paths[0].remote_path : filename;
 		bool is_gz = duckdb::IsGzipped(gz_hint);
 
-		const auto &path = run_.aspera_paths[0];
-		AsperaSeqStreamHandle s1(
-		    CreateAsperaSeqStream(aspera_process_.get(), is_gz, path.host + ":" + path.remote_path), aspera_seq_close);
+		AsperaSeqStreamHandle s1(CreateAsperaSeqStream(aspera_process_.get(), is_gz, run_.aspera_paths[0].HostPath()),
+		                         aspera_seq_close);
 		fastx_reader_ =
 		    std::make_unique<SequenceReader>(std::move(s1), AsperaSeqStreamHandle(nullptr, aspera_seq_close), true);
 		return "";
@@ -421,13 +420,10 @@ std::string PerRunReader::OpenAspera() {
 	bool is_gz1 = duckdb::IsGzipped(f1.empty() ? run_.aspera_paths[0].remote_path : f1);
 	bool is_gz2 = duckdb::IsGzipped(f2.empty() ? run_.aspera_paths[1].remote_path : f2);
 
-	const auto &path1 = run_.aspera_paths[0];
-	const auto &path2 = run_.aspera_paths[1];
-	AsperaSeqStreamHandle s1(CreateAsperaSeqStream(aspera_process_.get(), is_gz1, path1.host + ":" + path1.remote_path),
+	AsperaSeqStreamHandle s1(CreateAsperaSeqStream(aspera_process_.get(), is_gz1, run_.aspera_paths[0].HostPath()),
 	                         aspera_seq_close);
 	AsperaSeqStreamHandle s2(
-	    CreateAsperaSeqStream(aspera_process_paired_.get(), is_gz2, path2.host + ":" + path2.remote_path),
-	    aspera_seq_close);
+	    CreateAsperaSeqStream(aspera_process_paired_.get(), is_gz2, run_.aspera_paths[1].HostPath()), aspera_seq_close);
 	fastx_reader_ = std::make_unique<SequenceReader>(std::move(s1), std::move(s2), true);
 	return "";
 }

@@ -4,11 +4,12 @@
 
 # The quality columns are written straight into the scan's output vectors, which DuckDB
 # reuses from one chunk to the next. A NULL list, or a NULL score inside a list, is not a
-# parse error anyone would see: it silently drops a base's quality, and COPY FORMAT FASTQ
-# then writes a record whose quality line no longer matches its sequence. These files are
-# larger than one output chunk so the vectors really are reused, and the scan is pinned to
-# one thread so the FASTA file's constant-NULL qual1 chunk is followed, on the same output
-# vectors, by FASTQ chunks that must come out fully valid.
+# parse error anyone would see: it silently drops a read's or a base's quality, and COPY
+# FORMAT FASTQ then fails on the NULL list, or writes whatever byte the NULL score's slot
+# held. These files are larger than one output chunk so the vectors are reused, and the scan
+# is pinned to one thread so the FASTA file's NULL qual1 chunks run before FASTQ chunks that
+# must come out fully valid. DuckDB resets an output chunk's validity before the scan fills
+# it, so this pins the output; it does not reach the branch that rewrites a leftover buffer.
 
 require miint
 

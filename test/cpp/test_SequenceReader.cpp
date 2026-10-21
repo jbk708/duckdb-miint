@@ -683,8 +683,8 @@ TEST_CASE("SequenceReader byte budget default (SIZE_MAX) unchanged behavior", "[
 	REQUIRE((batch.size() == 50));
 }
 
-// kseq++ reports a malformed record by failing the stream, and the reader used to
-// read a failed stream as end of file: the scan succeeded, short by the bad record and by every
+// kseq++ fails its stream both on a malformed record and at the end of the input, so a reader
+// that takes every failure for the end returns a short result, missing the bad record and every
 // record after it, with nothing to say so. Each case must stop the read with an error naming
 // the file and the record, so the user can find and fix the input.
 TEST_CASE("SequenceReader rejects a quality string longer than its sequence", "[SequenceReader][error]") {
@@ -728,7 +728,7 @@ TEST_CASE("SequenceReader names the mate file when only R2 is malformed", "[Sequ
 TEST_CASE("SequenceReader reports a malformed first record as malformed, not as an empty file",
           "[SequenceReader][error]") {
 	// The first record is read while the reader is constructed, to detect the format. A
-	// failure there used to look like a file with no records at all.
+	// failure there must not read as a file with no records at all.
 	TempFileFixture fixture;
 	auto path = "malformed_first.fq";
 	fixture.write_temp_fastq(path,
@@ -796,6 +796,29 @@ TEST_CASE("SequenceReader rejects a corrupt gzip file", "[SequenceReader][error]
 	REQUIRE_THROWS_WITH(read_all(reader), Catch::Matchers::StartsWith("corrupt.fq.gz: "));
 }
 
+TEST_CASE("SequenceReader rejects a FASTA record cut short by a truncated gzip file",
+          "[SequenceReader][error][compression]") {
+	// A FASTA record has no terminator, so one that the cut ends looks complete. Unless the
+	// input is asked why it stopped before that record is kept, a read that stops there -- the
+	// format peek here, or a scan under a LIMIT -- returns a truncated sequence and no error.
+	TempFileFixture fixture;
+	auto path = "truncated_one_record.fa.gz";
+	std::string record = ">a\n";
+	uint32_t state = 12345;
+	for (int line = 0; line < 125; line++) {
+		for (int i = 0; i < 80; i++) {
+			state = state * 1664525u + 1013904223u;
+			record += "ACGT"[state >> 30];
+		}
+		record += '\n';
+	}
+	fixture.write_temp_gz(path, {record});
+	std::filesystem::resize_file(path, std::filesystem::file_size(path) / 2);
+
+	REQUIRE_THROWS_WITH(miint::SequenceReader(path),
+	                    "truncated_one_record.fa.gz: read failed after record 0: unexpected end of file");
+}
+
 TEST_CASE("SequenceReader reads a multi-member gzip file to the end", "[SequenceReader][compression]") {
 	// Concatenated gzip members (cat a.gz b.gz, bgzip output) are one valid file. The end of a
 	// member is not the end of the input, and must not be reported as a truncation.
@@ -810,10 +833,10 @@ TEST_CASE("SequenceReader reads a multi-member gzip file to the end", "[Sequence
 }
 
 // FASTQ is read as strict four-line records: header, sequence, '+', quality, one line each.
-// kseq++ reads wrapped FASTQ by appending quality lines until the quality is as long as the
-// sequence, so a quality line that is too short swallowed the next record's header and that
-// record silently vanished. Requiring one quality line turns that into an error at the
-// record that is actually wrong. FASTA keeps wrapped sequence lines.
+// Reading wrapped FASTQ, as kseq++ does, appends quality lines until the quality is as long as
+// the sequence, so a quality line that is too short takes the next record's header as quality
+// and that record is lost. Requiring one quality line makes it an error at the record that is
+// actually wrong. FASTA keeps wrapped sequence lines.
 TEST_CASE("SequenceReader rejects a quality string shorter than its sequence", "[SequenceReader][error]") {
 	TempFileFixture fixture;
 
@@ -862,8 +885,8 @@ TEST_CASE("SequenceReader rejects wrapped FASTQ", "[SequenceReader][error]") {
 }
 
 TEST_CASE("SequenceReader rejects a line between FASTQ records that is not a header", "[SequenceReader][error]") {
-	// kseq++ skipped anything up to the next '@'. A record whose header line has lost its '@'
-	// went with it, silently.
+	// Skipping anything up to the next '@', as kseq++ does, silently drops a record whose header
+	// line has lost its '@'.
 	TempFileFixture fixture;
 	auto path = "stray_line.fq";
 	fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "b\nACGT\n+\nIIII\n",
@@ -901,8 +924,8 @@ TEST_CASE("SequenceReader still skips anything before the first FASTA header", "
 
 TEST_CASE("SequenceReader rejects a FASTQ record that ends before its '+' line", "[SequenceReader][error]") {
 	// An uncompressed file cut short has no gzip trailer to say so, and a cut inside the last
-	// record's sequence left a record that looked like FASTA: it came back with part of its
-	// sequence and no quality. A '@' header starts a FASTQ record, which has four lines.
+	// record's sequence leaves a record that looks like FASTA: read as one, it comes back with
+	// part of its sequence and no quality. A '@' header starts a FASTQ record, which has four lines.
 	TempFileFixture fixture;
 
 	SECTION("the input ends inside the sequence") {
@@ -939,9 +962,9 @@ TEST_CASE("SequenceReader rejects a FASTQ record that ends before its '+' line",
 }
 
 TEST_CASE("SequenceReader rejects a NUL byte where a record should start", "[SequenceReader][error]") {
-	// kseq++'s getc() returns 0 both at the end of the input and for a NUL byte, so a
-	// zero-filled block -- what a crash can leave at the end of a file -- read as the end of
-	// the file, and every record after it was lost without a word.
+	// kseq++'s getc() returns 0 both at the end of the input and for a NUL byte. Unless the two
+	// are told apart, a zero-filled block -- what a crash can leave in a file -- reads as the end
+	// of the file, and every record after it is lost without a word.
 	TempFileFixture fixture;
 	const std::string zeros(64, '\0');
 
@@ -960,6 +983,14 @@ TEST_CASE("SequenceReader rejects a NUL byte where a record should start", "[Seq
 		REQUIRE_THROWS_WITH(reader.read(5), "nul_after_fasta.fa: unexpected NUL byte after record 1");
 	}
 
+	SECTION("inside a FASTQ record, named as a NUL") {
+		auto path = "nul_in_fastq.fq";
+		fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "@b\nACGT\n", zeros});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5),
+		                    "nul_in_fastq.fq: record 'b' (record 2): unexpected NUL byte before the record's '+' line");
+	}
+
 	SECTION("a file of nothing but NUL bytes is not an empty file") {
 		auto path = "all_nul.fq";
 		fixture.write_temp_fastq(path, {zeros});
@@ -968,7 +999,7 @@ TEST_CASE("SequenceReader rejects a NUL byte where a record should start", "[Seq
 }
 
 TEST_CASE("SequenceReader takes a line of only spaces or tabs between FASTQ records as blank", "[SequenceReader]") {
-	// kseq++ skipped such lines, so files with them read before strict FASTQ and must still.
+	// kseq++ skips such lines, so files that have them must keep reading.
 	TempFileFixture fixture;
 	auto path = "whitespace_lines.fq";
 	fixture.write_temp_fastq(path, {"@a\nACGT\n+\nIIII\n  \n", "@b\nTTGG\n+\nHHHH\n\t\n \r\n"});
@@ -980,8 +1011,8 @@ TEST_CASE("SequenceReader takes a line of only spaces or tabs between FASTQ reco
 }
 
 TEST_CASE("SequenceReader reads a blank line inside a CRLF FASTQ record as it does an LF one", "[SequenceReader]") {
-	// The blank line is skipped either way; with CRLF its '\r' used to count as a second
-	// sequence line, and the record was rejected as wrapped FASTQ.
+	// A blank line inside a record is skipped. With CRLF endings it is a lone '\r', which must
+	// not count as a second sequence line and get the record rejected as wrapped FASTQ.
 	TempFileFixture fixture;
 	auto path = "blank_in_record.fq";
 	fixture.write_temp_fastq(path, {"@a\n\nACGT\n+\nIIII\n", "@b\r\n\r\nTTGG\r\n+\r\nHHHH\r\n"});
@@ -995,7 +1026,7 @@ TEST_CASE("SequenceReader reads a blank line inside a CRLF FASTQ record as it do
 
 TEST_CASE("SequenceReader rejects text before the first FASTQ record", "[SequenceReader][error]") {
 	// Skipping to the first header is for FASTA's ';' comments. FASTQ has no preamble, so text
-	// there is a first record whose '@' was lost, and skipping it lost the record.
+	// there is a first record that has lost its '@', and skipping it would lose the record.
 	TempFileFixture fixture;
 
 	SECTION("the first header has lost its '@'") {

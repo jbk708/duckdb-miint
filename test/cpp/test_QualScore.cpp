@@ -68,6 +68,11 @@ TEST_CASE("QualScore write_decoded", "[qualscore]") {
 		                  "Stored quality character out of range: #");
 	}
 
+	SECTION("rejects the byte just below the offset") {
+		CHECK_THROWS_WITH(miint::QualScore(std::string("hh?h")).write_decoded(out, 64),
+		                  "Stored quality character out of range: ?");
+	}
+
 	SECTION("rejects a byte more than 93 above the offset") {
 		CHECK_THROWS_WITH(miint::QualScore(std::string("II\x7fI")).write_decoded(out, 33),
 		                  "Stored quality character out of range: \x7f");
