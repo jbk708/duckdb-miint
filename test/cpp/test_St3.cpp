@@ -2,8 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-// st3.h refers to the Arrow C Data Interface structs by pointer and deliberately
-// does not declare them; DuckDB ships the same struct names in this header.
+// st3.h refers to the Arrow C Data Interface structs by pointer and does not
+// declare them; DuckDB ships the same struct names in this header.
 #include "duckdb/common/arrow/arrow.hpp"
 
 #include "st3.h"

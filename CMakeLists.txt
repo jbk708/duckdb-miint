@@ -1100,16 +1100,16 @@ if(MIINT_ENABLE_SORTMERNA)
     add_dependencies(sortmerna sortmerna_bundle)
 endif()
 
-# rype + sylph are independent Rust crates; each emits a staticlib that
+# rype, sylph and st3 are independent Rust crates; each emits a staticlib that
 # statically embeds its own copy of the Rust std runtime (rust_eh_personality,
-# EMPTY_PANIC, ...). Linking both as separate .a archives produces
+# EMPTY_PANIC, ...). Linking them as separate .a archives produces
 # duplicate-symbol errors on every supported linker (GNU ld, Apple ld-prime,
 # Mach-O classic, lld) — see the Rust Reference (Linkage chapter).
 #
-# Fix: an umbrella `miint_rust_glue` crate (ext/miint-rust-glue/) lists both
+# Fix: an umbrella `miint_rust_glue` crate (ext/miint-rust-glue/) lists them
 # as path dependencies, cargo compiles them through a shared std, and the
 # resulting libmiint_rust_glue.a contains a single deduplicated copy of std
-# plus the #[no_mangle] C ABI surface from both crates. This is the canonical
+# plus the #[no_mangle] C ABI surface from every crate. This is the canonical
 # pattern (Mozilla's "rul" super-crate for Firefox/Gecko).
 find_program(CARGO cargo REQUIRED)
 message(STATUS "Found cargo: ${CARGO}")
@@ -1224,7 +1224,7 @@ endif()
 
 # Feature selection: rype's fastx (needletail) is off on WASM and Windows
 # (matches the original rype_build wiring). sylph is off on WASM/Windows
-# (matches MIINT_ENABLE_SYLPH gating).
+# (matches MIINT_ENABLE_SYLPH gating). st3 follows MIINT_ENABLE_ST3 everywhere.
 set(GLUE_FEATURES "")
 if(NOT EMSCRIPTEN AND NOT WIN32)
     list(APPEND GLUE_FEATURES "rype-fastx")
@@ -1249,9 +1249,9 @@ set(GLUE_RUSTFLAGS_LIST "")
 
 if(EMSCRIPTEN)
     # PIC for WASM side modules. The umbrella itself is a staticlib (no link
-    # step), but rype's [lib] declares crate-type = ["cdylib", "rlib"] and
+    # step), but rype's and st3-capi's [lib] declare a cdylib crate type, and
     # cargo unconditionally builds the cdylib for the wasm32-unknown-emscripten
-    # path-dep. -sSIDE_MODULE=2 tells wasm-ld that rype.wasm is a side module
+    # path-deps. -sSIDE_MODULE=2 tells wasm-ld that rype.wasm is a side module
     # rather than a standalone wasm — so no `main` symbol is required. We
     # never actually link rype.wasm into anything; only libmiint_rust_glue.a
     # goes into the extension. This just unblocks the cargo build.
@@ -1272,8 +1272,8 @@ endif()
 if(WIN32 AND MINGW)
     # rtools42's MinGW64 doesn't ship libgcc_eh.a (modern GCC folded EH into
     # libgcc), but rustc's windows-gnu linker spec still passes -lgcc_eh. Same
-    # situation as the WASM case above — cargo builds rype's cdylib
-    # (rype.dll) even though we never link it. Stub an empty archive in a -L
+    # situation as the WASM case above — cargo builds rype's and st3-capi's
+    # cdylibs even though we never link them. Stub an empty archive in a -L
     # search path so the cdylib link step finds something and proceeds.
     set(GLUE_MINGW_STUB_DIR ${CMAKE_CURRENT_BINARY_DIR}/mingw_libgcc_eh_stub)
     file(MAKE_DIRECTORY ${GLUE_MINGW_STUB_DIR})
@@ -1317,8 +1317,8 @@ ExternalProject_Add(
     BUILD_IN_SOURCE 0
     # Run the cargo build on EVERY build, deferring change detection to cargo's own
     # fingerprinting. ExternalProject does not track SOURCE_DIR (or path-dependency,
-    # e.g. ext/rype / ext/sylph) file contents, so without this an incremental build
-    # after a submodule bump or a local rype/sylph edit would silently relink the
+    # e.g. ext/rype / ext/sylph / ext/st3) file contents, so without this an incremental
+    # build after a submodule bump or a local crate edit would silently relink the
     # STALE libmiint_rust_glue.a — the dev gets a binary that doesn't match their
     # source and has no way to notice. Cargo's no-op when nothing changed is ~1-3s.
     # (Clean builds — CI's fresh ubuntu-latest runners, or `make clean` locally —
@@ -1328,8 +1328,8 @@ ExternalProject_Add(
 )
 
 # `rype` is the sole IMPORTED STATIC target for the merged archive. The
-# archive contains both rype and sylph symbols, so linking `rype` provides
-# everything — there is no separate `sylph` link target.
+# archive contains the rype, sylph and st3 symbols, so linking `rype` provides
+# everything — there is no separate `sylph` or `st3` link target.
 #
 # Why no second target: declaring an additional IMPORTED STATIC target
 # pointing at the same archive caused libmiint_rust_glue.a to appear twice on

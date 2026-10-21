@@ -114,8 +114,8 @@ std::vector<miint::unifrac::CooRow> ReadFeatureTable(ClientContext &context, con
 			const double v = val_data[vi];
 			if (std::isnan(v)) {
 				// Not a count. A missing cell is NULL or an absent row; NaN is a
-				// broken upstream computation (0/0, a failed normalisation) and
-				// used to vanish here without a trace.
+				// broken upstream computation (0/0, a failed normalisation), and
+				// dropping it would remove the cell without a trace.
 				throw InvalidInputException(
 				    "%s: feature-table '%s' cell (sample '%s', feature '%s') is NaN; a missing count is NULL or an "
 				    "absent row",

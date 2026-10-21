@@ -7,17 +7,17 @@ require miint
 require-env ST3_AVAILABLE
 
 # ---------------------------------------------------------------------------
-# THIS FILE IS THE OTHER HALF OF docs/source_tracking.md. Every SQL statement
-# the doc shows appears here, against the same fixture, asserting the numbers
-# the doc prints. Change one, change the other.
+# This file mirrors docs/source_tracking.md. Every SQL statement the doc shows
+# appears here, against the same fixture, asserting the numbers the doc
+# prints. Change one, change the other.
 #
-# The proportions are Monte-Carlo means: with the printed seed they are fixed
-# on one platform, but a different platform's floating-point path can flip a
-# draw, and the doc says as much. They are therefore held to within 0.05 of
-# the printed value, which is well inside what a seed change moves them by on
-# this fixture (about 0.03 on the widest cell) and far outside any real
-# regression of the model. Structural facts (row sets, exact zeros, sums)
-# are asserted exactly.
+# The proportions are Monte-Carlo means. The doc promises the same rows for a
+# seed on any thread count, not across platforms or st3 versions, so they are
+# held to within 0.05 of the printed value: wider than a seed change moves
+# them on this fixture (about 0.03 on the widest cell), so a different random
+# stream does not fail the file, and narrower than a real regression of the
+# model would. Structural facts (row sets, exact zeros, sums) are asserted
+# exactly.
 # ---------------------------------------------------------------------------
 
 statement ok

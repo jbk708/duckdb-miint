@@ -7,9 +7,9 @@ require miint
 # Every function that takes a (sample_id, feature_id, value) relation by name
 # reads it through one reader (ReadFeatureTable in unifrac_function_common).
 # That reader ignores NULL and zero cells, which is the sparse-storage
-# contract. It used to ignore NaN the same way, which meant a broken upstream
-# computation (0/0, a failed normalisation) vanished from the analysis with no
-# trace. NaN is not a count and is now an error naming the cell.
+# contract. NaN is not a count but a broken upstream computation (0/0, a failed
+# normalisation); dropping it like NULL would remove the cell from the analysis
+# with no trace, so it is an error naming the cell.
 # community_distances is the consumer used here because it has no optional
 # dependency, so this file always runs; the behaviour is the reader's.
 

@@ -50,8 +50,8 @@ inline std::string AcceptedVariantList() {
 // "unifrac_permanova: ...").
 //
 // Rows with NULL sample_id, feature_id, or value are silently dropped,
-// as are zero/NaN values (UnifracSupportBiomView's sparse-storage
-// invariant would drop them anyway).
+// as are zero values (UnifracSupportBiomView's sparse-storage invariant
+// would drop them anyway). A NaN value throws, naming its cell.
 //
 // When `sample_id_type` / `feature_id_type` are non-null, the original SQL type of
 // that column (before the internal `::VARCHAR` cast) is written through it, so

@@ -10,7 +10,7 @@ Gibbs sampling: each sequence in the sink is withdrawn and re-assigned to the en
 likely to have produced its feature, given every other assignment, over and over, and the
 proportions are averaged over the retained draws. The implementation is SourceTracker3
 ([st3](https://github.com/the-miint/st3)), a Rust reimplementation of the SourceTracker2 model;
-every default below is SourceTracker2's.
+every model and sampler default below is SourceTracker2's.
 
 > The examples on this page are executed as tests. Every statement and every number below is
 > mirrored in `test/sql/sourcetracker_docs.test`; if you change one, change the other. The
@@ -63,6 +63,12 @@ Requirements, all enforced with errors that name the offending sample:
 - At least one source, and (unless `loo := true`) at least one sink.
 - No sample with only zero cells: there would be nothing to attribute.
 - Every sample listed once in the metadata.
+- No environment named `Unknown`, in any spelling: the model adds its own `Unknown` source,
+  and the two rows would be indistinguishable in the result.
+- Every environment keeps at least one sequence once collapsed. `collapse := 'mean'` rounds
+  each feature's mean down, so an environment whose samples share no feature at low counts
+  can average to nothing; under `loo` this holds for each fold. `collapse := 'sum'` keeps
+  every sequence.
 
 The examples use two soil sources, two gut sources, one water source and two sinks, six
 features, about 200 to 270 sequences per sample:
@@ -112,8 +118,9 @@ SELECT * FROM sourcetracker('counts', 'samples',
     source_sink_column := 'source_sink', env_column := 'env');
 ```
 
-Every named parameter is optional; the values shown are the defaults, which are
-SourceTracker2's.
+Every named parameter is optional; the values shown are the defaults. Those of the model
+and the sampler are SourceTracker2's; the metadata column names differ (see
+[Differences from SourceTracker2](#differences-from-sourcetracker2)).
 
 | parameter | default | meaning |
 |---|---|---|
@@ -121,7 +128,7 @@ SourceTracker2's.
 | `assignments` | `false` | Fill the [`assignments`](#per-feature-assignments) map. Not available with `loo`. |
 | `alpha1` | `0.001` | Prior count of each feature in each source environment. Higher values trust the source data less and smooth its feature distributions; SourceTracker2 calls 0.01 a more conservative choice. |
 | `alpha2` | `0.1` | Prior count of each feature in the Unknown environment, as a fraction of the sink's depth. Higher values make Unknown smoother and less prone to absorbing whatever the sources do not explain. Must be above 0. |
-| `beta` | `10` | Count added to each environment, Unknown included, when the mixing proportions are drawn. Must be above 0. |
+| `beta` | `10` | Count added to each environment's sequence count, Unknown included, each time a sequence is reassigned. Must be above 0. |
 | `restarts` | `10` | Independent Markov chains per sink. `restarts * draws_per_restart` is the number of retained draws the mean is taken over. |
 | `draws_per_restart` | `1` | Draws retained from each chain. |
 | `burnin` | `100` | Passes over the sink's sequences before the first draw is retained. |
@@ -137,9 +144,11 @@ SourceTracker2's.
 
 Bad parameter values are refused at bind: a `collapse` other than `mean` or `sum`, a `seed`
 below `-1`, a prior that is negative or not finite, an `alpha2` or `beta` of 0 (the sampler's
-weights can then be 0/0), a chain parameter below 1, a negative
-depth or thread count, a NULL for any parameter, an empty or duplicated column name, or
-`assignments := true` together with `loo := true`.
+weights can then be 0/0), a chain parameter below 1, a chain longer than st3 can count
+(`burnin + (draws_per_restart - 1) * delay + 1` passes, or `restarts * draws_per_restart`
+draws, above 4294967295), a negative depth or thread count, a NULL for any parameter, an
+empty or duplicated column name or one naming `sample_id`, or `assignments := true` together
+with `loo := true`.
 
 ### The default call refuses shallow data
 
@@ -327,9 +336,9 @@ ORDER BY sink_id, source;
 ### The default call fails on most amplicon tables
 
 The default depths are 1000 because SourceTracker2's are, and a table with a sink below
-1000 sequences produces the error shown [above](#the-default-call-refuses-shallow-data). This
-is deliberate: choosing a depth is part of the analysis, and quietly analysing a shallow sink
-at whatever depth it has would hide that the sinks are not comparable.
+1000 sequences produces the error shown [above](#the-default-call-refuses-shallow-data).
+Choosing a depth is part of the analysis, and quietly analysing a shallow sink at whatever
+depth it has would hide that the sinks are not comparable.
 
 ### Counts must be whole numbers
 
@@ -388,8 +397,10 @@ SourceTracker2 reference is an absolute 0.02 per cell at 1000 retained draws.
 
 ## Differences from SourceTracker2
 
-Everything not listed here follows SourceTracker2: the model, the defaults, collapse-then-
-rarefy, the `Unknown` source, and the shallow-sample error.
+The comparison is with SourceTracker2 at
+[biota/sourcetracker2](https://github.com/biota/sourcetracker2) `a921a05` (2.0.1.dev0).
+Everything not listed here follows it: the model, the defaults, collapse-then-rarefy, the
+`Unknown` source, and the shallow-sample error.
 
 - **Sample-set mismatches are errors**, in both directions. SourceTracker2 intersects the
   feature table and the metadata silently.
