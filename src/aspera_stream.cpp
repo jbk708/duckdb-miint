@@ -534,10 +534,11 @@ int aspera_seq_close(AsperaSeqStream *stream) {
 	return 0;
 }
 
-AsperaSeqStream *CreateAsperaSeqStream(AsperaProcess *process, bool is_gzipped) {
+AsperaSeqStream *CreateAsperaSeqStream(AsperaProcess *process, bool is_gzipped, const std::string &source) {
 	auto stream = new AsperaSeqStream();
 	stream->process = process;
 	stream->is_gzipped = is_gzipped;
+	stream->source = source;
 	if (is_gzipped) {
 		if (inflateInit2(&stream->zs, 16 + MAX_WBITS) != Z_OK) {
 			delete stream;

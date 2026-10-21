@@ -683,7 +683,7 @@ TEST_CASE("SequenceReader byte budget default (SIZE_MAX) unchanged behavior", "[
 	REQUIRE((batch.size() == 50));
 }
 
-// Issue #292. kseq++ reports a malformed record by failing the stream, and the reader used to
+// kseq++ reports a malformed record by failing the stream, and the reader used to
 // read a failed stream as end of file: the scan succeeded, short by the bad record and by every
 // record after it, with nothing to say so. Each case must stop the read with an error naming
 // the file and the record, so the user can find and fix the input.
@@ -812,7 +812,7 @@ TEST_CASE("SequenceReader reads a multi-member gzip file to the end", "[Sequence
 // FASTQ is read as strict four-line records: header, sequence, '+', quality, one line each.
 // kseq++ reads wrapped FASTQ by appending quality lines until the quality is as long as the
 // sequence, so a quality line that is too short swallowed the next record's header and that
-// record silently vanished (#292). Requiring one quality line turns that into an error at the
+// record silently vanished. Requiring one quality line turns that into an error at the
 // record that is actually wrong. FASTA keeps wrapped sequence lines.
 TEST_CASE("SequenceReader rejects a quality string shorter than its sequence", "[SequenceReader][error]") {
 	TempFileFixture fixture;
@@ -897,4 +897,127 @@ TEST_CASE("SequenceReader still skips anything before the first FASTA header", "
 	REQUIRE(batch.size() == 2);
 	CHECK(batch.read_ids[0] == "a");
 	CHECK(batch.sequences1[1] == "ACGT");
+}
+
+TEST_CASE("SequenceReader rejects a FASTQ record that ends before its '+' line", "[SequenceReader][error]") {
+	// An uncompressed file cut short has no gzip trailer to say so, and a cut inside the last
+	// record's sequence left a record that looked like FASTA: it came back with part of its
+	// sequence and no quality. A '@' header starts a FASTQ record, which has four lines.
+	TempFileFixture fixture;
+
+	SECTION("the input ends inside the sequence") {
+		auto path = "cut_in_seq.fq";
+		fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "@b\nACG"});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5), "cut_in_seq.fq: record 'b' (record 2): the input ends before the "
+		                                    "record's '+' line; FASTQ records must be four lines");
+	}
+
+	SECTION("the input ends after the header") {
+		auto path = "cut_after_header.fq";
+		fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "@b\n"});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5), "cut_after_header.fq: record 'b' (record 2): the input ends before the "
+		                                    "record's '+' line; FASTQ records must be four lines");
+	}
+
+	SECTION("the input ends just after the header's '@'") {
+		auto path = "cut_after_at.fq";
+		fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "@"});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5), "cut_after_at.fq: record 2: the input ends inside its header");
+	}
+
+	SECTION("the next record starts instead") {
+		auto path = "no_plus.fq";
+		fixture.write_temp_fastq(
+		    path, {fixture.simple_read("a", "ACGT", "IIII"), "@b\nACGT\n", fixture.simple_read("c", "ACGT", "IIII")});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5), "no_plus.fq: record 'b' (record 2): no '+' line before the next record; "
+		                                    "FASTQ records must be four lines");
+	}
+}
+
+TEST_CASE("SequenceReader rejects a NUL byte where a record should start", "[SequenceReader][error]") {
+	// kseq++'s getc() returns 0 both at the end of the input and for a NUL byte, so a
+	// zero-filled block -- what a crash can leave at the end of a file -- read as the end of
+	// the file, and every record after it was lost without a word.
+	TempFileFixture fixture;
+	const std::string zeros(64, '\0');
+
+	SECTION("after a FASTQ record") {
+		auto path = "nul_after_fastq.fq";
+		fixture.write_temp_fastq(
+		    path, {fixture.simple_read("a", "ACGT", "IIII"), zeros, fixture.simple_read("b", "ACGT", "IIII")});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5), "nul_after_fastq.fq: unexpected NUL byte after record 1");
+	}
+
+	SECTION("after a FASTA record") {
+		auto path = "nul_after_fasta.fa";
+		fixture.write_temp_fastq(path, {fixture.simple_fasta("a", "ACGT"), zeros, fixture.simple_fasta("b", "ACGT")});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5), "nul_after_fasta.fa: unexpected NUL byte after record 1");
+	}
+
+	SECTION("a file of nothing but NUL bytes is not an empty file") {
+		auto path = "all_nul.fq";
+		fixture.write_temp_fastq(path, {zeros});
+		REQUIRE_THROWS_WITH(miint::SequenceReader(path), "all_nul.fq: unexpected NUL byte after record 0");
+	}
+}
+
+TEST_CASE("SequenceReader takes a line of only spaces or tabs between FASTQ records as blank", "[SequenceReader]") {
+	// kseq++ skipped such lines, so files with them read before strict FASTQ and must still.
+	TempFileFixture fixture;
+	auto path = "whitespace_lines.fq";
+	fixture.write_temp_fastq(path, {"@a\nACGT\n+\nIIII\n  \n", "@b\nTTGG\n+\nHHHH\n\t\n \r\n"});
+	miint::SequenceReader reader(path);
+	auto batch = reader.read(5);
+	REQUIRE(batch.size() == 2);
+	CHECK(batch.read_ids[1] == "b");
+	CHECK(batch.quals1[1].as_string() == "HHHH");
+}
+
+TEST_CASE("SequenceReader reads a blank line inside a CRLF FASTQ record as it does an LF one", "[SequenceReader]") {
+	// The blank line is skipped either way; with CRLF its '\r' used to count as a second
+	// sequence line, and the record was rejected as wrapped FASTQ.
+	TempFileFixture fixture;
+	auto path = "blank_in_record.fq";
+	fixture.write_temp_fastq(path, {"@a\n\nACGT\n+\nIIII\n", "@b\r\n\r\nTTGG\r\n+\r\nHHHH\r\n"});
+	miint::SequenceReader reader(path);
+	auto batch = reader.read(5);
+	REQUIRE(batch.size() == 2);
+	CHECK(batch.sequences1[0] == "ACGT");
+	CHECK(batch.sequences1[1] == "TTGG");
+	CHECK(batch.quals1[1].as_string() == "HHHH");
+}
+
+TEST_CASE("SequenceReader rejects text before the first FASTQ record", "[SequenceReader][error]") {
+	// Skipping to the first header is for FASTA's ';' comments. FASTQ has no preamble, so text
+	// there is a first record whose '@' was lost, and skipping it lost the record.
+	TempFileFixture fixture;
+
+	SECTION("the first header has lost its '@'") {
+		auto path = "lost_first_header.fq";
+		fixture.write_temp_fastq(path, {"a\nACGT\n+\nIIII\n", fixture.simple_read("b", "ACGT", "IIII")});
+		REQUIRE_THROWS_WITH(miint::SequenceReader(path),
+		                    "lost_first_header.fq: text before the first record; FASTQ files must start with a '@' "
+		                    "header line");
+	}
+
+	SECTION("the skip would stop at a quality line starting with '@'") {
+		auto path = "lost_first_header_at_qual.fq";
+		fixture.write_temp_fastq(path, {"a\nACGT\n+\n@III\n", fixture.simple_read("b", "ACGT", "IIII")});
+		REQUIRE_THROWS_WITH(miint::SequenceReader(path),
+		                    "lost_first_header_at_qual.fq: text before the first record; FASTQ files must start with "
+		                    "a '@' header line");
+	}
+
+	SECTION("blank lines before the first record are not text") {
+		auto path = "leading_blank_lines.fq";
+		fixture.write_temp_fastq(path, {"\n \r\n", fixture.simple_read("a", "ACGT", "IIII")});
+		miint::SequenceReader reader(path);
+		REQUIRE(reader.read(5).size() == 1);
+	}
 }

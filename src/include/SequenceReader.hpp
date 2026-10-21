@@ -92,9 +92,11 @@ private:
 	// Where the record parser is in one stream.
 	struct StreamState {
 		uint64_t records_read = 0;
-		// The previous record's sequence lines ended at the next header, consuming its '>'/'@'.
-		bool header_pending = false;
-		// Nothing parsed yet. Text before the first header is skipped, as kseq++ always has.
+		// The next header's '>' or '@' when the previous record's sequence lines ended by
+		// consuming it, otherwise 0.
+		char pending_header = 0;
+		// Nothing parsed yet. Text before the first header is skipped for FASTA, as kseq++
+		// always has, and is an error for FASTQ.
 		bool at_start = true;
 	};
 

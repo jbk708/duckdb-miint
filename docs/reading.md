@@ -49,8 +49,8 @@ SELECT * FROM read_fastx('some_file.fasta');
 - Supports gzip-compressed files (.gz extension)
 - Supports stdin input using `-` or `/dev/stdin` (single file only, no paired-end)
 - Quality scores converted to integers using specified offset (Phred+33 or Phred+64)
-- FASTQ records must be four lines each: header, sequence, `+`, quality, with the quality as long as the sequence. Wrapped (multi-line) FASTQ is rejected; FASTA sequences may span any number of lines
-- A malformed record, or a truncated or corrupt gzip file, fails the query with an error naming the file and the record, rather than returning the records before it
+- FASTQ records, those whose header starts with `@`, must be four lines each: header, sequence, `+`, quality, with the quality as long as the sequence, and only blank lines may come before the first one. Wrapped (multi-line) FASTQ is rejected; FASTA sequences may span any number of lines, and text before the first FASTA header (such as `;` comments) is skipped
+- A malformed record, a file that ends inside a FASTQ record, a truncated or corrupt gzip file, or a NUL byte where a record should start fails the query with an error naming the file and the record, rather than returning the records before it
 - Supports parallel processing (8 threads for files, 1 thread for stdin)
 - For paired-end data, reads are matched by position in files (not by ID)
 

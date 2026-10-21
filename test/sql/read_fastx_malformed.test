@@ -3,7 +3,7 @@
 # group: [sql]
 
 # Each of these inputs used to scan "successfully": the reader took a failed record for the
-# end of the file, so the result silently stopped at the record before it (issue #292).
+# end of the file, so the result silently stopped at the record before it.
 # A truncated gzip file read back as a smaller valid file, and a corrupt one as an empty
 # file. A short result here is data loss nobody is told about, so each must be an error.
 
@@ -35,11 +35,12 @@ SELECT * FROM read_fastx('data/fastq/malformed_qual_shorter_overshoot.fq');
 ----
 malformed_qual_shorter_overshoot.fq: record 'b' (record 2): sequence length 5 does not match quality length 3
 
-# A gzip file cut in half: 497 complete records come back before the cut, which is not the file.
+# A gzip file cut in half: 496 complete records, and part of a 497th, come back before the cut,
+# which is not the file.
 statement error
 SELECT count(*) FROM read_fastx('data/fastq/truncated.fq.gz');
 ----
-truncated.fq.gz: read failed after record 497: unexpected end of file
+truncated.fq.gz: read failed after record 496: unexpected end of file
 
 # A gzip file with 64 bytes zeroed mid-stream.
 statement error

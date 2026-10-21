@@ -12,6 +12,7 @@
 #   - an ascp that exits 0 without sending anything fails the same way;
 #   - a scan of several runs that all fail raises instead of returning no rows,
 #     and so does one run that fails partway, instead of returning part of it.
+# - A malformed record fails the run, and the error names the Aspera path.
 # - With ASPERA_AVAILABLE, the real ascp neither hangs nor fails silently.
 #
 # None may hang: a prompt that reaches stdin or a terminal waits forever, so
@@ -185,6 +186,17 @@ run_query "SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', download_method
 ok=0
 if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] && error_has "every run failed (1): ERR1074767"; then ok=1; fi
 check "the error says the run failed" "$ok"
+
+# The error must say which file to look at, as it does over HTTP, not just "sequence1".
+echo "Running: a transfer whose file has a malformed record"
+run_query "SELECT COUNT(*) FROM read_ena_sequences('ERR1074767', download_method => 'aspera');" \
+    MIINT_ASCP_STUB_MODE=data "MIINT_ASCP_STUB_DATA_R1=$ROOT/data/fastq/malformed_qual_longer.fq"
+ok=0
+if [ "$RC" -ne 0 ] && [ "$RC" -ne 137 ] && error_has "fasp.sra.ebi.ac.uk:" &&
+    error_has ".fastq.gz: record 'b' (record 2): sequence length 3 does not match quality length 5"; then
+    ok=1
+fi
+check "the error names the Aspera path and the record" "$ok"
 
 # The real ascp and key, against EBI: rows if the key works, ascp's error if it
 # does not, and never a hang, whatever DuckDB's stdin is.

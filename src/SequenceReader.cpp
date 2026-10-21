@@ -80,36 +80,57 @@ static void validate_format_consistency(bool is_fasta1, bool is_fasta2, bool all
 	}
 }
 
+// The bytes std::isspace accepts in the "C" locale: ' ' and '\t' through '\r'. Spelled out
+// rather than calling std::isspace, which is an out-of-line, locale-dependent call per byte.
+static inline bool is_ascii_space(unsigned char c) {
+	return (c == ' ') | (static_cast<unsigned char>(c - '\t') <= '\r' - '\t');
+}
+
 // kseq++'s KStream separators, protected there: split at any whitespace, or read to the end
 // of the line (dropping a trailing '\r').
 static constexpr char SEP_SPACE = 0;
 static constexpr char SEP_LINE = 2;
 
-// Parse one record, as kseq++'s operator>> does except that a FASTQ record must be exactly
-// four lines: header, sequence, '+', quality (#292). kseq++ reads wrapped FASTQ by appending
-// quality lines until the quality is as long as the sequence, so one short quality line took
-// the next record's header as quality, and that record silently vanished. It also skipped
-// anything up to the next '@', so a record whose header had lost its '@' vanished too. FASTA
-// is parsed as before, wrapped sequence lines included.
+// Parse one record, as kseq++'s operator>> does except that a record whose header starts with
+// '@' is FASTQ and must be exactly four lines: header, sequence, '+', quality. kseq++ reads
+// wrapped FASTQ by appending quality lines until the quality is as long as the sequence, so one
+// short quality line took the next record's header as quality, and that record silently
+// vanished. It skipped anything up to the next '@', so a record whose header had lost its '@'
+// vanished too, and it took a '@' record with no '+' line, as a file cut short leaves, for
+// FASTA. FASTA is parsed as before, wrapped sequence lines included.
 template <class Stream>
 SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp::KSeq &rec, StreamState &state,
                                                          std::string &problem) {
-	char c = 0;
-	if (!state.header_pending) {
+	char c = state.pending_header;
+	state.pending_header = 0;
+	if (!c) {
 		if (state.at_start) {
 			// Skip to the first header, as kseq++ does: old FASTA files can open with ';' comments.
+			// FASTQ has no such preamble, so text before a first '@' is a record that lost its '@'.
+			bool skipped_text = false;
 			while ((c = stream.getc()) && c != '>' && c != '@') {
+				skipped_text |= !is_ascii_space(c);
+			}
+			if (c == '@' && skipped_text) {
+				problem = "text before the first record; FASTQ files must start with a '@' header line";
+				return ParseResult::MALFORMED;
 			}
 		} else {
-			// Only after a FASTQ record: the next line must be a header, though blank lines may come first.
-			while ((c = stream.getc()) && (c == '\n' || c == '\r')) {
-			}
-			if (c && c != '>' && c != '@') {
+			// Only after a FASTQ record: the next line must be a header, though blank lines, and
+			// lines of nothing but whitespace, may come first.
+			while (true) {
+				while ((c = stream.getc()) && (c == '\n' || c == '\r')) {
+				}
+				if (!c || c == '>' || c == '@') {
+					break;
+				}
 				std::string line(1, c);
 				stream.getuntil(SEP_LINE, line, nullptr, true);
-				problem = "the line after record " + std::to_string(state.records_read) + " is not a record header: '" +
-				          line.substr(0, 40) + "'";
-				return ParseResult::MALFORMED;
+				if (!std::all_of(line.begin(), line.end(), is_ascii_space)) {
+					problem = "the line after record " + std::to_string(state.records_read) +
+					          " is not a record header: '" + line.substr(0, 40) + "'";
+					return ParseResult::MALFORMED;
+				}
 			}
 		}
 		state.at_start = false;
@@ -117,9 +138,16 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 			return ParseResult::END;
 		}
 	}
-	state.header_pending = false;
+	const bool fastq = c == '@';
+	auto record = [&]() {
+		return "record '" + rec.name + "' (record " + std::to_string(state.records_read + 1) + "): ";
+	};
 	rec.clear();
 	if (!stream.getuntil(SEP_SPACE, rec.name, &c)) {
+		if (fastq) {
+			problem = "record " + std::to_string(state.records_read + 1) + ": the input ends inside its header";
+			return ParseResult::MALFORMED;
+		}
 		return ParseResult::END;
 	}
 	if (c != '\n') {
@@ -127,24 +155,27 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 	}
 	size_t sequence_lines = 0;
 	while ((c = stream.getc()) && c != '>' && c != '@' && c != '+') {
-		if (c == '\n') {
-			continue; // skip empty lines
+		if (c == '\n' || c == '\r') {
+			continue; // skip empty lines, LF or CRLF
 		}
 		rec.seq += c;
 		stream.getuntil(SEP_LINE, rec.seq, nullptr, true); // the rest of the line
 		sequence_lines++;
 	}
 	if (c == '>' || c == '@') {
-		state.header_pending = true; // the next record's header character is already read
+		state.pending_header = c; // the next record's header character is already read
 	}
 	if (c != '+') {
+		if (fastq) {
+			problem = record() +
+			          (c ? "no '+' line before the next record" : "the input ends before the record's '+' line") +
+			          "; FASTQ records must be four lines";
+			return ParseResult::MALFORMED;
+		}
 		return ParseResult::RECORD; // FASTA
 	}
 	while ((c = stream.getc()) && c != '\n') {
 	} // the rest of the '+' line
-	auto record = [&]() {
-		return "record '" + rec.name + "' (record " + std::to_string(state.records_read + 1) + "): ";
-	};
 	if (sequence_lines > 1) {
 		problem = record() + "the sequence spans " + std::to_string(sequence_lines) +
 		          " lines; FASTQ records must be four lines (wrapped FASTQ is not supported)";
@@ -160,7 +191,7 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 }
 
 // Read from whichever stream variant is active, one record at a time, asking each failure
-// what it was: kseq++'s own read(n) took any failure for the end of the file (#292).
+// what it was: kseq++'s own read(n) took any failure for the end of the file.
 //
 // Errors that originate in our kseq++ read callbacks (duckdb_seq_read /
 // aspera_seq_read) are reported via the thread-local g_seq_read_error
@@ -205,6 +236,13 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 			    }
 			    if (parsed == ParseResult::MALFORMED) {
 				    throw std::runtime_error(source + ": " + problem);
+			    }
+			    // getc() returns 0 for a NUL byte as well as at the end of the input, and only eof()
+			    // tells them apart. A NUL where a record should start is damage, such as the
+			    // zero-filled block a crash can leave, not the end of the file.
+			    if (!reader->eof()) {
+				    throw std::runtime_error(source + ": unexpected NUL byte after record " +
+				                             std::to_string(state.records_read));
 			    }
 			    return; // end of input
 		    }
@@ -314,12 +352,18 @@ SequenceReader::SequenceReader(AsperaSeqStreamHandle stream1, AsperaSeqStreamHan
 	// peek: Aspera streams are backed by live ascp pipes, and ordering the
 	// transfers/peeks per-stream would interleave reads from the two
 	// processes in ways the original (pre-handle) code took care to avoid.
+	if (stream1 && !stream1->source.empty()) {
+		source1_ = stream1->source;
+	}
 	auto kstream1 = std::make_unique<AsperaSeqStreamIn>(stream1.get(), aspera_seq_read, aspera_seq_close);
 	stream1.release();
 	sequence1_reader_ = std::move(kstream1);
 
 	paired_ = (stream2_or_null.get() != nullptr);
 	if (paired_) {
+		if (!stream2_or_null->source.empty()) {
+			source2_ = stream2_or_null->source;
+		}
 		auto kstream2 = std::make_unique<AsperaSeqStreamIn>(stream2_or_null.get(), aspera_seq_read, aspera_seq_close);
 		stream2_or_null.release();
 		sequence2_reader_.emplace(std::move(kstream2));
@@ -374,12 +418,6 @@ static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int re
 		}
 	}
 	return remaining < poll_n ? remaining : poll_n;
-}
-
-// The bytes std::isspace accepts in the "C" locale: ' ' and '\t' through '\r'. Spelled out
-// rather than calling std::isspace, which is an out-of-line, locale-dependent call per byte.
-static inline bool is_ascii_space(unsigned char c) {
-	return (c == ' ') | (static_cast<unsigned char>(c - '\t') <= '\r' - '\t');
 }
 
 // Strip whitespace from a sequence in place. Nearly every sequence has none, so look first

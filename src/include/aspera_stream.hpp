@@ -91,6 +91,7 @@ private:
 struct AsperaSeqStream {
 	AsperaProcess *process; // Non-owning; process outlives stream
 	bool is_gzipped;
+	std::string source; // what errors call this stream: the file's host:path
 
 	z_stream zs;
 	bool zs_initialized;
@@ -124,7 +125,7 @@ using AsperaSeqStreamHandle = std::unique_ptr<AsperaSeqStream, int (*)(AsperaSeq
 // Factory: create an AsperaSeqStream wrapping the current file segment of an AsperaProcess.
 // is_gzipped should be determined from the filename (e.g., ends with .gz).
 // Caller takes ownership (kseq++ close callback deletes it).
-AsperaSeqStream *CreateAsperaSeqStream(AsperaProcess *process, bool is_gzipped);
+AsperaSeqStream *CreateAsperaSeqStream(AsperaProcess *process, bool is_gzipped, const std::string &source);
 
 } // namespace miint
 
