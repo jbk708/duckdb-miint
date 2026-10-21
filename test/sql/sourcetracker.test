@@ -148,6 +148,93 @@ SELECT count(*) FROM (
 0
 
 # ---------------------------------------------------------------------------
+# Oracle parity with rarefaction on: the default call against SourceTracker2
+#
+# Every other parity case runs with rarefaction off, because st3's fixtures
+# do, while the default call rarefies the collapsed sources and the sinks to
+# 1000. That changes the answer (s0's Unknown is 0.040 unrarefied and 0.065
+# rarefied), and it adds noise that restarts cannot average away, since a run
+# rarefies once. So the default call is run over 192 seeds and each
+# (sink, source) mean is compared with SourceTracker2's over its own 192
+# seeds by a Welch z-test, and the per-seed spreads are compared too.
+#
+# data/sourcetracker/tiny_test_st2_rarefied.tsv holds SourceTracker2's
+# per-cell mean, standard deviation (ddof 1) and seed count. It was made once
+# with biota/sourcetracker2 at a921a05 (Python 3.10.19, numpy 1.26.4, pandas
+# 2.1.4, scikit-bio 0.6.3, biom-format 2.1.18). counts is table.tsv below,
+# transposed to samples x features as int, and metadata is metadata.tsv
+# indexed by sample_id. For each seed in 0..191 it called np.random.seed(seed)
+# and then
+#   sourcetracker._gibbs.gibbs_helper(counts, metadata, False, 1, 0.001, 0.1,
+#       10, 1000, 1000, 10, 1, 100, 1, False, False,
+#       'source_sink', 'source', 'sink', 'env')
+# which is SourceTracker2's own path: mean collapse, then rarefaction without
+# replacement, then the sampler, all at its defaults. The checksums pin the
+# golden and the two inputs it was made from.
+# ---------------------------------------------------------------------------
+
+query II
+SELECT parse_filename(filename), sha256(content)
+FROM read_blob(['data/sourcetracker/tiny_test_st2_rarefied.tsv', 'ext/st3/fixtures/tiny_test/table.tsv',
+                'ext/st3/fixtures/tiny_test/metadata.tsv'])
+ORDER BY filename;
+----
+tiny_test_st2_rarefied.tsv	0f9b642a53b0d20fef3a831a85e1abca5940c8bde9ad3870a1a8dd9968cfc0bb
+metadata.tsv	a840ccb776878819dc062af4c9a708e01ff09838a9b33c2b53ec89fc6f161cfc
+table.tsv	caea4cbcab68cba892e6deea3fdbad11f99842193287957f3ab6fc3b5162b10a
+
+statement ok
+CREATE TABLE st2_rarefied AS SELECT * FROM read_csv('data/sourcetracker/tiny_test_st2_rarefied.tsv', delim='\t', header=true);
+
+statement ok
+CREATE TABLE st3_rarefied (seed INTEGER, sink_id VARCHAR, source VARCHAR, proportion DOUBLE);
+
+loop i 0 192
+
+statement ok
+INSERT INTO st3_rarefied SELECT ${i}, sink_id, source, proportion FROM sourcetracker('tiny', 'tiny_meta', seed := ${i});
+
+endloop
+
+# |z| <= 4 per cell. At 192 seeds a side that is a bias of about 0.01 in a
+# source's share, half st3's 0.02 parity gate; 20 cells at 4 sigma leave a
+# false alarm at about 1e-3. The spread ratio bound [0.7, 1.4] is about 5
+# sigma for standard deviations estimated from 192 runs.
+statement ok
+CREATE MACRO st2_parity(runs) AS TABLE
+SELECT count(*) AS cells,
+       count(*) FILTER (WHERE m.mean IS NULL OR g.mean IS NULL
+                        OR abs(m.mean - g.mean) > 4 * sqrt(m.sd ^ 2 / m.n + g.sd ^ 2 / g.n)) AS mean_outliers,
+       count(*) FILTER (WHERE m.sd / g.sd NOT BETWEEN 0.7 AND 1.4) AS spread_outliers
+FROM (SELECT sink_id, source, avg(proportion) AS mean, stddev_samp(proportion) AS sd, count(*) AS n
+      FROM query_table(runs) GROUP BY ALL) m
+FULL JOIN st2_rarefied g USING (sink_id, source);
+
+query III
+SELECT * FROM st2_parity('st3_rarefied');
+----
+20	0	0
+
+# Control: the same seeds with rarefaction off fail both comparisons (|z| up
+# to 35, spreads down to 0.38 of SourceTracker2's), so the case above tests
+# the rarefied path rather than anything any run would pass.
+statement ok
+CREATE TABLE st3_unrarefied (seed INTEGER, sink_id VARCHAR, source VARCHAR, proportion DOUBLE);
+
+loop i 0 32
+
+statement ok
+INSERT INTO st3_unrarefied SELECT ${i}, sink_id, source, proportion FROM sourcetracker('tiny', 'tiny_meta', seed := ${i},
+    source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+endloop
+
+query I
+SELECT mean_outliers > 0 AND spread_outliers > 0 FROM st2_parity('st3_unrarefied');
+----
+true
+
+# ---------------------------------------------------------------------------
 # Second oracle: synthetic_small, whose sinks have known composition
 # ---------------------------------------------------------------------------
 
