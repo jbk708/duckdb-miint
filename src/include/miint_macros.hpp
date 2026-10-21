@@ -149,6 +149,15 @@ const std::string MIINT_GFA_INTEGER_TAG = // NOLINT
     "     ELSE TRY_CAST(tags[key] AS BIGINT) "
     "END; ";
 
+// The record a view's error names. As a macro argument it is built only when the error is.
+const std::string MIINT_GFA_SEGMENT_LABEL = // NOLINT
+    "CREATE OR REPLACE MACRO _miint_gfa_segment_label(fields) AS "
+    "printf('read_gfa_segments: segment ''%s''', fields[1]); ";
+
+const std::string MIINT_GFA_LINK_LABEL = // NOLINT
+    "CREATE OR REPLACE MACRO _miint_gfa_link_label(fields) AS "
+    "printf('read_gfa_links: link %s%s -> %s%s', fields[1], fields[2], fields[3], fields[4]); ";
+
 // `tags` without the keys a view has typed columns for.
 const std::string MIINT_GFA_OTHER_TAGS = // NOLINT
     "CREATE OR REPLACE MACRO _miint_gfa_other_tags(tags, typed_keys) AS "
@@ -158,10 +167,10 @@ const std::string READ_GFA_SEGMENTS = // NOLINT
     "CREATE OR REPLACE MACRO read_gfa_segments(path) AS TABLE "
     "SELECT fields[1] AS segment_id, "
     "       CASE WHEN fields[2] = '*' THEN NULL ELSE fields[2] END AS sequence, "
-    "       _miint_gfa_integer_tag(tags, 'LN', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_ln, "
-    "       _miint_gfa_integer_tag(tags, 'RC', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_rc, "
-    "       _miint_gfa_integer_tag(tags, 'FC', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_fc, "
-    "       _miint_gfa_integer_tag(tags, 'KC', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_kc, "
+    "       _miint_gfa_integer_tag(tags, 'LN', _miint_gfa_segment_label(fields)) AS tag_ln, "
+    "       _miint_gfa_integer_tag(tags, 'RC', _miint_gfa_segment_label(fields)) AS tag_rc, "
+    "       _miint_gfa_integer_tag(tags, 'FC', _miint_gfa_segment_label(fields)) AS tag_fc, "
+    "       _miint_gfa_integer_tag(tags, 'KC', _miint_gfa_segment_label(fields)) AS tag_kc, "
     "       tags['SH'] AS tag_sh, "
     "       tags['UR'] AS tag_ur, "
     "       _miint_gfa_other_tags(tags, ['LN', 'RC', 'FC', 'KC', 'SH', 'UR']) AS tags "
@@ -175,16 +184,11 @@ const std::string READ_GFA_LINKS = // NOLINT
     "       fields[3] AS to_segment, "
     "       fields[4] AS to_orientation, "
     "       CASE WHEN fields[5] = '*' THEN NULL ELSE fields[5] END AS overlap, "
-    "       _miint_gfa_integer_tag(tags, 'MQ', printf('read_gfa_links: link %s%s -> %s%s', "
-    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_mq, "
-    "       _miint_gfa_integer_tag(tags, 'NM', printf('read_gfa_links: link %s%s -> %s%s', "
-    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_nm, "
-    "       _miint_gfa_integer_tag(tags, 'RC', printf('read_gfa_links: link %s%s -> %s%s', "
-    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_rc, "
-    "       _miint_gfa_integer_tag(tags, 'FC', printf('read_gfa_links: link %s%s -> %s%s', "
-    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_fc, "
-    "       _miint_gfa_integer_tag(tags, 'KC', printf('read_gfa_links: link %s%s -> %s%s', "
-    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_kc, "
+    "       _miint_gfa_integer_tag(tags, 'MQ', _miint_gfa_link_label(fields)) AS tag_mq, "
+    "       _miint_gfa_integer_tag(tags, 'NM', _miint_gfa_link_label(fields)) AS tag_nm, "
+    "       _miint_gfa_integer_tag(tags, 'RC', _miint_gfa_link_label(fields)) AS tag_rc, "
+    "       _miint_gfa_integer_tag(tags, 'FC', _miint_gfa_link_label(fields)) AS tag_fc, "
+    "       _miint_gfa_integer_tag(tags, 'KC', _miint_gfa_link_label(fields)) AS tag_kc, "
     "       tags['ID'] AS tag_id, "
     "       _miint_gfa_other_tags(tags, ['MQ', 'NM', 'RC', 'FC', 'KC', 'ID']) AS tags "
     // read_gfa refuses an orientation other than + or -, naming the file and line.
@@ -2762,6 +2766,8 @@ public:
 		register_macro(READ_GFF, "read_gff");
 		// The _miint_gfa_ helpers before the views that use them.
 		register_macro(MIINT_GFA_INTEGER_TAG, "_miint_gfa_integer_tag");
+		register_macro(MIINT_GFA_SEGMENT_LABEL, "_miint_gfa_segment_label");
+		register_macro(MIINT_GFA_LINK_LABEL, "_miint_gfa_link_label");
 		register_macro(MIINT_GFA_OTHER_TAGS, "_miint_gfa_other_tags");
 		register_macro(READ_GFA_SEGMENTS, "read_gfa_segments");
 		register_macro(READ_GFA_LINKS, "read_gfa_links");

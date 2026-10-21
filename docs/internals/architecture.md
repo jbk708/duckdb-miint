@@ -128,7 +128,7 @@ SAM alignments compute `stop_position` using HTSlib's `bam_endpos()`:
 - Critical for interval operations and coverage analysis
 
 ### Coordinates for Readers
-A reader converts every interval to miint's 1-based half-open convention when it reads, on a reference and on a read alike, and names the columns for the sequence they are on: `position` / `stop_position` on a reference, `query_start` / `query_stop` on a read. A column that leaves the file's convention in place means every caller has to know the source format to use it correctly — the off-by-one this rule exists to prevent. The rule, the per-format conversions and the functions that do not follow it yet are in [Coordinate conventions](../reading.md#coordinate-conventions).
+A reader converts every interval to miint's 1-based half-open convention when it reads, on a reference and on a read alike, and names the columns for the sequence they are on: `position` / `stop_position` on a reference, `query_start` / `query_stop` on a read. A column that leaves the file's convention in place means every caller has to know the source format to use it correctly — the off-by-one this rule exists to prevent. A column named for neither, such as a bare `start` / `stop`, does not say which sequence it is on. The rule, the per-format conversions and the functions listed as exceptions are in [Coordinate conventions](../reading.md#coordinate-conventions).
 
 ### Identifier-column Codec (`id_column_codec` / `id_column_utils`)
 Functions that accept user-supplied identifier columns (`read_id`, `reference`, `mate_reference`) may opt in to BIGINT and UUID in addition to VARCHAR; `IsAllowedIdType` in `src/include/id_column_utils.hpp` defines the accepted set. The pattern is split across two layers:

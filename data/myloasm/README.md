@@ -33,9 +33,9 @@ sits at the length of the second part from the read's start.
 | Kind | Reads | Fields | Built from | Purpose |
 |---|---|---|---|---|
 | `lina` | 500 | `<start>_<stop>` | strain A of `[1000000, 1200000)`, about 30× | primary contig |
-| `linb` | 333 | `<start>_<stop>` | strain B: the same region with a substitution at every offset where offset mod 150 = 75, about 20× | alternate contig |
+| `linb` | 333 | `<start>_<stop>` | strain B: the same region with a substitution at every offset from the region's start where offset mod 150 = 75, about 20× | alternate contig |
 | `circ` | 67 | `<start>_<length>` | a read starting at `<start>` in the 40 kb circle `[2000000, 2040000)`, wrapping past its end | circular contig |
-| `circb` | 50 | `<start>_<length>` | as `circ`, from a variant of the circle with a substitution at every offset where offset mod 1000 = 7 | duplicated contig |
+| `circb` | 50 | `<start>_<length>` | as `circ`, from a variant of the circle with a substitution at every offset from the circle's start where offset mod 1000 = 7 | duplicated contig |
 | `low` | 13 | `<start>_<stop>` | `[3000000, 3060000)`, about 2.5× | low-depth contig |
 | `iso` | 3 | `<start>_<stop>` | three non-overlapping reads from `[3300000, 3400000)` | reads myloasm assembles into nothing; absent from every output |
 | `chim` | 20 | `<a_start>_<a_stop>_<c_start>_<c_length>` | strain A `[a_start, a_stop)` joined to the circle read `<c_start>_<c_length>` | chimera splits at the junction |

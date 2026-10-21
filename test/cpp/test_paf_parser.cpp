@@ -104,13 +104,15 @@ TEST_CASE("PafParser reports an unmapped record the way read_alignments does", "
 	CHECK(r.query_stop == 0);
 }
 
-TEST_CASE("PafParser keeps tags in order with their type letters dropped", "[paf]") {
+TEST_CASE("PafParser keeps tags in order, each with its value and declared type", "[paf]") {
 	auto r = Parse(kForward);
 	REQUIRE(r.tags.size() == 11);
 	CHECK(r.tags.front().key == "NM");
 	CHECK(r.tags.front().value == "0");
+	CHECK(r.tags.front().type == miint::TagType::Integer);
 	CHECK(r.tags.back().key == "cg");
 	CHECK(r.tags.back().value == "2000M");
+	CHECK(r.tags.back().type == miint::TagType::String);
 
 	auto bare = Parse("bare\t2000\t0\t2000\t+\tk12\t20000\t1000\t3000\t2000\t2000\t60");
 	CHECK(bare.tags.empty());

@@ -312,7 +312,7 @@ SELECT * FROM read_paf('alignments.paf');
 - `residue_matches` (BIGINT): Number of matching bases (PAF column 10)
 - `block_length` (BIGINT): Alignment block length (PAF column 11)
 - `mapq` (UTINYINT): Mapping quality; 255 means missing
-- minimap2's tags, one typed column each, NULL when the record does not carry it. These are the tags its manual documents for PAF; the names follow `read_alignments`' `tag_<name>` columns:
+- minimap2's tags, one typed column each, NULL when the record does not carry it. These are the tags its manual lists for PAF, except `SA`, which minimap2 writes only in SAM; the names follow `read_alignments`' `tag_<name>` columns:
 
   | Column | Type | Tag |
   |---|---|---|
@@ -442,7 +442,7 @@ The `L` records of a GFA file.
 - `tag_id` (VARCHAR, nullable): `ID`, the link's identifier
 - `tags` (MAP(VARCHAR, VARCHAR)): The link's other tags
 
-Both views read through `read_gfa`, so a malformed record of any type fails either one, as it fails `read_gfa`. A typed tag column is NULL when the record does not carry the tag. Read with a value that is not a 64-bit integer (a file may give `LN` a type other than `i`), it is an error naming the record. Both views accept the same paths as `read_gfa` (a path, a glob, or a list); for a `filepath` column, query `read_gfa` directly.
+Both views read through `read_gfa`, so a malformed record of any type fails either one, as it fails `read_gfa`. A typed tag column is NULL when the record does not carry the tag. Read with a value that is not a 64-bit integer (a file may give `LN` a type other than `i`), it is an error naming the record. Both views accept the same paths as `read_gfa` (a path, a glob, or a list); for a `filepath` column, query `read_gfa` directly. The functions named `_miint_gfa_*` in `duckdb_functions()` are internal helpers.
 
 **Examples:**
 ```sql
@@ -1298,8 +1298,9 @@ An unmapped PAF record has no aligned block, so it reports `query_start = 0` and
 
 #### Exceptions
 
-- `cigar_query_intervals` and `extract_linked_amplicon` return **0-based** half-open read intervals as `start` / `stop`. Add 1 to both ends to compare them with `read_paf` or the myloasm functions. Moving them to the rule is tracked in [#330](https://github.com/the-miint/duckdb-miint/issues/330).
-- `blast` reports BLAST's own 1-based **closed** `query_start` / `query_end` and `subject_start` / `subject_end`; the subject pair is reversed for a minus-strand hit. `align_sortmerna_rrna` reports 1-based **closed** `ref_start` / `ref_end`. Both are tracked in [#330](https://github.com/the-miint/duckdb-miint/issues/330).
+- `cigar_query_intervals` and `extract_linked_amplicon` return **0-based** half-open read intervals as `start` / `stop`. Add 1 to both ends to compare them with `read_paf` or the myloasm functions. [#330](https://github.com/the-miint/duckdb-miint/issues/330) is to move them to the rule, which will add 1 to each value they return.
+- `blast` reports BLAST's own 1-based **closed** `query_start` / `query_end` and `subject_start` / `subject_end`; the subject pair is reversed for a minus-strand hit. `align_sortmerna_rrna` reports 1-based **closed** `ref_start` / `ref_end`. [#330](https://github.com/the-miint/duckdb-miint/issues/330) covers these too.
+- `rype_extract_strand_minimizers` reports each minimizer's position as a 0-based offset into the sequence ([Classification](classification.md)).
 - `read_gfa` returns a file's fields as written, so a `W` walk's start and end and a `C` containment's position stay 0-based. See [GFA](#gfa).
 - Bin indices from `bin_of` / `bin_start` / `interval_bins` ([Genome bins](alignment_analysis.md#genome-bins)) are 0-based array positions, not coordinates.
 - `absquant_orf_copies` takes 1-based **closed** ORF coordinates, the convention woltka's `coords.txt` uses; see [Absolute quantification](absolute_quantification.md).

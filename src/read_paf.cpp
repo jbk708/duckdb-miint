@@ -11,9 +11,9 @@ namespace {
 
 using miint::TagType;
 
-// The tags minimap2 documents for its PAF output (minimap2(1), "Output"), in its order, as
-// typed columns named the way read_alignments names its tag columns. SA, which minimap2
-// writes only in SAM, is not among them. Any other tag stays in the `tags` map.
+// The tags minimap2 lists for PAF (minimap2(1), "OUTPUT FORMAT"), in its order, as typed
+// columns named the way read_alignments names its tag columns, except SA, which minimap2
+// writes only in SAM. Any other tag stays in the `tags` map.
 struct TypedTag {
 	const char *key;
 	TagType type;
@@ -108,7 +108,7 @@ void TakeTypedTags(std::vector<miint::SamStyleTag> &tags, std::vector<ReadPafTab
 		switch (spec.type) {
 		case TagType::Integer:
 			// The value matches the integer grammar, so the cast fails only on overflow.
-			if (!TryCast::Operation<string_t, int64_t>(text, out.integer, true)) {
+			if (!TryCast::Operation<string_t, int64_t>(text, out.integer, false)) {
 				throw std::runtime_error("tag '" + tag.key + "' value '" + tag.value + "' does not fit " +
 				                         ColumnName(spec) + ", a 64-bit integer");
 			}

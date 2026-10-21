@@ -138,6 +138,9 @@ Only rules whose trigger appears in the diff can fire.
 | SQL or C++ that concatenates or synthesizes a format string (CIGAR, MD, SAM or FASTA text) and passes it to a parser or miint scalar | R6 |
 | Logic that parses or writes a bioinformatics format, computes over sequences, alignments, intervals, trees or feature tables, or builds COO / sparse tables | R6 |
 | A coordinate or interval column in a function's output; a reader of a format that carries coordinates | R9 |
+| A MAP or key-value column holding a format's optional fields; a parser of typed fields | R2 |
+| A new or regenerated fixture under `data/**`; a generator under `test/scripts/**`; a fixture produced by an external tool | R4, R8 |
+| A `switch` or comparison on a format's code letters; a hand-written character-class, case or number helper | R6 |
 | Two structurally similar code paths; a repeated literal or error message; a helper in a feature-named file | R6, R8 |
 | Any new or changed doc, docstring or comment; a test header comment; a `data/**/README*` | R7 |
 | A user-facing string: an exception message, a `docs/` page, a parameter description | R7, R9 |
@@ -193,6 +196,7 @@ Safety must not rest on convention or a comment; and a guard must be real, so do
 - **TEMP objects on a helper connection.** A helper that inherits the caller's TEMP objects creates no fixed-name TEMP object; any TEMP object it creates has a unique name and is dropped on every exit path through `HelperTempRelation` or `DropHelperTempRelation` ("TEMP tables and views"). A change to temp-object handling comes with a search for comments that describe the old behaviour.
 - **Ids keep their type.** Id columns (`sample_id`, `feature_id`, `read_id`, `reference`) accept VARCHAR, BIGINT and UUID, independently of each other, and come back in the type they went in. `IsAllowedIdType` (`src/include/id_column_utils.hpp`) defines the accepted set; a new caller passes `allow_bigint = true`, which admits UUID too (`docs/internals/architecture.md`, "Identifier-column Codec"). A `::VARCHAR` on the way through is the finding: it breaks the caller's joins and costs pushdown. An id dictionary is ordered by its native type, so an integer key does not sort as text.
 - **A new predicate keeps the column side bare.** SQL that extension code builds against a user relation casts the literals, not the column: a cast on the column in `WHERE`, `IN`, a JOIN key or an `ORDER BY` forfeits pushdown (`docs/internals/duckdb-engine-notes.md`, "A cast on the column side of a predicate"). The existing per-sample predicates described in `docs/internals/per-sample-pattern.md` cast; a PR that does not touch them inherits them.
+- **Typed fields are typed on read.** A field the format, or its main producer, gives a fixed type is a typed column, parsed and checked when the file is read, not text in a map every caller casts. A map keeps the fields with no fixed type. A map's single value type is why: a typed map (VARIANT values) does not write to Parquet and casts silently in arithmetic.
 - **Output schema** [soft]: `NULL` versus `''` for a missing value; one value per cell (a list type or rows, never a separator-joined string or a composite string key); an output column that collides with a passed-through one (`docs/internals/per-sample-pattern.md`, "Reserved output-column names"); a column nothing reads.
 - **Arrow export is sized by bytes.** An Arrow batch is sized by bytes against a ceiling just under a power of two, and `memory_limit` does not bound Arrow export buffers (`docs/internals/duckdb-engine-notes.md`, "Arrow export"). Flag a row-count batch size on an Arrow-exporting path, a large row hint passed as `ArrowAppender`'s `initial_capacity` to an appender a byte ceiling closes early, and docs offering `memory_limit` as the bound.
 - **Progress.** An operator whose Sink or Finalize blocks for seconds without reporting progress overrides `GetSinkProgress` to return `ProgressData::SetInvalid()`; a table function without a progress callback already reports none, and an early-stopping fit's iteration count is not a progress fraction (`docs/internals/duckdb-engine-notes.md`, "Progress reporting").
@@ -227,6 +231,8 @@ Safety must not rest on convention or a comment; and a guard must be real, so do
 - **Warnings accumulate.** `miint_warnings()` accumulates within a session, so a test asserts `count(*) >= 1` for a warning it expects.
 - **Catch2:** a size check followed by indexing uses `REQUIRE`; `CHECK` continues after failure and the index can crash the binary.
 - **Ports.** An oracle proves outputs on the inputs it contains; paths of a port no fixture reaches are checked by reading the reference against the port, and the PR says which paths those are [soft].
+- **Fixtures are fixed.** A fixture's inputs are committed with it, so a test never depends on regenerating them. A large text fixture (sequences, an assembly graph, a log) is committed compressed, and a test that needs the file as a tool writes it decompresses a copy into the test directory (sqllogictest's `unzip`). A generator script is not kept once its inputs are committed and its commands fit in the fixture's README.
+- **An external tool's fixture comes from the build the repository vendors**, when it vendors one, so the version matches what miint embeds. When miint's own function for the tool cannot produce the fixture, the README says why.
 - **Remote services.** A mock accepts URL shapes, result types and authentication modes the real server rejects, so the test plan says whether a live run happened (PR-level check 7).
 
 ### R5 — Build, embedded tools and portability [strong]
@@ -247,6 +253,8 @@ When two similar code paths solve the same problem differently, factor out the s
 
 - **Existing primitives first.** PR-level check 1 owns the procedure. A hand-rolled reverse complement, interval merge, COO builder, id codec or format writer beside an existing one is the finding, in tests as in `src/`.
 - **A copy-pasted sibling is parameterized**, not maintained twice. Same for near-duplicate blocks in one file and an error message or constant repeated across sites.
+- **A format's code letters are named once.** Record types, tag types and array subtypes are an enum or named constant, not bare character literals repeated across switches and comparisons.
+- **Character classes and number parsing come from the standard library or DuckDB** where one matches the grammar. A hand-written one says why the library's does not fit: a locale dependence, or a header the code cannot include.
 - **Never compute through spec-invalid input.** A result is not computed by building input the format's specification forbids and passing it to a parser that accepts it, such as concatenating CIGAR strings so clipping operations land in the interior. Correctness would rest on the parser's laxity. Combine the components the parser already computes; if nothing exposes them, add an accessor.
 - **Underusing a tool is reinventing it** [soft]: check whether DuckDB or the embedded tool already does the expensive part (parallelism, list inputs, a documented pivot) before building around it.
 - **Don't rename columns or parameters in transit**, and don't change a wrapped tool's semantics without saying so.
@@ -277,7 +285,7 @@ Flag:
 - **Established field terms keep their field meaning**, and a new behaviour gets its own name instead of borrowing one that means something else. The project writes "microbial" (or "bacteria and archaea"), not "prokaryotic".
 - **Names say what they measure**, including the unit and the thing it is per (`cells_per_g_of_gdna`, not `cells_per_g`).
 - **Insider nouns in user-facing prose** are replaced with what the reader would call the thing.
-- **Every interval is 1-based half-open, on a reference and on a read alike.** Reference intervals are `position` / `stop_position`; read intervals are `query_start` / `query_stop` on the read as sequenced, whatever the strand. A reader converts the file's convention when it reads. A new interval in another convention, or with the file's convention passed through, is a finding (`docs/reading.md`, "Coordinate conventions"; its "Exceptions" lists the functions that predate the rule).
+- **Every interval is 1-based half-open, on a reference and on a read alike.** Reference intervals are `position` / `stop_position`; read intervals are `query_start` / `query_stop` on the read as sequenced, whatever the strand. A bare `start` / `stop` names neither sequence, so a new interval column does not use it. A reader converts the file's convention when it reads. A new interval in another convention, or with the file's convention passed through, is a finding (`docs/reading.md`, "Coordinate conventions"; its "Exceptions" lists the functions that predate the rule).
 
 ### R10 — Performance claims are probes [soft, always handed off]
 

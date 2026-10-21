@@ -1,12 +1,9 @@
 #include "sam_style_tags.hpp"
 
-#include "duckdb/common/string_util.hpp"
-
+#include <cctype>
 #include <stdexcept>
 
 namespace miint {
-
-using duckdb::StringUtil;
 
 namespace {
 
@@ -37,6 +34,20 @@ bool IsTagType(char c) {
 	default:
 		return false;
 	}
+}
+
+// The character classes are <cctype>'s where the locale does not change them. This file
+// stays free of DuckDB headers: the C++ tests binary links it without DuckDB, and in a DEBUG
+// build even StringUtil's inline helpers reach DuckDB's exception code.
+
+// [0-9]. The locale does not change isdigit.
+bool IsDigit(char c) {
+	return std::isdigit(static_cast<unsigned char>(c)) != 0;
+}
+
+// [A-Za-z]. Not isalpha, which also accepts a locale's other letters.
+bool IsAlpha(char c) {
+	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
 }
 
 // [!-~]. <cctype>'s isgraph matches it only in the C locale.
@@ -72,20 +83,23 @@ bool IsInteger(std::string_view s) {
 		return false;
 	}
 	for (; i < s.size(); ++i) {
-		if (!StringUtil::CharacterIsDigit(s[i])) {
+		if (!IsDigit(s[i])) {
 			return false;
 		}
 	}
 	return true;
 }
 
-// `s` equals the lowercase `word`, ignoring the case of ASCII letters.
+// `s` equals the lowercase `word`, ignoring the case of ASCII letters. Not tolower, which
+// follows the locale: in a Turkish one, 'I' is not 'i'.
 bool EqualsLowercase(std::string_view s, std::string_view word) {
 	if (s.size() != word.size()) {
 		return false;
 	}
 	for (size_t i = 0; i < s.size(); ++i) {
-		if (StringUtil::CharacterToLower(s[i]) != word[i]) {
+		const char c = s[i];
+		const char lower = (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+		if (lower != word[i]) {
 			return false;
 		}
 	}
@@ -108,14 +122,14 @@ bool IsFloat(std::string_view s) {
 		return true;
 	}
 	size_t int_digits = 0;
-	while (i < n && StringUtil::CharacterIsDigit(s[i])) {
+	while (i < n && IsDigit(s[i])) {
 		++i;
 		++int_digits;
 	}
 	if (i < n && s[i] == '.') {
 		++i;
 		size_t frac_digits = 0;
-		while (i < n && StringUtil::CharacterIsDigit(s[i])) {
+		while (i < n && IsDigit(s[i])) {
 			++i;
 			++frac_digits;
 		}
@@ -131,7 +145,7 @@ bool IsFloat(std::string_view s) {
 			++i;
 		}
 		size_t exp_digits = 0;
-		while (i < n && StringUtil::CharacterIsDigit(s[i])) {
+		while (i < n && IsDigit(s[i])) {
 			++i;
 			++exp_digits;
 		}
@@ -142,13 +156,13 @@ bool IsFloat(std::string_view s) {
 	return i == n;
 }
 
-// ([0-9A-F][0-9A-F])*: uppercase only, so not StringUtil::CharacterIsHex.
+// ([0-9A-F][0-9A-F])*: uppercase only, so not isxdigit.
 bool IsHexBytes(std::string_view s) {
 	if (s.size() % 2 != 0) {
 		return false;
 	}
 	for (char c : s) {
-		if (!StringUtil::CharacterIsDigit(c) && !(c >= 'A' && c <= 'F')) {
+		if (!IsDigit(c) && !(c >= 'A' && c <= 'F')) {
 			return false;
 		}
 	}
@@ -218,11 +232,11 @@ namespace {
 
 // [A-Za-z_][A-Za-z0-9_]*, for typed and untyped fields alike (why: TagSyntax::Typed).
 bool IsTagName(std::string_view key) {
-	if (key.empty() || !(StringUtil::CharacterIsAlpha(key[0]) || key[0] == '_')) {
+	if (key.empty() || !(IsAlpha(key[0]) || key[0] == '_')) {
 		return false;
 	}
 	for (char c : key) {
-		if (!(StringUtil::CharacterIsAlphaNumeric(c) || c == '_')) {
+		if (!(IsAlpha(c) || IsDigit(c) || c == '_')) {
 			return false;
 		}
 	}

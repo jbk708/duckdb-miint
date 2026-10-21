@@ -1,5 +1,5 @@
 # name: test/sql/read_myloasm_mappings.test
-# description: read_myloasm_mappings returns myloasm's final read-to-contig mappings on miint's two coordinate axes
+# description: read_myloasm_mappings returns myloasm's final read-to-contig mappings, with 1-based contig and read intervals
 # group: [sql]
 
 require miint
@@ -27,7 +27,7 @@ unzip data/myloasm/ecoli_sim/myloasm.log.gz __TEST_DIR__/ecoli_sim/myloasm.log
 foreach member 3-mapping/map_to_unitigs.paf.gz 0-cleaning_and_unitigs/read_coverages.txt.gz 0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz
 
 statement ok
-COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/${member}', columns = {'line': 'VARCHAR'}, delim = E'\x01', quote = '', escape = '', header = false))
+COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/${member}', columns = {'line': 'VARCHAR'}, delim = E'\x01', quote = '', escape = '', header = false, auto_detect = false))
 TO '__TEST_DIR__/ecoli_sim/${member}' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01', COMPRESSION gzip);
 
 endloop
