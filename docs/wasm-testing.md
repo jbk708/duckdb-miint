@@ -207,7 +207,7 @@ Take `expect` from a native build, which runs the same steps:
 ./scripts/test_wasm_browser.sh --native   # build/release/duckdb
 ```
 
-The committed steps pass whether the Rust glue is built with JS or wasm-native
+The rype steps pass whether the Rust glue is built with JS or wasm-native
 exceptions, so check 4 in Level 2 is what fails a build with JS exceptions.
 
 ## CI Integration

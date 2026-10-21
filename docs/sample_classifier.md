@@ -211,7 +211,7 @@ CREATE VIEW common AS
 
 - **Cancelling:** `fit_*` and `cross_validate_*` cannot be cancelled once sc is running; `shap` stops between batches.
 - **`shap`** holds the input table in full, as prediction does, plus one batch of attributions (see `max_attributions` under [Explaining a prediction](#explaining-a-prediction)); fewer features is the way to go further.
-- **DuckDB-Wasm** gives DuckDB and the extension one 4 GiB memory and one thread, so expect a much lower ceiling than native. `threads` has no effect there; results are the same as native. `cross_validate_*` is not available in DuckDB-Wasm ([#315](https://github.com/the-miint/duckdb-miint/issues/315)).
+- **DuckDB-Wasm** gives DuckDB and the extension one 4 GiB memory and one thread, so expect a much lower ceiling than native. `threads` has no effect there; results are the same as native.
 
 ### Citations
 

@@ -69,15 +69,6 @@ unique_ptr<FunctionData> ScCvBind(ClientContext &context, TableFunctionBindInput
                                   vector<LogicalType> &return_types, vector<string> &names, bool classification) {
 	auto data = make_uniq<ScCvData>();
 	data->caller = classification ? "cross_validate_classifier" : "cross_validate_regressor";
-#ifdef __EMSCRIPTEN__
-	// DuckDB-Wasm's Emscripten runtime mis-links one call cross-validation makes
-	// (a function-signature trap), and the obvious workaround returns wrong
-	// scores without an error. Refused here until #315 lands.
-	throw NotImplementedException("%s is not yet available in DuckDB-Wasm "
-	                              "(https://github.com/the-miint/duckdb-miint/issues/315). Run it in native DuckDB; "
-	                              "fit_*, predict, predict_proba and shap work here.",
-	                              data->caller);
-#endif
 	data->classification = classification;
 	data->data_relation = input.inputs[0].GetValue<string>();
 	data->metadata_relation = input.inputs[1].GetValue<string>();

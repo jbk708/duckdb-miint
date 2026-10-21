@@ -26,5 +26,99 @@
     "name": "rype_extract_strand_minimizers",
     "sql": "SELECT count(*) || ' rows, md5=' || md5(string_agg(read_id || ':' || fwd_hashes::VARCHAR || '|' || fwd_positions::VARCHAR || '|' || rc_hashes::VARCHAR || '|' || rc_positions::VARCHAR, ';' ORDER BY read_id)) FROM rype_extract_strand_minimizers('sequences', 16, 8)",
     "expect": "4 rows, md5=cb794dd85005571c65a3c568dcefd4df"
+  },
+  {
+    "name": "setup_counts",
+    "sql": "CREATE TABLE counts AS SELECT sample_id, feature_id, value FROM (SELECT 'S' || lpad(s::VARCHAR, 2, '0') AS sample_id, 'F' || f::VARCHAR AS feature_id, (((s * 7 + f * 3) % 11) + CASE WHEN s <= 6 AND f <= 2 THEN 4 WHEN s > 6 AND f >= 5 THEN 4 ELSE 0 END)::DOUBLE AS value FROM range(1, 13) t1(s), range(1, 7) t2(f)) WHERE value > 0"
+  },
+  {
+    "name": "setup_meta",
+    "sql": "CREATE TABLE meta AS SELECT 'S' || lpad(s::VARCHAR, 2, '0') AS sample_id, CASE WHEN s <= 6 THEN 'A' ELSE 'B' END AS label FROM range(1, 13) t(s)"
+  },
+  {
+    "name": "setup_rmeta",
+    "sql": "CREATE TABLE rmeta AS SELECT 'S' || lpad(s::VARCHAR, 2, '0') AS sample_id, (s * 1.5 + (s % 3) * 0.25)::DOUBLE AS y FROM range(1, 13) t(s)"
+  },
+  {
+    "name": "input",
+    "sql": "SELECT count(*) || ' cells, sum=' || sum(value) || ', md5=' || md5(string_agg(sample_id || '|' || feature_id || '|' || value::VARCHAR, ',' ORDER BY sample_id, feature_id)) FROM counts",
+    "expect": "67 cells, sum=454.0, md5=9d31aa4883fa8570921e614042e8c3f7"
+  },
+  {
+    "name": "fit_classifier",
+    "sql": "CREATE TABLE m AS SELECT * FROM fit_classifier('counts', 'meta', n_estimators := 25, random_state := 7, name := 'm')"
+  },
+  {
+    "name": "clf_model",
+    "sql": "SELECT 'md5=' || md5(model_blob) || ' bytes=' || octet_length(model_blob) || ' n_samples=' || n_samples || ' n_features=' || n_features || ' n_estimators=' || n_estimators || ' task=' || task || ' random_state=' || random_state || ' feature_id_type=' || feature_id_type FROM m",
+    "expect": "md5=0d0191d3fcb38c7639a95ecfb0fa500b bytes=6915 n_samples=12 n_features=6 n_estimators=25 task=classification random_state=7 feature_id_type=VARCHAR"
+  },
+  {
+    "name": "clf_predict",
+    "sql": "SELECT list(prediction ORDER BY sample_id)::VARCHAR FROM predict('counts', 'm')",
+    "expect": "[A, A, A, A, A, A, B, B, B, B, B, B]"
+  },
+  {
+    "name": "clf_known_feature_fraction",
+    "sql": "SELECT list(round(known_feature_fraction, 6) ORDER BY sample_id)::VARCHAR FROM predict('counts', 'm')",
+    "expect": "[1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]"
+  },
+  {
+    "name": "clf_proba_exact_md5",
+    "sql": "SELECT md5(string_agg(sample_id || ':' || class || '=' || probability::VARCHAR, ',' ORDER BY sample_id, class)) FROM predict_proba('counts', 'm')",
+    "expect": "9a1f0f85b085657ee098c5363a2081da"
+  },
+  {
+    "name": "clf_shap_exact_md5",
+    "sql": "SELECT md5(string_agg(sample_id || '|' || class || '|' || feature_id || '|' || shap_value::VARCHAR || '|' || base_value::VARCHAR, ',' ORDER BY sample_id, class, feature_id)) FROM shap('counts', 'm')",
+    "expect": "3b8611ea79973e92411a659314a3618f"
+  },
+  {
+    "name": "clf_importances_exact_md5",
+    "sql": "SELECT md5(string_agg(feature_id || '=' || importance::VARCHAR, ',' ORDER BY feature_id)) FROM feature_importances('m')",
+    "expect": "50d9c9ca33ec8f6cca4972a1239d9705"
+  },
+  {
+    "name": "fit_regressor",
+    "sql": "CREATE TABLE r AS SELECT * FROM fit_regressor('counts', 'rmeta', n_estimators := 25, random_state := 7, name := 'r')"
+  },
+  {
+    "name": "reg_model",
+    "sql": "SELECT 'md5=' || md5(model_blob) || ' bytes=' || octet_length(model_blob) || ' n_estimators=' || n_estimators || ' task=' || task FROM r",
+    "expect": "md5=e581c482b7b1c4fbfd20cd25a62304fa bytes=13982 n_estimators=25 task=regression"
+  },
+  {
+    "name": "reg_predict_exact_md5",
+    "sql": "SELECT md5(string_agg(sample_id || '=' || prediction::VARCHAR, ',' ORDER BY sample_id)) FROM predict('counts', 'r')",
+    "expect": "ddbdff0745acbc82402abd67e39a886d"
+  },
+  {
+    "name": "reg_shap_exact_md5",
+    "sql": "SELECT md5(string_agg(sample_id || '|' || feature_id || '|' || shap_value::VARCHAR || '|' || base_value::VARCHAR, ',' ORDER BY sample_id, feature_id)) FROM shap('counts', 'r')",
+    "expect": "32e0f03b89e7109387c4276ad448c0a5"
+  },
+  {
+    "name": "cv_classifier",
+    "sql": "SELECT DISTINCT metric || ' mean_score=' || mean_score::VARCHAR || ' std_score=' || std_score::VARCHAR || ' fold_scores=' || fold_scores::VARCHAR FROM cross_validate_classifier('counts', 'meta', n_folds := 3, n_estimators := 10, random_state := 7)",
+    "expect": "accuracy mean_score=0.4166666666666667 std_score=0.23570226039551584 fold_scores=[0.25, 0.75, 0.25]"
+  },
+  {
+    "name": "cv_classifier_oof",
+    "sql": "SELECT list(sample_id || ':' || prediction || '/' || actual ORDER BY sample_id)::VARCHAR FROM cross_validate_classifier('counts', 'meta', n_folds := 3, n_estimators := 10, random_state := 7)",
+    "expect": "['S01:A/A', 'S02:A/A', 'S03:B/A', 'S04:B/A', 'S05:B/A', 'S06:B/A', 'S07:A/B', 'S08:B/B', 'S09:A/B', 'S10:A/B', 'S11:B/B', 'S12:B/B']"
+  },
+  {
+    "name": "cv_regressor",
+    "sql": "SELECT DISTINCT metric || ' mean_score=' || mean_score::VARCHAR || ' std_score=' || std_score::VARCHAR FROM cross_validate_regressor('counts', 'rmeta', n_folds := 3, n_estimators := 10, random_state := 7)",
+    "expect": "mse mean_score=43.885312500000005 std_score=10.638204488673761"
+  },
+  {
+    "name": "fit_threads_1",
+    "sql": "CREATE TABLE m1 AS SELECT * FROM fit_classifier('counts', 'meta', n_estimators := 25, random_state := 7, name := 'm1', threads := 1)"
+  },
+  {
+    "name": "fit_threads_1_md5",
+    "sql": "SELECT md5(model_blob) FROM m1",
+    "expect": "0d0191d3fcb38c7639a95ecfb0fa500b"
   }
 ]
