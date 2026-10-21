@@ -117,6 +117,8 @@ unique_ptr<FunctionData> SourcetrackerBind(ClientContext &context, TableFunction
 	auto data = make_uniq<SourcetrackerBindData>();
 	data->table_name = input.inputs[0].GetValue<string>();
 	data->metadata_name = input.inputs[1].GetValue<string>();
+	RejectCTERelationName(input, data->table_name);
+	RejectCTERelationName(input, data->metadata_name);
 	if (data->table_name.empty()) {
 		throw BinderException("sourcetracker: feature-table name must not be empty");
 	}
