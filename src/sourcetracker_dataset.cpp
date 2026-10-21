@@ -5,6 +5,7 @@
 #include <cmath>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -219,6 +220,71 @@ void CheckDepths(const Dataset &dataset, int32_t source_depth, int32_t sink_dept
 	   << " fewer sequences than that. The shallowest of these is '" << dataset.sample_ids[shallowest] << "' with "
 	   << FormatCount(shallowest_total) << " sequences.";
 	Fail(os.str());
+}
+
+void CheckEnvironments(const Dataset &dataset, bool mean_collapse, bool loo) {
+	if (!mean_collapse) {
+		return; // a sum keeps every sequence, and every cell holds at least one
+	}
+	// Ordered by name, so the environment reported first does not depend on hashing.
+	std::map<std::string, std::vector<size_t>> members;
+	for (size_t s = 0; s < dataset.sample_ids.size(); ++s) {
+		if (dataset.is_source[s]) {
+			members[*dataset.envs[s]].push_back(s);
+		}
+	}
+	std::vector<std::unordered_map<int32_t, double>> counts(dataset.sample_ids.size());
+	for (size_t i = 0; i < dataset.vals.size(); ++i) {
+		const auto s = static_cast<size_t>(dataset.cols[i]);
+		if (dataset.is_source[s]) {
+			counts[s][dataset.rows[i]] = dataset.vals[i];
+		}
+	}
+	const auto explain = [](size_t n_members) {
+		return " has no sequences after collapse: collapse := 'mean' averages each feature over its " +
+		       std::to_string(n_members) +
+		       " source samples and rounds down, and no feature averages 1 or more. collapse := 'sum' keeps "
+		       "every sequence.";
+	};
+	for (const auto &[env, samples] : members) {
+		std::unordered_map<int32_t, double> sums;
+		for (const auto s : samples) {
+			for (const auto &[f, c] : counts[s]) {
+				sums[f] += c;
+			}
+		}
+		// floor(sum / n) >= 1 exactly when sum >= n.
+		const auto keeps_a_sequence = [&](const std::unordered_map<int32_t, double> *held_out, size_t n) {
+			for (const auto &[f, sum] : sums) {
+				double rest = sum;
+				if (held_out) {
+					const auto it = held_out->find(f);
+					rest -= it == held_out->end() ? 0.0 : it->second;
+				}
+				if (rest >= static_cast<double>(n)) {
+					return true;
+				}
+			}
+			return false;
+		};
+		if (!loo) {
+			if (!keeps_a_sequence(nullptr, samples.size())) {
+				Fail("environment '" + env + "'" + explain(samples.size()));
+			}
+			continue;
+		}
+		// A fold holding out an environment's only member drops the environment,
+		// and one holding out one of two leaves a whole sample.
+		if (samples.size() < 3) {
+			continue;
+		}
+		for (const auto held : samples) {
+			if (!keeps_a_sequence(&counts[held], samples.size() - 1)) {
+				Fail("with source sample '" + dataset.sample_ids[held] + "' held out, environment '" + env + "'" +
+				     explain(samples.size() - 1));
+			}
+		}
+	}
 }
 
 } // namespace miint::sourcetracker

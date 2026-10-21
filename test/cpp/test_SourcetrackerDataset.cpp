@@ -14,6 +14,7 @@
 using Catch::Approx;
 using Catch::Matchers::ContainsSubstring;
 using miint::sourcetracker::CheckDepths;
+using miint::sourcetracker::CheckEnvironments;
 using miint::sourcetracker::Dataset;
 using miint::sourcetracker::IngestDataset;
 using miint::unifrac::CooRow;
@@ -21,11 +22,11 @@ using miint::unifrac::MetadataRow;
 
 // ---------------------------------------------------------------------------
 // The dataset layer is the one place where a wrong answer is silent. st3 takes
-// feature and sample INDICES; if a cell lands on the wrong sample, or a sample's
+// feature and sample indices; if a cell lands on the wrong sample, or a sample's
 // role or environment is attached to its neighbour, the sampler still runs and
 // still returns well-formed proportions -- for the wrong sink. So every
 // assertion here is against independently known values, and every precondition
-// is asserted by the MESSAGE that names the offending id, because that message
+// is asserted by the message that names the offending id, because that message
 // is what the user sees when their metadata and table disagree.
 // ---------------------------------------------------------------------------
 namespace {
@@ -40,7 +41,7 @@ void AddMeta(std::vector<MetadataRow> &rows, const std::string &sample, const st
 }
 
 // Sinks s_b, s_a; sources src_z (sewage), src_m and src_m2 (seawater); features
-// f3, f1, f2. Every id list is deliberately out of lexicographic order, and the
+// f3, f1, f2. Every id list is out of lexicographic order, and the
 // cells are emitted scrambled, so a first-seen-order dictionary is caught.
 std::vector<MetadataRow> ToyMetadata() {
 	std::vector<MetadataRow> m;
@@ -289,5 +290,61 @@ TEST_CASE("CheckDepths: leave-one-out checks source samples against the source d
 	}
 	SECTION("the sink depth is ignored in leave-one-out") {
 		REQUIRE_NOTHROW(CheckDepths(ds, 0, 1000000, true));
+	}
+}
+
+// Mean collapse takes each feature's mean over an environment's source samples
+// and rounds it down, so an environment whose members share no feature, at low
+// counts, can collapse to no sequences at all. st3 then samples it as an
+// environment with an empty profile: 0/0 at alpha1 := 0, a uniform profile
+// otherwise, and either way the sink is attributed to nothing real. Environment
+// E below has members a {f1:1}, b {f2:1}, c {f3:4}.
+TEST_CASE("CheckEnvironments: an environment that collapses to no sequences is refused, naming it", "[sourcetracker]") {
+	std::vector<MetadataRow> m;
+	AddMeta(m, "a", "source", "E");
+	AddMeta(m, "b", "source", "E");
+	AddMeta(m, "k", "sink", "");
+	const std::vector<CooRow> two = {{"a", "f1", 1.0}, {"b", "f2", 1.0}, {"k", "f1", 3.0}};
+	const Dataset ds = IngestDataset(two, m);
+
+	SECTION("mean collapse: every feature averages below 1") {
+		REQUIRE_THROWS_WITH(CheckEnvironments(ds, true, false), ContainsSubstring("environment 'E'"));
+		REQUIRE_THROWS_WITH(CheckEnvironments(ds, true, false), ContainsSubstring("2 source samples"));
+	}
+	SECTION("sum collapse keeps every sequence") {
+		REQUIRE_NOTHROW(CheckEnvironments(ds, false, false));
+	}
+	SECTION("a feature summing to exactly the member count keeps one sequence") {
+		const std::vector<CooRow> shared = {{"a", "f1", 1.0}, {"b", "f1", 1.0}, {"k", "f1", 3.0}};
+		REQUIRE_NOTHROW(CheckEnvironments(IngestDataset(shared, m), true, false));
+	}
+}
+
+TEST_CASE("CheckEnvironments: leave-one-out checks each fold's remaining members", "[sourcetracker]") {
+	std::vector<MetadataRow> m;
+	AddMeta(m, "a", "source", "E");
+	AddMeta(m, "b", "source", "E");
+	AddMeta(m, "c", "source", "E");
+	AddMeta(m, "k", "sink", "");
+	const std::vector<CooRow> three = {{"a", "f1", 1.0}, {"b", "f2", 1.0}, {"c", "f3", 4.0}, {"k", "f1", 3.0}};
+	const Dataset ds = IngestDataset(three, m);
+
+	SECTION("all three members collapse to f3's one sequence") {
+		REQUIRE_NOTHROW(CheckEnvironments(ds, true, false));
+	}
+	SECTION("holding out c leaves a and b, which collapse to nothing") {
+		REQUIRE_THROWS_WITH(CheckEnvironments(ds, true, true), ContainsSubstring("'c' held out"));
+		REQUIRE_THROWS_WITH(CheckEnvironments(ds, true, true), ContainsSubstring("environment 'E'"));
+	}
+	SECTION("sum collapse keeps every fold") {
+		REQUIRE_NOTHROW(CheckEnvironments(ds, false, true));
+	}
+	SECTION("a two-member environment leaves one whole sample in each fold") {
+		std::vector<MetadataRow> pair;
+		AddMeta(pair, "a", "source", "E");
+		AddMeta(pair, "b", "source", "E");
+		AddMeta(pair, "k", "sink", "");
+		const std::vector<CooRow> cells = {{"a", "f1", 1.0}, {"b", "f2", 1.0}, {"k", "f1", 3.0}};
+		REQUIRE_NOTHROW(CheckEnvironments(IngestDataset(cells, pair), true, true));
 	}
 }

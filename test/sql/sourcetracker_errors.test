@@ -43,7 +43,7 @@ SELECT count(*) FROM sourcetracker('synth', 'synth_meta', source_rarefaction_dep
 12
 
 # The sink depth is checked against each sink; the source depth against each
-# COLLAPSED environment, which is st3's check and depends on how the sources
+# collapsed environment, which is st3's check and depends on how the sources
 # collapse. Two 200-deep sources sum to 400 but average to 200.
 query I
 SELECT count(*) FROM sourcetracker('synth', 'synth_meta', collapse := 'sum', source_rarefaction_depth := 300, sink_rarefaction_depth := 0, restarts := 2, burnin := 5);
@@ -55,7 +55,7 @@ SELECT * FROM sourcetracker('synth', 'synth_meta', collapse := 'mean', source_ra
 ----
 collapsed source
 
-# Leave-one-out holds out SOURCE samples, so the source depth applies to each
+# Leave-one-out holds out source samples, so the source depth applies to each
 # of them and the sink depth applies to nothing: the default sink depth of
 # 1000 does not stop a leave-one-out run over 200-deep samples.
 statement error
@@ -317,10 +317,11 @@ beta must be finite and > 0
 # alpha2 and beta must be positive, not merely non-negative. At 0 the sampler's
 # weight for a sequence can be 0/0: alpha2 := 0 once Unknown holds no other
 # sequence of the sink, beta := 0 in a sink of one sequence. st3 then puts the
-# sequence in Unknown without drawing, so a one-sequence sink came back as 100%
-# Unknown where alpha2 or beta of 1e-9 gives 0.41 Unknown / 0.59 of its source.
-# alpha1 := 0 stays legal: every environment has sequences, so its
-# denominators are never 0 (sourcetracker.test relies on alpha1 := 0).
+# sequence in Unknown without drawing: a one-sequence sink comes out 100%
+# Unknown, where alpha2 or beta of 1e-9 gives 0.41 Unknown / 0.59 of its source.
+# alpha1 := 0 stays legal: an environment that collapses to no sequences is
+# refused (below), so every environment's denominators are positive
+# (sourcetracker.test relies on alpha1 := 0).
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', alpha2 := 0.0);
 ----
@@ -330,6 +331,46 @@ statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', beta := 0.0);
 ----
 beta must be finite and > 0 (got 0.0)
+
+# st3 counts a chain's passes in 32 bits. At burnin := 1, 65537 draws 65537
+# passes apart wrap to a chain of 65538 passes holding one draw, and the
+# per-sink assignment mass is then 6e-5 of the sink's depth instead of the depth.
+statement error
+SELECT * FROM sourcetracker('synth', 'synth_meta', draws_per_restart := 65537, delay := 65537);
+----
+the passes per chain, must be at most 4294967295 (got 4295032933)
+
+statement error
+SELECT * FROM sourcetracker('synth', 'synth_meta', restarts := 65537, draws_per_restart := 65537);
+----
+the draws per sink, must be at most 4294967295 (got 4295098369)
+
+# Mean collapse rounds each feature's mean down, so environment A below, whose
+# two samples share no feature, collapses to no sequences. st3 would sample it
+# as an environment with an empty profile: at alpha1 := 0 the sink comes out
+# 100% Unknown, at 1e-9 the empty A claims about a third of it. Sum collapse
+# keeps every sequence and runs.
+statement ok
+CREATE TABLE empty_env AS SELECT * FROM (VALUES
+  ('a1', 'f1', 1), ('a2', 'f2', 1), ('b1', 'f3', 50), ('b1', 'f4', 50),
+  ('k', 'f1', 5), ('k', 'f3', 5), ('k', 'f4', 5)
+) t(sample_id, feature_id, value);
+
+statement ok
+CREATE TABLE empty_env_meta AS SELECT * FROM (VALUES
+  ('a1', 'source', 'A'), ('a2', 'source', 'A'), ('b1', 'source', 'B'), ('k', 'sink', NULL)
+) t(sample_id, source_sink, env);
+
+statement error
+SELECT * FROM sourcetracker('empty_env', 'empty_env_meta', source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+----
+environment 'A' has no sequences after collapse
+
+query I
+SELECT count(*) FROM sourcetracker('empty_env', 'empty_env_meta', collapse := 'sum',
+    source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+----
+3
 
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', sink_rarefaction_depth := -1);

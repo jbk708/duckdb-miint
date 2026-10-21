@@ -3,16 +3,16 @@
 // The relation-to-array translation for sourcetracker(): long-form feature-table
 // cells plus (sample_id, source_sink, env) metadata rows in, the index-based
 // arrays st3_table_from_arrow takes out. DuckDB-free for the same reason
-// mmvec_relation.hpp is: st3 addresses features and samples by INDEX, so a cell
+// mmvec_relation.hpp is: st3 addresses features and samples by index, so a cell
 // filed under the wrong sample, or a role attached to the wrong id, does not
 // fail -- the sampler runs and returns well-formed proportions for the wrong
 // sink. That has to be asserted against independently known values, in a unit
 // test that does not need libduckdb.
 //
-// Every precondition st3 does not check itself is checked here, before any
-// Arrow marshaling, and each error names the offending id. Errors are
-// std::invalid_argument; the SQL layer wraps them into the user-facing
-// exception with the function name prefixed.
+// The input checks run here, before any Arrow marshaling, and each error names
+// the offending id; some repeat a check st3 makes, to name the id st3 would not.
+// Errors are std::invalid_argument; the SQL layer wraps them into the
+// user-facing exception with the function name prefixed.
 
 #include <cstdint>
 #include <optional>
@@ -64,11 +64,23 @@ Dataset IngestDataset(const std::vector<miint::unifrac::CooRow> &table,
 // sink mode every sink must hold at least `sink_depth` sequences; in
 // leave-one-out every source sample must hold at least `source_depth` (the sink
 // depth is unused there). A depth of 0 disables the check for that role. The
-// source depth in sink mode is NOT checked here: sources are collapsed by
+// source depth in sink mode is not checked here: sources are collapsed by
 // environment first, and st3 reports a shallow collapsed environment itself.
 //
 // Throws std::invalid_argument in SourceTracker2's words, naming the shallowest
 // sample and its total.
 void CheckDepths(const Dataset &dataset, int32_t source_depth, int32_t sink_depth, bool loo);
+
+// Every environment must keep at least one sequence once its source samples are
+// collapsed. Mean collapse (`mean_collapse`) rounds each feature's mean down, so
+// an environment whose members share no feature at low counts can collapse to
+// nothing; st3 would then sample an environment with an empty profile. Sum
+// collapse keeps every sequence. In leave-one-out (`loo`) each fold collapses
+// the members left after one is held out, so each fold is checked. The check is
+// on the counts as given: under leave-one-out, source rarefaction thins each
+// sample before the folds collapse, which st3 does not check.
+//
+// Throws std::invalid_argument naming the environment (and the held-out sample).
+void CheckEnvironments(const Dataset &dataset, bool mean_collapse, bool loo);
 
 } // namespace miint::sourcetracker

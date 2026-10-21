@@ -19,6 +19,7 @@
 #include "duckdb/common/arrow/arrow.hpp"
 #include "duckdb/common/arrow/arrow_appender.hpp"
 #include "duckdb/common/arrow/arrow_converter.hpp"
+#include "duckdb/common/arrow/arrow_wrapper.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
@@ -230,6 +231,20 @@ unique_ptr<FunctionData> SourcetrackerBind(ClientContext &context, TableFunction
 	}
 	c.loo = data->loo ? 1 : 0;
 	c.contingency = data->assignments ? 1 : 0;
+	// st3 counts a chain's passes and a sink's draws in 32 bits, and a count past
+	// that wraps without an error.
+	const uint64_t passes = uint64_t(c.burnin) + uint64_t(c.draws_per_restart - 1) * c.delay + 1;
+	if (passes > UINT32_MAX) {
+		throw BinderException("sourcetracker: burnin + (draws_per_restart - 1) * delay + 1, the passes per chain, "
+		                      "must be at most %s (got %s)",
+		                      std::to_string(UINT32_MAX), std::to_string(passes));
+	}
+	const uint64_t draws = uint64_t(c.restarts) * c.draws_per_restart;
+	if (draws > UINT32_MAX) {
+		throw BinderException("sourcetracker: restarts * draws_per_restart, the draws per sink, must be at most %s "
+		                      "(got %s)",
+		                      std::to_string(UINT32_MAX), std::to_string(draws));
+	}
 
 	// st3's own `jobs = 0` means every core; DuckDB's thread count decides here.
 	int jobs = ResolveThreadsParameter(context, threads, kCaller);
@@ -294,8 +309,9 @@ struct St3ResultDeleter {
 	case ST3_STATUS_ERR_NO_SOURCES:
 		throw InvalidInputException("sourcetracker: %s", message);
 	default:
-		// A panic or allocation failure inside st3 is a library bug, but it is not
-		// DuckDB's: an InternalException would invalidate the whole database
+		// A panic inside st3 is a library bug, but it is not DuckDB's (an
+		// allocation failure in Rust aborts the process instead, before any status
+		// is returned): an InternalException would invalidate the whole database
 		// (ClientContext marks it invalid on ExceptionType::INTERNAL), which is
 		// out of proportion for one failed query.
 		throw InvalidInputException("sourcetracker: st3 internal error during %s: %s", what, message);
@@ -313,30 +329,16 @@ void CheckInterrupt(ClientContext &context) {
 //
 // An Arrow array exported by ArrowAppender and its schema, released on every
 // exit path unless st3 has taken the array. st3_table_from_arrow consumes its
-// three arrays on EVERY status once all six pointers are valid, leaving the
+// three arrays on every status once all six pointers are valid, leaving the
 // caller's struct with a release pointer that must not be called again; Taken()
 // records that.
 // ---------------------------------------------------------------------------
 
 struct ArrowExport {
-	ArrowArray array;
-	ArrowSchema schema;
-	ArrowExport() {
-		array.Init();
-		schema.Init();
-	}
-	~ArrowExport() {
-		if (array.release) {
-			array.release(&array);
-		}
-		if (schema.release) {
-			schema.release(&schema);
-		}
-	}
-	ArrowExport(const ArrowExport &) = delete;
-	ArrowExport &operator=(const ArrowExport &) = delete;
+	ArrowArrayWrapper array;
+	ArrowSchemaWrapper schema;
 	void Taken() {
-		array.release = nullptr;
+		array.arrow_array.release = nullptr;
 	}
 };
 
@@ -370,8 +372,8 @@ void ExportColumns(ClientContext &context, const vector<LogicalType> &types, con
 		chunk.SetCardinality(count);
 		appender.Append(chunk, 0, count, count);
 	}
-	out.array = appender.Finalize();
-	ArrowConverter::ToArrowSchema(&out.schema, types, names, props);
+	out.array.arrow_array = appender.Finalize();
+	ArrowConverter::ToArrowSchema(&out.schema.arrow_schema, types, names, props);
 }
 
 void SetString(Vector &vec, idx_t i, const std::string &s) {
@@ -430,10 +432,11 @@ std::unique_ptr<St3Table, St3TableDeleter> ImportDataset(ClientContext &context,
 	// ArrowAppender::ReleaseArray skip it when the root is released below. This
 	// happens right before the call so no exception can leave the copy dangling.
 	St3Table *raw = nullptr;
-	ArrowArray feature_child = *features.array.children[0];
-	features.array.children[0]->release = nullptr;
-	const St3Status status = st3_table_from_arrow(&coo.array, &coo.schema, &feature_child, features.schema.children[0],
-	                                              &meta.array, &meta.schema, &raw);
+	ArrowArray feature_child = *features.array.arrow_array.children[0];
+	features.array.arrow_array.children[0]->release = nullptr;
+	const St3Status status = st3_table_from_arrow(&coo.array.arrow_array, &coo.schema.arrow_schema, &feature_child,
+	                                              features.schema.arrow_schema.children[0], &meta.array.arrow_array,
+	                                              &meta.schema.arrow_schema, &raw);
 	// Consumed on every status: the three arrays are st3's now; the schemas and
 	// the feature-id root (child already gone) are still ours to release.
 	coo.Taken();
@@ -468,12 +471,12 @@ bool CoversParent(const ArrowArray &child, const ArrowArray &parent) {
 DenseBatch ReadDenseBatch(const St3Result *result,
                           St3Status (*exporter)(const St3Result *, ArrowArray *, ArrowSchema *), const char *what) {
 	ArrowExport out;
-	const St3Status status = exporter(result, &out.array, &out.schema);
+	const St3Status status = exporter(result, &out.array.arrow_array, &out.schema.arrow_schema);
 	if (status != ST3_STATUS_OK) {
 		ThrowSt3(what, status);
 	}
-	const ArrowArray &arr = out.array;
-	const ArrowSchema &schema = out.schema;
+	const ArrowArray &arr = out.array.arrow_array;
+	const ArrowSchema &schema = out.schema.arrow_schema;
 	if (!schema.format || std::strcmp(schema.format, "+s") != 0 || schema.n_children < 1 ||
 	    arr.n_children != schema.n_children || arr.null_count != 0) {
 		BadExport(what, "not a struct batch with a sink_id column");
@@ -535,24 +538,13 @@ DenseBatch ReadDenseBatch(const St3Result *result,
 // which is the dataset dictionary. Only nonzero cells are streamed.
 // ---------------------------------------------------------------------------
 
-struct ArrowStreamHolder {
-	ArrowArrayStream stream {};
-	~ArrowStreamHolder() {
-		if (stream.release) {
-			stream.release(&stream);
-		}
-	}
-	ArrowStreamHolder(const ArrowStreamHolder &) = delete;
-	ArrowStreamHolder &operator=(const ArrowStreamHolder &) = delete;
-	ArrowStreamHolder() = default;
-	[[noreturn]] void Fail(const char *what) {
-		// A failed stream call reports through the stream itself, not st3's
-		// thread-local slot.
-		const char *raw = stream.get_last_error ? stream.get_last_error(&stream) : nullptr;
-		throw InvalidInputException("sourcetracker: st3 contingency stream: %s failed: %s", what,
-		                            (raw && *raw) ? raw : "no message");
-	}
-};
+// A failed stream call reports through the stream itself, not st3's
+// thread-local slot.
+[[noreturn]] void FailStream(ArrowArrayStreamWrapper &stream, const char *what) {
+	const char *raw = stream.arrow_array_stream.get_last_error ? stream.GetError() : nullptr;
+	throw InvalidInputException("sourcetracker: st3 contingency stream: %s failed: %s", what,
+	                            (raw && *raw) ? raw : "no message");
+}
 
 template <typename T>
 const T *ChildValues(const ArrowArray &batch, idx_t child, const char *format, const ArrowSchema &schema) {
@@ -567,31 +559,31 @@ const T *ChildValues(const ArrowArray &batch, idx_t child, const char *format, c
 
 std::vector<std::vector<TallyCell>> ReadContingency(const St3Result *result, idx_t n_sinks, idx_t n_sources,
                                                     idx_t n_features) {
-	ArrowStreamHolder holder;
-	ArrowArrayStream &stream = holder.stream;
+	ArrowArrayStreamWrapper holder;
+	ArrowArrayStream &stream = holder.arrow_array_stream;
 	const St3Status status = st3_result_contingency_stream(result, &stream);
 	if (status != ST3_STATUS_OK) {
 		ThrowSt3("st3_result_contingency_stream", status);
 	}
-	ArrowExport schema_holder;
-	if (stream.get_schema(&stream, &schema_holder.schema) != 0) {
-		holder.Fail("get_schema");
+	ArrowSchemaWrapper schema_holder;
+	if (stream.get_schema(&stream, &schema_holder.arrow_schema) != 0) {
+		FailStream(holder, "get_schema");
 	}
-	const ArrowSchema &schema = schema_holder.schema;
+	const ArrowSchema &schema = schema_holder.arrow_schema;
 	if (!schema.format || std::strcmp(schema.format, "+s") != 0 || schema.n_children != 4) {
 		BadExport("contingency", "not a four-column struct batch");
 	}
 
 	std::vector<std::vector<TallyCell>> tally(n_sinks * n_sources);
 	while (true) {
-		ArrowExport batch;
-		if (stream.get_next(&stream, &batch.array) != 0) {
-			holder.Fail("get_next");
+		ArrowArrayWrapper batch;
+		if (stream.get_next(&stream, &batch.arrow_array) != 0) {
+			FailStream(holder, "get_next");
 		}
-		if (!batch.array.release) {
+		if (!batch.arrow_array.release) {
 			break; // end of stream
 		}
-		const ArrowArray &arr = batch.array;
+		const ArrowArray &arr = batch.arrow_array;
 		if (arr.n_children != 4 || arr.null_count != 0) {
 			BadExport("contingency", "not a four-column struct batch");
 		}
@@ -664,6 +656,7 @@ unique_ptr<GlobalTableFunctionState> SourcetrackerInitGlobal(ClientContext &cont
 			}
 			miint::sourcetracker::CheckDepths(ds, data.config.source_rarefaction_depth,
 			                                  data.config.sink_rarefaction_depth, data.loo);
+			miint::sourcetracker::CheckEnvironments(ds, data.config.collapse == ST3_COLLAPSE_MEAN, data.loo);
 		} catch (const std::invalid_argument &e) {
 			throw InvalidInputException("sourcetracker: %s", e.what());
 		}
@@ -680,7 +673,7 @@ unique_ptr<GlobalTableFunctionState> SourcetrackerInitGlobal(ClientContext &cont
 	config.seed = data.seed >= 0 ? static_cast<uint64_t>(data.seed) : std::random_device {}();
 	St3Result *result_raw = nullptr;
 	// One blocking call; Ctrl-C is honoured only between phases (st3 has no
-	// cancellation hook yet).
+	// cancellation hook).
 	const St3Status run_status = st3_run(table.get(), &config, &result_raw);
 	if (run_status != ST3_STATUS_OK) {
 		ThrowSt3("st3_run", run_status);
