@@ -28,7 +28,8 @@ bool ParseIncludeFilepathParameter(const named_parameter_map_t &named_parameters
 
 // Row-count estimate for a table function that streams files, so the query optimizer knows
 // roughly how big the scan is. Without one, DuckDB assumes a tiny scan and can pick it as a
-// join's build side -- hashing a multi-GB file into memory instead of streaming it.
+// join's build side -- hashing a multi-GB file into memory instead of streaming it, as
+// read_fastx did with a catalogue of bacterial genomes until it ran out of memory.
 //
 // It errs high: an over-estimate makes the optimizer probe the scan, always the
 // safe choice for a streaming source; an under-estimate makes it build a hash table on it.
