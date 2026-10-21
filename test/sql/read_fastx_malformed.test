@@ -21,6 +21,20 @@ SELECT * FROM read_fastx('data/fastq/malformed_qual_missing.fq');
 ----
 malformed_qual_missing.fq: record 'b' (record 2): sequence length 4 does not match quality length 0
 
+# Quality shorter than its sequence. This one set no error flag at all: wrapped-FASTQ reading
+# appended the next line, record c's header, to b's quality, so b came back with "@c" as its
+# last two scores and c was gone. FASTQ records are four lines, so the short line is the error.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_shorter.fq');
+----
+malformed_qual_shorter.fq: record 'b' (record 2): sequence length 8 does not match quality length 6
+
+# The same, where the swallowed header would overshoot the sequence length instead.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_shorter_overshoot.fq');
+----
+malformed_qual_shorter_overshoot.fq: record 'b' (record 2): sequence length 5 does not match quality length 3
+
 # A gzip file cut in half: 497 complete records come back before the cut, which is not the file.
 statement error
 SELECT count(*) FROM read_fastx('data/fastq/truncated.fq.gz');

@@ -89,10 +89,24 @@ private:
 	using StreamVar = std::variant<std::unique_ptr<SeqStreamIn>>;
 #endif
 
+	// Where the record parser is in one stream.
+	struct StreamState {
+		uint64_t records_read = 0;
+		// The previous record's sequence lines ended at the next header, consuming its '>'/'@'.
+		bool header_pending = false;
+		// Nothing parsed yet. Text before the first header is skipped, as kseq++ always has.
+		bool at_start = true;
+	};
+
+	enum class ParseResult { RECORD, END, MALFORMED };
+
+	// Parse one record. On MALFORMED, `problem` says what is wrong with it.
+	template <class Stream>
+	static ParseResult parse_record(Stream &stream, klibpp::KSeq &rec, StreamState &state, std::string &problem);
+
 	// Read up to `n` records. Throws, naming `source` and the record, when the stream fails
-	// rather than ends; `records_read` counts that stream's records so far.
-	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n, const std::string &source,
-	                                             uint64_t &records_read);
+	// rather than ends or a record is malformed.
+	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n, const std::string &source, StreamState &state);
 
 	StreamVar sequence1_reader_;
 	std::optional<StreamVar> sequence2_reader_;
@@ -100,8 +114,8 @@ private:
 	// What each stream is called in errors: its path where there is one.
 	std::string source1_ = "sequence1";
 	std::string source2_ = "sequence2";
-	uint64_t records1_ = 0;
-	uint64_t records2_ = 0;
+	StreamState state1_;
+	StreamState state2_;
 
 	bool paired_;
 	bool first_read_; // Track if we need to return buffered data

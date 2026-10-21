@@ -808,3 +808,93 @@ TEST_CASE("SequenceReader reads a multi-member gzip file to the end", "[Sequence
 	miint::SequenceReader reader(path);
 	REQUIRE(read_all(reader) == 3000);
 }
+
+// FASTQ is read as strict four-line records: header, sequence, '+', quality, one line each.
+// kseq++ reads wrapped FASTQ by appending quality lines until the quality is as long as the
+// sequence, so a quality line that is too short swallowed the next record's header and that
+// record silently vanished (#292). Requiring one quality line turns that into an error at the
+// record that is actually wrong. FASTA keeps wrapped sequence lines.
+TEST_CASE("SequenceReader rejects a quality string shorter than its sequence", "[SequenceReader][error]") {
+	TempFileFixture fixture;
+
+	SECTION("the next header would make up the length") {
+		auto path = "malformed_short_qual.fq";
+		fixture.write_temp_fastq(
+		    path, {fixture.simple_read("a", "ACGT", "IIII"), fixture.simple_read("b", "ACGTACGT", "IIIIII"),
+		           fixture.simple_read("c", "ACGT", "IIII"), fixture.simple_read("d", "ACGT", "IIII")});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(
+		    reader.read(5),
+		    "malformed_short_qual.fq: record 'b' (record 2): sequence length 8 does not match quality length 6");
+	}
+
+	SECTION("the next header would overshoot the length") {
+		auto path = "malformed_short_qual2.fq";
+		fixture.write_temp_fastq(path,
+		                         {fixture.simple_read("a", "ACGT", "IIII"), fixture.simple_read("b", "ACGTA", "III"),
+		                          fixture.simple_read("c", "ACGT", "IIII")});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(
+		    reader.read(5),
+		    "malformed_short_qual2.fq: record 'b' (record 2): sequence length 5 does not match quality length 3");
+	}
+}
+
+TEST_CASE("SequenceReader rejects wrapped FASTQ", "[SequenceReader][error]") {
+	TempFileFixture fixture;
+
+	SECTION("sequence on two lines") {
+		auto path = "wrapped_seq.fq";
+		fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "@b\nACGT\nACGT\n+\nIIIIIIII\n"});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(reader.read(5), "wrapped_seq.fq: record 'b' (record 2): the sequence spans 2 lines; FASTQ "
+		                                    "records must be four lines (wrapped FASTQ is not supported)");
+	}
+
+	SECTION("quality on two lines") {
+		auto path = "wrapped_qual.fq";
+		fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "@b\nACGTACGT\n+\nIIII\nIIII\n"});
+		miint::SequenceReader reader(path);
+		REQUIRE_THROWS_WITH(
+		    reader.read(5),
+		    "wrapped_qual.fq: record 'b' (record 2): sequence length 8 does not match quality length 4");
+	}
+}
+
+TEST_CASE("SequenceReader rejects a line between FASTQ records that is not a header", "[SequenceReader][error]") {
+	// kseq++ skipped anything up to the next '@'. A record whose header line has lost its '@'
+	// went with it, silently.
+	TempFileFixture fixture;
+	auto path = "stray_line.fq";
+	fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "b\nACGT\n+\nIIII\n",
+	                                fixture.simple_read("c", "ACGT", "IIII")});
+	miint::SequenceReader reader(path);
+	REQUIRE_THROWS_WITH(reader.read(5), "stray_line.fq: the line after record 1 is not a record header: 'b'");
+}
+
+TEST_CASE("SequenceReader accepts blank lines between and after FASTQ records", "[SequenceReader]") {
+	TempFileFixture fixture;
+	auto path = "blank_lines.fq";
+	fixture.write_temp_fastq(path,
+	                         {"@a\nACGT\n+\nIIII\n\n", "@b\r\nTTGG\r\n+\r\nHHHH\r\n\r\n", "@c\nCCAA\n+\nGGGG\n\n\n"});
+	miint::SequenceReader reader(path);
+	auto batch = reader.read(5);
+	REQUIRE(batch.size() == 3);
+	CHECK(batch.read_ids[1] == "b");
+	CHECK(batch.sequences1[1] == "TTGG");
+	CHECK(batch.quals1[1].as_string() == "HHHH");
+	CHECK(batch.read_ids[2] == "c");
+}
+
+TEST_CASE("SequenceReader still skips anything before the first FASTA header", "[SequenceReader][FASTA]") {
+	// Old FASTA files may open with ';' comment lines; kseq++ has always skipped them, and
+	// strict FASTQ does not change FASTA.
+	TempFileFixture fixture;
+	auto path = "leading_comment.fa";
+	fixture.write_temp_fastq(path, {";a comment line\n", fixture.simple_fasta("a", "ACGT"), ">b\nAC\nGT\n"});
+	miint::SequenceReader reader(path);
+	auto batch = reader.read(5);
+	REQUIRE(batch.size() == 2);
+	CHECK(batch.read_ids[0] == "a");
+	CHECK(batch.sequences1[1] == "ACGT");
+}

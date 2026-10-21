@@ -80,12 +80,87 @@ static void validate_format_consistency(bool is_fasta1, bool is_fasta2, bool all
 	}
 }
 
-// Read from whichever stream variant is active.
-//
-// kseq++ fails the stream both at the end of the input and on a record it cannot parse, and
-// its read(n) drops the failed record and returns what it has, so a short result looked like
-// end of file (issue #292). Records are read one at a time instead, so the record kseq++
-// rejected is still in hand to name, and each failure is asked which kind it was.
+// kseq++'s KStream separators, protected there: split at any whitespace, or read to the end
+// of the line (dropping a trailing '\r').
+static constexpr char SEP_SPACE = 0;
+static constexpr char SEP_LINE = 2;
+
+// Parse one record, as kseq++'s operator>> does except that a FASTQ record must be exactly
+// four lines: header, sequence, '+', quality (#292). kseq++ reads wrapped FASTQ by appending
+// quality lines until the quality is as long as the sequence, so one short quality line took
+// the next record's header as quality, and that record silently vanished. It also skipped
+// anything up to the next '@', so a record whose header had lost its '@' vanished too. FASTA
+// is parsed as before, wrapped sequence lines included.
+template <class Stream>
+SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp::KSeq &rec, StreamState &state,
+                                                         std::string &problem) {
+	char c = 0;
+	if (!state.header_pending) {
+		if (state.at_start) {
+			// Skip to the first header, as kseq++ does: old FASTA files can open with ';' comments.
+			while ((c = stream.getc()) && c != '>' && c != '@') {
+			}
+		} else {
+			// Only after a FASTQ record: the next line must be a header, though blank lines may come first.
+			while ((c = stream.getc()) && (c == '\n' || c == '\r')) {
+			}
+			if (c && c != '>' && c != '@') {
+				std::string line(1, c);
+				stream.getuntil(SEP_LINE, line, nullptr, true);
+				problem = "the line after record " + std::to_string(state.records_read) + " is not a record header: '" +
+				          line.substr(0, 40) + "'";
+				return ParseResult::MALFORMED;
+			}
+		}
+		state.at_start = false;
+		if (!c) {
+			return ParseResult::END;
+		}
+	}
+	state.header_pending = false;
+	rec.clear();
+	if (!stream.getuntil(SEP_SPACE, rec.name, &c)) {
+		return ParseResult::END;
+	}
+	if (c != '\n') {
+		stream.getuntil(SEP_LINE, rec.comment, nullptr);
+	}
+	size_t sequence_lines = 0;
+	while ((c = stream.getc()) && c != '>' && c != '@' && c != '+') {
+		if (c == '\n') {
+			continue; // skip empty lines
+		}
+		rec.seq += c;
+		stream.getuntil(SEP_LINE, rec.seq, nullptr, true); // the rest of the line
+		sequence_lines++;
+	}
+	if (c == '>' || c == '@') {
+		state.header_pending = true; // the next record's header character is already read
+	}
+	if (c != '+') {
+		return ParseResult::RECORD; // FASTA
+	}
+	while ((c = stream.getc()) && c != '\n') {
+	} // the rest of the '+' line
+	auto record = [&]() {
+		return "record '" + rec.name + "' (record " + std::to_string(state.records_read + 1) + "): ";
+	};
+	if (sequence_lines > 1) {
+		problem = record() + "the sequence spans " + std::to_string(sequence_lines) +
+		          " lines; FASTQ records must be four lines (wrapped FASTQ is not supported)";
+		return ParseResult::MALFORMED;
+	}
+	stream.getuntil(SEP_LINE, rec.qual, nullptr);
+	if (rec.qual.size() != rec.seq.size()) {
+		problem = record() + "sequence length " + std::to_string(rec.seq.size()) + " does not match quality length " +
+		          std::to_string(rec.qual.size());
+		return ParseResult::MALFORMED;
+	}
+	return ParseResult::RECORD;
+}
+
+// Read from whichever stream variant is active, one record at a time, asking each failure
+// what it was: kseq++'s own read(n) took any failure for the end of the file (#292).
 //
 // Errors that originate in our kseq++ read callbacks (duckdb_seq_read /
 // aspera_seq_read) are reported via the thread-local g_seq_read_error
@@ -94,7 +169,7 @@ static void validate_format_consistency(bool is_fasta1, bool is_fasta2, bool all
 // throw out of kseq++'s template-instantiated frames, which previously caused
 // a recursive-terminate abort on the aspera path under some failure modes.
 std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, const std::string &source,
-                                                      uint64_t &records_read) {
+                                                      StreamState &state) {
 #ifdef MIINT_STATIC_BUILD
 	g_seq_read_error.clear();
 #endif
@@ -103,15 +178,15 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 	std::visit(
 	    [&](auto &reader) {
 		    for (int i = 0; i < n; i++) {
-			    auto &rec = result.emplace_back();
-			    *reader >> rec;
-			    if (*reader) {
-				    records_read++;
+			    std::string problem;
+			    const auto parsed = parse_record(*reader, result.emplace_back(), state, problem);
+			    if (parsed == ParseResult::RECORD) {
+				    state.records_read++;
 				    continue;
 			    }
+			    result.pop_back();
 #ifdef MIINT_STATIC_BUILD
 			    if (!g_seq_read_error.empty()) {
-				    result.pop_back();
 				    return; // the callback's own message is raised below
 			    }
 #endif
@@ -125,16 +200,12 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 				    input_error = "the stream reported a read error";
 			    }
 			    if (!input_error.empty()) {
-				    throw std::runtime_error(source + ": read failed after record " + std::to_string(records_read) +
-				                             ": " + input_error);
+				    throw std::runtime_error(source + ": read failed after record " +
+				                             std::to_string(state.records_read) + ": " + input_error);
 			    }
-			    if (reader->tqs()) {
-				    throw std::runtime_error(source + ": record '" + rec.name + "' (record " +
-				                             std::to_string(records_read + 1) + "): sequence length " +
-				                             std::to_string(rec.seq.size()) + " does not match quality length " +
-				                             std::to_string(rec.qual.size()));
+			    if (parsed == ParseResult::MALFORMED) {
+				    throw std::runtime_error(source + ": " + problem);
 			    }
-			    result.pop_back();
 			    return; // end of input
 		    }
 	    },
@@ -156,7 +227,7 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 	sequence1_reader_ = std::make_unique<SeqStreamIn>(path1);
 
 	// Check if first file is empty by attempting to peek at first record
-	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, records1_);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, state1_);
 	bool is_empty1 = buffered_read1_.empty();
 	bool is_fasta1 = !is_empty1 && buffered_read1_[0].qual.empty();
 
@@ -172,7 +243,7 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 		sequence2_reader_.emplace(std::make_unique<SeqStreamIn>(path2.value()));
 
 		// Check if second file is empty and detect format
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, records2_);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, state2_);
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
@@ -205,7 +276,7 @@ SequenceReader::SequenceReader(DuckDBSeqStreamHandle stream1, DuckDBSeqStreamHan
 	stream1.release();
 	sequence1_reader_ = std::move(kstream1);
 
-	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, records1_);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, state1_);
 	bool is_empty1 = buffered_read1_.empty();
 	bool is_fasta1 = !is_empty1 && buffered_read1_[0].qual.empty();
 
@@ -222,7 +293,7 @@ SequenceReader::SequenceReader(DuckDBSeqStreamHandle stream1, DuckDBSeqStreamHan
 		stream2_or_null.release();
 		sequence2_reader_.emplace(std::move(kstream2));
 
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, records2_);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, state2_);
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
@@ -254,14 +325,14 @@ SequenceReader::SequenceReader(AsperaSeqStreamHandle stream1, AsperaSeqStreamHan
 		sequence2_reader_.emplace(std::move(kstream2));
 	}
 
-	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, records1_);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, state1_);
 	if (buffered_read1_.empty()) {
 		throw std::runtime_error("Empty stream");
 	}
 	bool is_fasta1 = buffered_read1_[0].qual.empty();
 
 	if (paired_) {
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, records2_);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, state2_);
 		if (buffered_read2_.empty()) {
 			throw std::runtime_error("Empty stream (sequence2)");
 		}
@@ -390,7 +461,7 @@ SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes)
 	while ((int)batch.size() < n && cumulative_bytes < max_bytes) {
 		const int remaining = n - (int)batch.size();
 		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
-		auto more = read_stream(sequence1_reader_, poll_n, source1_, records1_);
+		auto more = read_stream(sequence1_reader_, poll_n, source1_, state1_);
 		max_poll_count_ = more.size() > max_poll_count_ ? more.size() : max_poll_count_;
 		if (more.empty()) {
 			break;
@@ -485,8 +556,8 @@ SequenceRecordBatch SequenceReader::read_pe(const int n, const size_t max_bytes)
 	while ((int)batch.size() < n && cumulative_bytes < max_bytes) {
 		const int remaining = n - (int)batch.size();
 		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
-		auto more1 = read_stream(sequence1_reader_, poll_n, source1_, records1_);
-		auto more2 = read_stream(sequence2_reader_.value(), poll_n, source2_, records2_);
+		auto more1 = read_stream(sequence1_reader_, poll_n, source1_, state1_);
+		auto more2 = read_stream(sequence2_reader_.value(), poll_n, source2_, state2_);
 		max_poll_count_ = more1.size() > max_poll_count_ ? more1.size() : max_poll_count_;
 
 		if (more1.empty() && more2.empty()) {
