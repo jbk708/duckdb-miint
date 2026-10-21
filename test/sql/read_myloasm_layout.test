@@ -1,5 +1,5 @@
 # name: test/sql/read_myloasm_layout.test
-# description: read_myloasm_layout returns the read slices each myloasm contig is built from, with 1-based contig and read intervals
+# description: read_myloasm_layout returns the read slices each myloasm contig is built from, with 1-based half-open contig and read intervals
 # group: [sql]
 
 require miint
@@ -91,7 +91,7 @@ u982ctg	true	true
 # --- Intent: reverse-strand slices are flipped onto the read as sequenced ---
 
 # Each lina/linb/low read is an exact copy of genome [g_start, g_stop), 0-based (name:
-# s<i>_<kind>_<g_start>_<g_stop>_<f|r>), reversed when 'r'. Placing a slice's 1-based read
+# s<i>_<kind>_<g_start>_<g_stop>_<f|r>), reversed when 'r'. Placing a slice's 1-based half-open read
 # interval back on the genome must put it where the contig says: each of these contigs runs opposite
 # to the genome, so contig position + genome stop is one constant per contig, up to the bases
 # the unpolished contig gains at its read junctions (126, 134 and 20 here, its unpolished minus
@@ -150,7 +150,7 @@ FROM (SELECT *, max(layout_order) OVER (PARTITION BY contig_id) AS last_order
 # Round-2 breakpoint lines, written below (s00913 +split1 cut at [1000, 1200) and
 # [3000, 3100); s00000 cut at [4000, 4100)), and a GFA with one more contig built from two of
 # the pieces they create. Breakpoints and slices are 0-based on the piece, as myloasm writes
-# them; the read intervals they give are 1-based on the read:
+# them; the read intervals they give are 1-based half-open on the read:
 #   s00913 +split1+split1 starts 7317 bases into its read (1800 bp). Its slice 0-1500 is on
 #     the piece's reverse complement, so [300, 1800) forward on the piece  -> [7618, 9118)
 #   s00000 +split1 starts 4100 bases in. Slice 300-1500, '+'               -> [4401, 5601)

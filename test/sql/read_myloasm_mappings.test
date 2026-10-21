@@ -1,5 +1,5 @@
 # name: test/sql/read_myloasm_mappings.test
-# description: read_myloasm_mappings returns myloasm's final read-to-contig mappings, with 1-based contig and read intervals
+# description: read_myloasm_mappings returns myloasm's final read-to-contig mappings, with 1-based half-open contig and read intervals
 # group: [sql]
 
 require miint
@@ -168,7 +168,7 @@ WHERE read_id = 's00007_lina_1002721_1016739_r';
 
 # Round-2 breakpoint lines, written below, plus PAF records for the pieces they create,
 # appended to the real PAF in myloasm's format. Breakpoints and PAF intervals are 0-based on
-# the piece, as myloasm writes them; the expected read intervals are 1-based on the read:
+# the piece, as myloasm writes them; the expected read intervals are 1-based half-open on the read:
 #   s00913 +split1 starts 6117 bases into its read. Round 2 cuts it at [1000, 1200) and
 #   [3000, 3100):
 #     +split1+split0  starts with its parent:  offset 6117,  [0, 1000) +  -> [6118, 7118)

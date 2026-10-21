@@ -40,7 +40,7 @@ bool IsTagType(char c) {
 // stays free of DuckDB headers: the C++ tests binary links it without DuckDB, and in a DEBUG
 // build even StringUtil's inline helpers reach DuckDB's exception code.
 
-// [0-9]. The locale does not change isdigit.
+// [0-9]. The C standard keeps isdigit to these ten in every locale.
 bool IsDigit(char c) {
 	return std::isdigit(static_cast<unsigned char>(c)) != 0;
 }
@@ -73,7 +73,8 @@ bool AllPrintableOrSpace(std::string_view s) {
 
 namespace {
 
-// [-+]?[0-9]+
+// [-+]?[0-9]+. Not from_chars, which refuses a leading '+', nor strtoll, which skips leading
+// white space.
 bool IsInteger(std::string_view s) {
 	size_t i = 0;
 	if (i < s.size() && (s[i] == '-' || s[i] == '+')) {

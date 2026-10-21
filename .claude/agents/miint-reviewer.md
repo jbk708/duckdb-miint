@@ -123,7 +123,7 @@ Only rules whose trigger appears in the diff can fire.
 | A mutex, condition variable, atomic, or shared state between DuckDB threads; a query issued while a lock is held | R3 |
 | `GetString()` / `GetData<string_t>` / `FlatVector::GetData` on an input vector; recursion over data-driven depth | R3 |
 | `sam_read1` / `bam_read1` / `bgzf_*` return handling; predicates on `cigar = ''` or `'*'` | R3 |
-| `test/sql/**`, `test/cpp/**`, `test/shell/**`, committed test data under `data/**` | R4 |
+| `test/sql/**`, `test/cpp/**`, `test/shell/**`, committed test data under `data/**`, a fixture produced by an external tool | R4 |
 | A new `require-env` or `require <extension>`; a detection or export in `run_tests.sh` | R4, R1 |
 | A numeric literal or tolerance in a test assertion; a parity, round-trip or port test; `typeof()` / `DESCRIBE` on id columns; Catch2 `CHECK` on a size followed by indexing | R4 |
 | A glob path in `test/sql/**` with `filepath` in the expected output | R4 |
@@ -139,12 +139,11 @@ Only rules whose trigger appears in the diff can fire.
 | Logic that parses or writes a bioinformatics format, computes over sequences, alignments, intervals, trees or feature tables, or builds COO / sparse tables | R6 |
 | A coordinate or interval column in a function's output; a reader of a format that carries coordinates | R9 |
 | A MAP or key-value column holding a format's optional fields; a parser of typed fields | R2 |
-| A new or regenerated fixture under `data/**`; a generator under `test/scripts/**`; a fixture produced by an external tool | R4, R8 |
 | A `switch` or comparison on a format's code letters; a hand-written character-class, case or number helper | R6 |
 | Two structurally similar code paths; a repeated literal or error message; a helper in a feature-named file | R6, R8 |
 | Any new or changed doc, docstring or comment; a test header comment; a `data/**/README*` | R7 |
 | A user-facing string: an exception message, a `docs/` page, a parameter description | R7, R9 |
-| A new file, moved code, feature- or platform-specific naming, a one-shot script, a benchmark tree | R8 |
+| A new file, moved code, feature- or platform-specific naming, a one-shot script, a fixture generator under `test/scripts/**`, a benchmark tree | R8 |
 | A timing, throughput or memory claim in a comment, doc, commit message, benchmark table or PR description | R10 |
 | An external tool's behaviour that correctness depends on | Outside the rule set |
 
@@ -231,7 +230,7 @@ Safety must not rest on convention or a comment; and a guard must be real, so do
 - **Warnings accumulate.** `miint_warnings()` accumulates within a session, so a test asserts `count(*) >= 1` for a warning it expects.
 - **Catch2:** a size check followed by indexing uses `REQUIRE`; `CHECK` continues after failure and the index can crash the binary.
 - **Ports.** An oracle proves outputs on the inputs it contains; paths of a port no fixture reaches are checked by reading the reference against the port, and the PR says which paths those are [soft].
-- **Fixtures are fixed.** A fixture's inputs are committed with it, so a test never depends on regenerating them. A large text fixture (sequences, an assembly graph, a log) is committed compressed, and a test that needs the file as a tool writes it decompresses a copy into the test directory (sqllogictest's `unzip`). A generator script is not kept once its inputs are committed and its commands fit in the fixture's README.
+- **Fixtures are fixed.** A fixture's inputs are committed with it, so a test never depends on regenerating them. A large text fixture (sequences, an assembly graph, a log) is committed compressed, and a test that needs the file as a tool writes it decompresses a copy into the test directory (sqllogictest's `unzip`).
 - **An external tool's fixture comes from the build the repository vendors**, when it vendors one, so the version matches what miint embeds. When miint's own function for the tool cannot produce the fixture, the README says why.
 - **Remote services.** A mock accepts URL shapes, result types and authentication modes the real server rejects, so the test plan says whether a live run happened (PR-level check 7).
 
@@ -277,7 +276,7 @@ Flag:
 
 - **General code does not live under, or take its name from, one feature.** A COO builder written for one analysis is a shared utility; name and scope it by what it does.
 - **A function is named by what it does, not by the algorithm it currently uses**, when the algorithm is a parameter.
-- **A one-shot script or benchmark tree is not a permanent module**; ask whether it should be committed at all (PR-level check 5).
+- **A one-shot script or benchmark tree is not a permanent module**; ask whether it should be committed at all (PR-level check 5). A fixture generator is one once the fixture's inputs are committed and its commands fit in the fixture's README.
 - **A parameter or column threaded through for a single possible value**: is the other state reachable?
 
 ### R9 — Domain-term precision [strong]

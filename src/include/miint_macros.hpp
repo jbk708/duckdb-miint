@@ -149,7 +149,7 @@ const std::string MIINT_GFA_INTEGER_TAG = // NOLINT
     "     ELSE TRY_CAST(tags[key] AS BIGINT) "
     "END; ";
 
-// The record a view's error names. As a macro argument it is built only when the error is.
+// The record a view's error names.
 const std::string MIINT_GFA_SEGMENT_LABEL = // NOLINT
     "CREATE OR REPLACE MACRO _miint_gfa_segment_label(fields) AS "
     "printf('read_gfa_segments: segment ''%s''', fields[1]); ";

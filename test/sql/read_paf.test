@@ -128,11 +128,12 @@ SELECT tag_nm, tag_de, tag_tp, tags FROM read_paf('__TEST_DIR__/untyped_ok.paf')
 ----
 5	0.25	S	{zz=7}
 
-# Every typed tag at once, each with its own value, so a key or a type letter wrong in the
-# table moves a value into the map or fails the line.
+# Every typed tag at once, each with its own value, so a key or a type letter wrong in
+# read_paf's list of minimap2 tags moves a value into the map or fails the line. NMx and dev
+# share a typed key's first two characters and are not typed tags, so they stay in the map.
 statement ok
 COPY (SELECT * FROM (VALUES
-    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\ttp:A:S\tcm:i:1\ts1:i:2\ts2:i:3\tNM:i:4\tMD:Z:50A49\tAS:i:5\tms:i:6\tnn:i:7\tts:A:+\tcg:Z:100M\tcs:Z::100\tdv:f:0.25\tde:f:0.5\trl:i:8\tzd:i:3\tzz:i:9')
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\ttp:A:S\tcm:i:1\ts1:i:2\ts2:i:3\tNM:i:4\tMD:Z:50A49\tAS:i:5\tms:i:6\tnn:i:7\tts:A:+\tcg:Z:100M\tcs:Z::100\tdv:f:0.25\tde:f:0.5\trl:i:8\tzd:i:10\tzz:i:9\tNMx:i:1\tdev:f:0.1')
 ) t(line)) TO '__TEST_DIR__/every_tag.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
 
 query TIIIITIIITTTRRIIT
@@ -140,10 +141,11 @@ SELECT tag_tp, tag_cm, tag_s1, tag_s2, tag_nm, tag_md, tag_as, tag_ms, tag_nn, t
        tag_dv, tag_de, tag_rl, tag_zd, tags
 FROM read_paf('__TEST_DIR__/every_tag.paf');
 ----
-S	1	2	3	4	50A49	5	6	7	+	100M	:100	0.25	0.5	8	3	{zz=9}
+S	1	2	3	4	50A49	5	6	7	+	100M	:100	0.25	0.5	8	10	{zz=9, NMx=1, dev=0.1}
 
-# The SAM grammar allows an integer a sign and leading zeros, and a float any form IsFloat
-# accepts (sam_style_tags.cpp); each must read as its number.
+# The SAM grammar allows an integer a sign and leading zeros. A float may also be a signed
+# nan, inf or infinity in any case, as htslib reads one, and one too large for a DOUBLE is an
+# infinity, as htslib's strtod gives. Each must read as its number.
 statement ok
 COPY (SELECT * FROM (VALUES
     (E'a\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:i:+7\tcm:i:007\tde:f:nan'),
@@ -155,11 +157,12 @@ COPY (SELECT * FROM (VALUES
 ) t(line)) TO '__TEST_DIR__/number_forms.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
 
 query TIITT
-SELECT read_id, tag_nm, tag_cm, isnan(tag_de), CASE WHEN isinf(tag_de) THEN sign(tag_de)::VARCHAR ELSE tag_de::VARCHAR END
+SELECT read_id, tag_nm, tag_cm, isnan(tag_de),
+       CASE WHEN isnan(tag_de) THEN 'nan' WHEN isinf(tag_de) THEN sign(tag_de)::VARCHAR ELSE tag_de::VARCHAR END
 FROM read_paf('__TEST_DIR__/number_forms.paf') ORDER BY read_id;
 ----
 a	7	7	true	nan
-b	0	NULL	true	-nan
+b	0	NULL	true	nan
 c	NULL	NULL	false	1
 d	NULL	NULL	false	-1
 e	NULL	NULL	false	0.5
@@ -329,9 +332,11 @@ WHERE sam.reference = p.reference AND sam.position = p.position AND sam.stop_pos
 ----
 6
 
-# Both intervals cut their bases with substr as they are, no + 1 on either: each read is an
-# exact copy of the reference slice it aligns to, so its aligned bases are that slice's, reverse
-# complemented on '-'. A 0-based query_start would cut one base short and shifted.
+# Both intervals cut their bases with substr as they are, no + 1 on either: each read's aligned
+# block is an exact copy of the reference slice it aligns to, reverse complemented on '-'. A
+# 0-based interval fails every read. A start that alone were 0-based fails ovhrev_17000_20000,
+# the one block that does not start at its read's first base (substr at 0 takes one base
+# fewer, which hides the shift at the read's start).
 query I
 SELECT count(*)
 FROM read_paf('data/paf/k12_minimap2.paf') p

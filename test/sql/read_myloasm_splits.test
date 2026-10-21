@@ -1,5 +1,5 @@
 # name: test/sql/read_myloasm_splits.test
-# description: read_myloasm_splits returns myloasm's chimera breakpoints as 1-based intervals on the original read
+# description: read_myloasm_splits returns myloasm's chimera breakpoints as 1-based half-open intervals on the original read
 # group: [sql]
 
 require miint

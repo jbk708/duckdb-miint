@@ -114,6 +114,8 @@ void TakeTypedTags(std::vector<miint::SamStyleTag> &tags, std::vector<ReadPafTab
 			}
 			break;
 		case TagType::Float:
+			// DuckDB's cast reads every form the float grammar accepts, one too large for a DOUBLE
+			// as an infinity (as htslib's strtod does), so this fails only if that changes.
 			if (!TryCast::Operation<string_t, double>(text, out.real, false)) {
 				throw std::runtime_error("tag '" + tag.key + "' value '" + tag.value + "' is not a number " +
 				                         ColumnName(spec) + " can hold");
