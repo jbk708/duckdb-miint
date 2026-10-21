@@ -152,7 +152,8 @@ void TakeArray(ArrowArray &src, ArrowSchema &src_schema, OwnedArrowArray &dst) {
 }
 
 void ThrowSc(const char *what, sc_context_t *ctx, sc_status_t status) {
-	const char *msg = ctx ? sc_context_last_error(ctx) : nullptr;
+	// A call with no context records its error on the calling thread instead.
+	const char *msg = ctx ? sc_context_last_error(ctx) : sc_thread_last_error();
 	throw InvalidInputException("%s: sc error %d%s%s", what, static_cast<int>(status), msg ? ": " : "", msg ? msg : "");
 }
 

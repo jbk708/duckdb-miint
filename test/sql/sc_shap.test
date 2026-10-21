@@ -451,10 +451,11 @@ SELECT * FROM shap('shp_fanned', 'shp_models', name := 'reg');
 ----
 shap: 1 duplicate (sample_id, feature_id) cell(s) in 'shp_fanned'
 
-# A model blob is untrusted input. sc rejects non-finite numbers in one, but
-# finite covers can still overflow: a root cover of 1e-300 over a child of 1e300
-# drives TreeSHAP to inf and NaN. Such an attribution explains nothing, and a
-# NaN cannot be put in waterfall order, so it is an error rather than a row.
+# A model blob is untrusted input. Finite covers can still overflow: a root
+# cover of 1e-300 over a child of 1e300 would drive TreeSHAP to inf and NaN. sc's
+# loader refuses covers that are not their children's sum, so such a model fails
+# at load, before any attribution. shap's own check for a non-finite
+# attribution stays behind it.
 statement ok
 CREATE TABLE nf_counts AS
   SELECT 's' || i AS sample_id, 'f' || j AS feature_id, (i * j)::DOUBLE AS value
@@ -487,7 +488,7 @@ true
 statement error
 SELECT * FROM shap('nf_counts', 'nf_bad');
 ----
-shap: non-finite attribution -inf for sample 's1', feature 'f1'; the model in 'nf_bad' is malformed
+shap: sc error -2: deserialize: tree 0: invalid input: from_sklearn: internal node 0 cover
 
 statement error
 SELECT * FROM shap('shp_few', 'shp_models', name := 'reg', threads := -1);

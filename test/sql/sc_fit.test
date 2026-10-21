@@ -138,6 +138,19 @@ SELECT * FROM fit_regressor('Joe''s counts', 'short_metadata', name := 'm8');
 ----
 CREATE VIEW shared AS SELECT DISTINCT sample_id FROM "Joe's counts" SEMI JOIN short_metadata USING (sample_id);
 
+# Finite targets this large overflow a node's f64 statistics. The model would
+# hold an infinite value its own loader refuses, so the fit is refused instead
+# of storing a model nothing can read back.
+statement ok
+CREATE TABLE huge_targets AS
+  SELECT DISTINCT sample_id, CASE WHEN sample_id IN ('Sample1', 'Sample3', 'Sample5') THEN 1.7e308 ELSE -1.7e308 END AS value
+  FROM train_data;
+
+statement error
+SELECT * FROM fit_regressor('train_data', 'huge_targets', n_estimators := 5, name := 'huge');
+----
+the targets are too large in magnitude for f64 node statistics; rescale them
+
 # A duplicated join key fans out every cell for that sample. Summing would
 # silently inflate the counts, so this errors and shows the values -- identical
 # ones point at a fanout, differing ones at genuine repeat measurements.

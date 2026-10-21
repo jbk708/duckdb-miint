@@ -1279,7 +1279,10 @@ if(WIN32 AND MINGW)
     list(APPEND GLUE_RUSTFLAGS_LIST "-C" "link-arg=-L${GLUE_MINGW_STUB_DIR}")
 endif()
 
-set(GLUE_ENV_ARGS "")
+# sc-capi's build.rs writes sc.h to SC_HEADER_DIR; without it the header lands
+# in Cargo's OUT_DIR, where no include path finds it.
+set(SC_HEADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/sc_include)
+set(GLUE_ENV_ARGS "SC_HEADER_DIR=${SC_HEADER_DIR}")
 if(GLUE_RUSTFLAGS_LIST)
     string(JOIN " " GLUE_RUSTFLAGS_STR ${GLUE_RUSTFLAGS_LIST})
     list(APPEND GLUE_ENV_ARGS "RUSTFLAGS=${GLUE_RUSTFLAGS_STR}")
@@ -1291,11 +1294,7 @@ endif()
 if(EMSCRIPTEN AND MIINT_WASM_NATIVE_EH)
     list(APPEND GLUE_ENV_ARGS "RUSTC_BOOTSTRAP=1")
 endif()
-if(GLUE_ENV_ARGS)
-    set(GLUE_BUILD_ENV ${CMAKE_COMMAND} -E env ${GLUE_ENV_ARGS})
-else()
-    set(GLUE_BUILD_ENV)
-endif()
+set(GLUE_BUILD_ENV ${CMAKE_COMMAND} -E env ${GLUE_ENV_ARGS})
 
 set(GLUE_LIB_PATH ${GLUE_TARGET_DIR}/${GLUE_LIB_SUBDIR}/${GLUE_LIB_NAME})
 
@@ -1320,7 +1319,7 @@ ExternalProject_Add(
     # (Clean builds — CI's fresh ubuntu-latest runners, or `make clean` locally —
     # were always correct; this only closes the incremental-build footgun.)
     BUILD_ALWAYS 1
-    BUILD_BYPRODUCTS ${GLUE_LIB_PATH}
+    BUILD_BYPRODUCTS ${GLUE_LIB_PATH} ${SC_HEADER_DIR}/sc.h
 )
 
 # `rype` is the sole IMPORTED STATIC target for the merged archive. The
@@ -1516,13 +1515,13 @@ endif()
 set(RYPE_LIB_PATH ${GLUE_LIB_PATH})
 
 # adapted kseq++ include use from strobealign
-# ext/sc/include holds sc.h, a cbindgen build product (gitignored in sc) that
-# sc-capi's build.rs writes during the rust-glue build; a fresh clone lacks it.
+# SC_HEADER_DIR holds sc.h, which sc-capi's build.rs generates with cbindgen
+# during the rust-glue build; a fresh build directory lacks it.
 # A target compiling a file that includes it must build after
 # miint_rust_glue_build: the extension targets do through their `rype` link,
 # and `tests` through its own add_dependencies.
 include_directories(src/include third_party/microtar ext ext/WFA2-lib ${CMAKE_CURRENT_SOURCE_DIR}/ext/rype
-                    ${CMAKE_CURRENT_SOURCE_DIR}/ext/sc/include)
+                    ${SC_HEADER_DIR})
 if(MIINT_ENABLE_SYLPH)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ext/sylph)
 endif()
