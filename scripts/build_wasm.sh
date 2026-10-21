@@ -78,7 +78,7 @@ fi
 
 EMCC_VERSION=$(emcc --version 2>&1 | head -1 | grep -oP '\d+\.\d+\.\d+' || echo "unknown")
 echo "=== WASM build (emcc $EMCC_VERSION) ==="
-echo "    CI uses emsdk 3.1.71"
+echo "    CI uses emsdk 6.0.9"
 echo ""
 
 cd "$REPO_DIR"
