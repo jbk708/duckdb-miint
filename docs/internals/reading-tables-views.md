@@ -114,6 +114,17 @@ checking for before writing a caveat: `mzml_peak_pair` already suffixed its two 
 tables from a process-wide counter, so it needed a `HelperTempRelation` guard and
 nothing else.
 
+## Streaming a relation
+
+`conn.Query()` returns a `MaterializedQueryResult`: the whole relation in memory. To
+stream, use `conn.SendQuery(sql)` and call `result->Fetch()` until it returns null; the
+result is a `StreamQueryResult`. A prepared `SELECT` streams too when executed with
+`allow_stream_result` true, which is `PreparedStatement::Execute`'s default; passing
+false materializes (measured on v1.5.5: a `StreamQueryResult` and a
+`MaterializedQueryResult` respectively). Precedents: `src/alignment_slice.cpp` and
+`src/rype_input_stream.cpp`. Check streaming by measurement: peak RSS stays flat as the
+input grows.
+
 ## Read the relation ONCE (#229)
 
 A relation passed by name is not guaranteed to return the same rows twice. Reading
@@ -136,10 +147,24 @@ Three remedies are in use. Pick by what the consumer actually needs:
    `per_subject_database` path uses this; it replaced a
    `ORDER BY ... LIMIT n OFFSET k` pager, which is why no such pager exists in
    `sequence_table_reader.hpp` any more.
-2. **One pass into a shard-keyed TEMP snapshot** — `MaterializeShardedQueryReads`.
-   For consumers that genuinely need repeated access *by key* and already
-   materialize comparable volume. `align_minimap2_sharded` uses this; it also
-   removed that function's N-scans-of-the-query-relation behaviour.
+2. **One pass into a TEMP snapshot, replayed as streams** — `MaterializeQueryReads`
+   plus a `QuerySequenceStream` per replay. For consumers that genuinely need
+   repeated passes. `align_minimap2` with a multi-part index replays the whole
+   snapshot once per part. `align_minimap2_sharded` streams it once per shard and
+   part, filtered by `BuildShardReadsSelect` — and snapshots its **routing**
+   relation (`read_to_shard`) the same way, because that filter re-reads routing
+   on exactly the same schedule as the reads. Note that a snapshot is only as
+   faithful as its DDL: `MaterializeSelectIntoTemp` has to re-emit `COLLATE`
+   explicitly, because `LogicalType::ToString()` renders a collated VARCHAR as
+   plain `VARCHAR` and the lost collation turns every later comparison
+   case-sensitive without an error. Snapshot the relation itself,
+   **never** a join that fans it out: an earlier `align_minimap2_sharded`
+   snapshotted `query JOIN read_to_shard`, one copy of each read per shard. With
+   all-shards routing (1M HiFi reads × 1000 shards) that was about a thousand
+   copies of the corpus, >8 TB spilled before the first alignment. The per-shard
+   filter needs care too. A JOIN (or `IN` in WHERE) can be flipped to build its
+   hash table on the snapshot side, sequences included, once per shard.
+   `BuildShardReadsSelect` explains the MARK-join shape that prevents that.
 3. **Keep streaming and fail loud** — for consumers whose whole value is bounded
    memory, where buffering would be the worse bug. `align_bowtie2_sharded` uses
    this: it counts reads delivered per shard and throws when the cursor comes up
@@ -150,6 +175,9 @@ from a related table. `align_bowtie2_sharded` counts
 `query JOIN read_to_shard`, deliberately not `COUNT(*)` over `read_to_shard`
 alone — a mapping that legitimately lists reads absent from the query relation
 would otherwise look like data loss and fail a valid workload.
+
+Removing a snapshot moves every query that read it into the single pass; re-pointing
+those queries at the source relation turns one read into several.
 
 ### Audit status
 
@@ -167,8 +195,8 @@ before trusting it. `test/sql/rype_single_read.test` documents both forms.
 
 | Reader | Reads relation | Status |
 | --- | --- | --- |
-| `align_minimap2` (default + `per_subject_database`) | once | fixed, remedy (1) |
-| `align_minimap2_sharded` | once | fixed, remedy (2) |
+| `align_minimap2` (default + `per_subject_database`) | once | fixed, remedy (1); multi-part index uses remedy (2) |
+| `align_minimap2_sharded` | query once; routing once in the scan, plus a separate bind-time scan for shard discovery | fixed, remedy (2) on both relations |
 | `align_bowtie2_sharded` | once per shard | fixed by remedy (3) — fails loud |
 | `rype_classify`, `rype_log_ratio`, `rype_extract_*` | once | fixed, remedy (1) — guarded by `test/sql/rype_single_read.test` |
 | `per_sample_table_function` (`DiscoverSamples` + per-sample re-read) | once per sample | **exposed** — shared by `woltka_ogu`, `sylph_profile`, `detect_chimera_uchime`, `align_abpoa`, `consensus_abpoa`, `align_mafft`, `uchime_denovo`, `deblur`, `massql` |
@@ -226,6 +254,31 @@ interrupt flag); and DuckDB has no statement-timeout setting. Stock DuckDB
 silently returns 0 rows for the same construct, which is its own defect.
 
 The user-facing remedy is to materialize first — `.read_all()`, or a TEMP table.
+
+## CTEs: reject them in Bind
+
+A CTE exists only in the binder of the query that defines it. It is not a catalog
+object, and no helper connection can see it, so a relation name that means a CTE
+can never be read by this recipe. Left alone, it fails in one of two ways: "does
+not exist", or — when a table or view of the same name exists — the function
+silently reads *that* instead of the CTE SQL scoping says the name refers to.
+
+So every relation-name argument calls `RejectCTERelationName(input, name)`
+(`src/include/catalog_utils.hpp`) in `Bind`, on the line after the name is
+extracted and before anything resolves it. It checks the caller's binder
+(`TableFunctionBindInput::binder`) the way `Binder::Bind(BaseTableRef)` does, so it
+follows SQL scoping. A view body cannot see the caller's CTEs. Inside a CTE's own
+body, or a recursive CTE's anchor, the name still means the catalog relation:
+DuckDB marks that self-binding `CANNOT_BE_REFERENCED`. Neither case is rejected. COPY
+options have no binder and no CTE in scope, so they need nothing.
+
+When adding a relation-name argument, add a case for it to
+`test/sql/cte_relation_name_guard.test` (or the `_<feature>` sibling if the
+function is registered only with an optional dependency). Each case passes the CTE
+in exactly one argument, so it fails if that argument's guard is missing.
+
+Actually *reading* a CTE needs a `LogicalType::TABLE` in-out sibling per function
+and cannot be applied mechanically — see #286.
 
 ## Schema Validation for Tables/Views
 

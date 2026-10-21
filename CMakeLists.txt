@@ -1139,6 +1139,23 @@ set(GLUE_CONFIGURE_CMD "")
 # MIINT_WASM_RUST_TOOLCHAIN above); propagated to the build via RUSTUP_TOOLCHAIN.
 set(GLUE_RUSTUP_TOOLCHAIN "")
 if(EMSCRIPTEN)
+    # Match the C++ side's exception model: docs/internals/embedded-tools.md,
+    # "Emscripten exceptions", says why. The flag, not the platform name,
+    # decides: extension-ci-tools builds wasm_threads without it. Recorded in the
+    # cache for scripts/build_wasm.sh's import check.
+    if(CMAKE_CXX_FLAGS MATCHES "-fwasm-exceptions")
+        set(MIINT_WASM_NATIVE_EH ON CACHE INTERNAL "Rust glue built with wasm-native exceptions")
+    else()
+        set(MIINT_WASM_NATIVE_EH OFF CACHE INTERNAL "Rust glue built with wasm-native exceptions")
+    endif()
+    # wasm_eh is the platform we ship, and its glue must not fall back to JS
+    # exceptions because a flag went missing.
+    if(DUCKDB_EXPLICIT_PLATFORM STREQUAL "wasm_eh" AND NOT MIINT_WASM_NATIVE_EH)
+        message(FATAL_ERROR
+            "DUCKDB_EXPLICIT_PLATFORM is wasm_eh, but CMAKE_CXX_FLAGS (\"${CMAKE_CXX_FLAGS}\") lacks "
+            "-fwasm-exceptions, so the Rust glue would be built with JS exceptions. extension-ci-tools "
+            "sets the flag in WASM_CXX_EH_FLAGS; configure wasm_eh through its makefile (make wasm_eh).")
+    endif()
     find_program(RUSTUP rustup)
     set(GLUE_CARGO_TARGET_FLAG "--target" "wasm32-unknown-emscripten")
     set(GLUE_LIB_SUBDIR "wasm32-unknown-emscripten/release")
@@ -1157,11 +1174,27 @@ if ! rustup toolchain list | grep -q "^${ver}"; then
     rustup toolchain install "${ver}" --profile minimal
 fi
 rustup target add --toolchain "${ver}" wasm32-unknown-emscripten
-rustup component add --toolchain "${ver}" rust-src
+# Wasm-native exceptions rebuild std from its source (-Zbuild-std).
+if [ "$2" = "rust-src" ]; then
+    rustup component add --toolchain "${ver}" rust-src
+fi
 ]=])
-        set(GLUE_CONFIGURE_CMD sh ${GLUE_WASM_RUST_PIN_SH} ${MIINT_WASM_RUST_TOOLCHAIN})
+        # rust-src goes on the command line, not only in the script, because
+        # ExternalProject re-runs this step when its command changes but not
+        # when the script's contents do.
+        set(GLUE_RUST_SRC_ARG "")
+        if(MIINT_WASM_NATIVE_EH)
+            set(GLUE_RUST_SRC_ARG "rust-src")
+        endif()
+        set(GLUE_CONFIGURE_CMD sh ${GLUE_WASM_RUST_PIN_SH} ${MIINT_WASM_RUST_TOOLCHAIN} ${GLUE_RUST_SRC_ARG})
         set(GLUE_RUSTUP_TOOLCHAIN ${MIINT_WASM_RUST_TOOLCHAIN})
         message(STATUS "Rust glue: pinning WASM build to toolchain ${MIINT_WASM_RUST_TOOLCHAIN} (emsdk 3.1.71 binaryen compat)")
+    elseif(MIINT_WASM_NATIVE_EH)
+        message(FATAL_ERROR
+            "The C++ uses wasm-native exceptions (-fwasm-exceptions), so the Rust glue must too, "
+            "which takes unstable flags on the pinned toolchain ${MIINT_WASM_RUST_TOOLCHAIN} with "
+            "its rust-src component. rustup was not found to provide them. Install rustup "
+            "(https://rustup.rs) and reconfigure.")
     endif()
     message(STATUS "Rust glue cross-compiling for wasm32-unknown-emscripten")
 elseif(WIN32)
@@ -1224,18 +1257,16 @@ if(EMSCRIPTEN)
     # goes into the extension. This just unblocks the cargo build.
     list(APPEND GLUE_RUSTFLAGS_LIST "-C" "relocation-model=pic")
     list(APPEND GLUE_RUSTFLAGS_LIST "-C" "link-arg=-sSIDE_MODULE=2")
-    # WebAssembly exceptions, to match DuckDB-Wasm's -fwasm-exceptions main
-    # module. rustc's emscripten target otherwise implements unwinding (every
-    # catch_unwind at a C entry point, every drop-on-unwind landing pad, in
-    # std included) with Emscripten's JavaScript exception ABI, so the side
-    # module imports invoke_* trampolines and __cxa_find_matching_catch_2,
-    # which a wasm-EH main module never provides: the extension loads, but the
-    # first call into any Rust entry point throws "resolved is not a function".
-    # The flag is nightly-gated on the pinned stable toolchain (RUSTC_BOOTSTRAP
-    # below), and the prebuilt std was compiled the old way, so std is rebuilt
-    # with the same flags (-Zbuild-std, needs the rust-src component).
-    list(APPEND GLUE_RUSTFLAGS_LIST "-Z" "emscripten-wasm-eh")
-    list(APPEND GLUE_RUSTFLAGS_LIST "-C" "link-arg=-fwasm-exceptions")
+endif()
+
+# Wasm-native exceptions (MIINT_WASM_NATIVE_EH, above). Rust 1.86 offers them
+# only as an unstable flag, which needs std rebuilt from source (rust-src) and
+# RUSTC_BOOTSTRAP to accept -Z on a stable toolchain.
+set(GLUE_CARGO_UNSTABLE_ARGS "")
+if(EMSCRIPTEN AND MIINT_WASM_NATIVE_EH)
+    list(APPEND GLUE_RUSTFLAGS_LIST "-Zemscripten-wasm-eh")
+    set(GLUE_CARGO_UNSTABLE_ARGS "-Zbuild-std=std,panic_unwind")
+    message(STATUS "Rust glue: wasm-native exceptions, matching the C++ (-fwasm-exceptions)")
 endif()
 
 if(WIN32 AND MINGW)
@@ -1253,20 +1284,16 @@ if(WIN32 AND MINGW)
 endif()
 
 set(GLUE_ENV_ARGS "")
-set(GLUE_CARGO_EXTRA_ARGS "")
 if(GLUE_RUSTFLAGS_LIST)
     string(JOIN " " GLUE_RUSTFLAGS_STR ${GLUE_RUSTFLAGS_LIST})
     list(APPEND GLUE_ENV_ARGS "RUSTFLAGS=${GLUE_RUSTFLAGS_STR}")
 endif()
-if(EMSCRIPTEN)
-    # See the wasm-exceptions note above: -Z flags on a stable toolchain, and
-    # a std rebuilt with those flags.
-    list(APPEND GLUE_ENV_ARGS "RUSTC_BOOTSTRAP=1")
-    list(APPEND GLUE_CARGO_EXTRA_ARGS "-Zbuild-std=std")
-endif()
 if(GLUE_RUSTUP_TOOLCHAIN)
     # Force cargo (the rustup shim) onto the pinned toolchain for this build.
     list(APPEND GLUE_ENV_ARGS "RUSTUP_TOOLCHAIN=${GLUE_RUSTUP_TOOLCHAIN}")
+endif()
+if(EMSCRIPTEN AND MIINT_WASM_NATIVE_EH)
+    list(APPEND GLUE_ENV_ARGS "RUSTC_BOOTSTRAP=1")
 endif()
 if(GLUE_ENV_ARGS)
     set(GLUE_BUILD_ENV ${CMAKE_COMMAND} -E env ${GLUE_ENV_ARGS})
@@ -1281,7 +1308,7 @@ ExternalProject_Add(
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ext/miint-rust-glue
     CONFIGURE_COMMAND "${GLUE_CONFIGURE_CMD}"
     BUILD_COMMAND ${GLUE_BUILD_ENV} ${CARGO} build --release
-        ${GLUE_CARGO_EXTRA_ARGS}
+        ${GLUE_CARGO_UNSTABLE_ARGS}
         ${GLUE_FEATURES_ARGS}
         --target-dir ${GLUE_TARGET_DIR}
         --manifest-path ${CMAKE_CURRENT_SOURCE_DIR}/ext/miint-rust-glue/Cargo.toml
@@ -1613,8 +1640,6 @@ set(EXTENSION_SOURCES
     src/ena_client.cpp
     src/ena_run_info_extractor.cpp
     src/ena_resolver_cache.cpp
-    src/ena_search_field_registry.cpp
-    src/ena_attributes_filter.cpp
     src/ena_secret.cpp
     src/ena_envelope_builder.cpp
     src/ena_receipt_parser.cpp
@@ -2330,14 +2355,9 @@ set(TEST_SOURCES
     src/ena_parser.cpp
     src/ena_run_info_extractor.cpp
     src/ena_resolver_cache.cpp
-    src/ena_search_field_registry.cpp
-    src/ena_attributes_filter.cpp
     test/cpp/test_ENAClient.cpp
     test/cpp/test_ENAResolverCache.cpp
     test/cpp/test_ena_md5.cpp
-    test/cpp/test_ena_search_field_registry.cpp
-    test/cpp/test_ena_attributes_filter.cpp
-    test/cpp/test_ena_attributes_pushdown.cpp
     test/cpp/test_ena_secret.cpp
     src/ena_envelope_builder.cpp
     test/cpp/test_ena_envelope.cpp
@@ -2523,9 +2543,9 @@ endif()
 if(MIINT_ENABLE_SYLPH OR MIINT_ENABLE_ST3)
     # Link rype (the umbrella archive), which transitively provides the sylph
     # and st3 symbols — see comment near the rype IMPORTED target declaration.
-    # Under Emscripten this works because the archive is built with wasm
-    # exceptions (GLUE_RUSTFLAGS_LIST): the JavaScript-ABI unwinding symbols
-    # rustc emits by default cannot link into a -fwasm-exceptions main module.
+    # Under Emscripten this works because the archive uses the C++ side's
+    # exception model (MIINT_WASM_NATIVE_EH): JavaScript-ABI unwinding symbols
+    # cannot link into a -fwasm-exceptions main module.
     target_link_libraries(tests rype)
 endif()
 if(MIINT_ENABLE_SYLPH)

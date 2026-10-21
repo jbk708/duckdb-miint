@@ -290,7 +290,7 @@ CREATE TABLE qual_queries AS SELECT
     'query1' AS read_id,
     'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT' AS sequence1,
     list_transform(range(LENGTH('ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT')),
-                   x -> 37::UTINYINT) AS qual1;
+                   lambda x: 37::UTINYINT) AS qual1;
 
 # With qual1 in canonical UTINYINT[] form the alignment runs cleanly and
 # query1 maps to ref1 — same outcome as the no-qual case earlier in this file.

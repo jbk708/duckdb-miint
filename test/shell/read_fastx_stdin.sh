@@ -3,7 +3,9 @@
 
 set -e
 
-DUCKDB="./build/release/duckdb"
+# The checks grep for duckbox output (the CLI default). Pin it: DuckDB 2.0's CLI renders markdown in agent mode
+# (AI_AGENT, CLAUDECODE, etc. set and stdout not a terminal). There is no -duckbox flag; -box is a different format.
+DUCKDB="./build/release/duckdb -cmd '.mode duckbox'"
 FAILED=0
 
 # Helper function to run a test

@@ -32,7 +32,7 @@ SELECT action, target, success,
        duration_ms < 60000 AS dur_sane
 FROM ena_cancel(secret => 'test_ena_lifecycle_mock', accession => 'ERS-mock-001');
 ----
-CANCEL	ERS-mock-001	true	true		true	true	true
+CANCEL	ERS-mock-001	true	true	(empty)	true	true	true
 
 # submission_log row appended for the CANCEL
 query IIII

@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
         return 1;
 
     // Rust entry points. The Rust archive is built with wasm exceptions for
-    // this target (CMakeLists.txt, GLUE_RUSTFLAGS_LIST); without that the side
+    // this target (CMakeLists.txt, MIINT_WASM_NATIVE_EH); without that the side
     // module imports Emscripten's JavaScript exception helpers, the extension
     // still loads, and the first call into Rust throws "TypeError: resolved is
     // not a function". The rype check guards that build setting for every

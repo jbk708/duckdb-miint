@@ -4,7 +4,8 @@
 # Prerequisites:
 #   - emscripten (emsdk) installed and activated
 #   - VCPKG_TOOLCHAIN_PATH set (or vcpkg/ symlink in repo root)
-#   - Rust with wasm32-unknown-emscripten target: rustup target add wasm32-unknown-emscripten
+#   - rustup: the build installs the pinned toolchain, its wasm32-unknown-emscripten
+#     target and, for wasm_eh, its rust-src component
 #   - Node.js (for import verification)
 #
 # Usage:
@@ -147,6 +148,32 @@ if $VERIFY; then
 
         echo "--- Checking $t: $WASM_FILE ---"
 
+        # A build with wasm-native exceptions (MIINT_WASM_NATIVE_EH, recorded by
+        # CMakeLists.txt) must not import Emscripten's JS exception helpers;
+        # docs/internals/embedded-tools.md, "Emscripten exceptions", says why.
+        CACHE="build/$t/CMakeCache.txt"
+        NATIVE_EH=$(sed -n 's/^MIINT_WASM_NATIVE_EH:INTERNAL=//p' "$CACHE" 2>/dev/null || true)
+        case "$NATIVE_EH" in
+            ON)  NATIVE_EH=true ;;
+            OFF)
+                NATIVE_EH=false
+                if [ "$t" = "wasm_eh" ]; then
+                    echo "  FAIL: $CACHE records MIINT_WASM_NATIVE_EH=OFF, but wasm_eh must be built"
+                    echo "  with wasm-native exceptions."
+                    VERIFY_OK=false
+                    echo ""
+                    continue
+                fi
+                ;;
+            *)
+                echo "  FAIL: $CACHE does not record MIINT_WASM_NATIVE_EH, so the exception"
+                echo "  check cannot run. Rebuild with this script to reconfigure."
+                VERIFY_OK=false
+                echo ""
+                continue
+                ;;
+        esac
+
         # Use Node.js to compile the WASM module and inspect imports/exports.
         #
         # In PIC WASM side modules, library symbols appear as both:
@@ -189,21 +216,18 @@ if $VERIFY; then
                 // Check 3: Extension init function must be exported
                 const hasInit = exportNames.has('miint_duckdb_cpp_init');
 
-                // Check 4: no JavaScript-exception imports. rustc's emscripten
-                // target emits these unless the Rust archive is built with wasm
-                // exceptions (CMakeLists.txt, GLUE_RUSTFLAGS_LIST). A
-                // -fwasm-exceptions main module (DuckDB-Wasm) never provides
-                // them, the module still loads, and the first call into Rust
-                // throws TypeError: resolved is not a function, at runtime.
-                const jsEh = imports.filter(i => i.module === 'env' &&
-                    /^(invoke_|__cxa_find_matching_catch|__resumeException$|llvm_eh_typeid_for$)/.test(i.name));
+                // Check 4: no JS exception-handling helpers in a wasm-native EH build
+                const jsEh = $NATIVE_EH ? imports.filter(i => i.module === 'env' &&
+                    /^(invoke_|__cxa_find_matching_catch|__resumeException$)/.test(i.name)) : [];
 
                 const problems = [];
                 if (!hasInit) problems.push('Missing miint_duckdb_cpp_init export');
                 badDirect.forEach(i => problems.push('Unlinked: env.' + i.name));
                 badGot.forEach(i => problems.push('GOT without export: ' + i.module + '.' + i.name));
-                if (jsEh.length > 0) problems.push('JavaScript-exception imports (' + jsEh.length + '): ' +
-                    jsEh.slice(0, 6).map(i => i.name).join(' ') + (jsEh.length > 6 ? ' ...' : ''));
+                if (jsEh.length > 0) {
+                    problems.push(jsEh.length + ' JS exception-handling imports in a wasm-native EH build, e.g. ' +
+                        jsEh.slice(0, 5).map(i => i.name).join(', '));
+                }
 
                 if (problems.length > 0) {
                     console.log('FAIL');
@@ -213,7 +237,18 @@ if $VERIFY; then
                     console.log('OK');
                     console.log('  Imports: ' + imports.length + ' total, ' + gotImports.length + ' library GOT (all self-resolved)');
                     console.log('  Exports: ' + exports.length + ' total, miint_duckdb_cpp_init present');
+                    if ($NATIVE_EH) console.log('  Exceptions: wasm-native, no JS exception-handling imports');
                 }
+
+                // For information, not a check: Rust functions the loader mis-links
+                // when used as function pointers (docs/internals/embedded-tools.md,
+                // \"Emscripten exceptions\"): an orig\$X export whose X contains a
+                // '\$', with X also imported as GOT.func.X.
+                const gotFunc = new Set(imports.filter(i => i.module === 'GOT.func').map(i => i.name));
+                const truncated = exports.map(e => e.name).filter(n => n.startsWith('orig\$'))
+                    .map(n => n.slice(5)).filter(x => x.includes('\$') && gotFunc.has(x));
+                console.log('  Function pointers the loader truncates at \$ (information): ' + truncated.length);
+                truncated.forEach(x => console.log('    ' + x));
             }).catch(err => {
                 console.log('COMPILE_ERROR ' + err.message);
             });

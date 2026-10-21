@@ -128,12 +128,12 @@ CREATE TABLE shard_b_subjects AS SELECT * FROM (VALUES
 
 # Save shard indexes
 query I
-SELECT success FROM save_minimap2_index('shard_a_subjects', 'data/shards/shard_a.mmi', k := 5);
+SELECT success FROM save_minimap2_index('shard_a_subjects', '__TEST_DIR__/shard_a.mmi', k := 5);
 ----
 true
 
 query I
-SELECT success FROM save_minimap2_index('shard_b_subjects', 'data/shards/shard_b.mmi', k := 5);
+SELECT success FROM save_minimap2_index('shard_b_subjects', '__TEST_DIR__/shard_b.mmi', k := 5);
 ----
 true
 
@@ -144,7 +144,7 @@ true
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_secondary := 0)
 WHERE flags & 4 = 0
@@ -156,7 +156,7 @@ query2	ref2
 # Test that unmapped reads are filtered out (flags & 4 != 0 should be excluded)
 query I
 SELECT COUNT(*) FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_secondary := 0)
 WHERE flags & 4 != 0;
@@ -178,7 +178,7 @@ CREATE TABLE multi_shard_mapping AS SELECT * FROM (VALUES
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'multi_shard_mapping',
     max_secondary := 0)
 ORDER BY read_id, reference;
@@ -201,7 +201,7 @@ CREATE VIEW mapping_view AS SELECT * FROM read_to_shard;
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('query_view',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'mapping_view',
     max_secondary := 0)
 WHERE flags & 4 = 0
@@ -223,7 +223,7 @@ DROP VIEW mapping_view;
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     preset := 'map-ont',
     max_secondary := 0)
@@ -240,7 +240,7 @@ query2	ref2
 # Test error: max_threads_per_shard = 0
 statement error
 SELECT * FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_threads_per_shard := 0);
 ----
@@ -249,7 +249,7 @@ max_threads_per_shard must be between 1 and 64
 # Test error: max_threads_per_shard = -1
 statement error
 SELECT * FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_threads_per_shard := -1);
 ----
@@ -258,7 +258,7 @@ max_threads_per_shard must be between 1 and 64
 # Test error: max_threads_per_shard = 65 (above upper bound)
 statement error
 SELECT * FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_threads_per_shard := 65);
 ----
@@ -268,7 +268,7 @@ max_threads_per_shard must be between 1 and 64
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_secondary := 0,
     max_threads_per_shard := 1)
@@ -282,7 +282,7 @@ query2	ref2
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_secondary := 0,
     max_threads_per_shard := 4)
@@ -300,7 +300,7 @@ query2	ref2
 query III
 SELECT read_id, reference, shard_name
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_secondary := 0,
     include_shard_name := true)
@@ -313,7 +313,7 @@ query2	ref2	shard_b
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_secondary := 0)
 ORDER BY read_id;
@@ -325,7 +325,7 @@ query2	ref2
 query II
 SELECT read_id, reference
 FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/',
+    shard_directory := '__TEST_DIR__/',
     read_to_shard := 'read_to_shard',
     max_secondary := 0,
     include_shard_name := false)
@@ -344,26 +344,64 @@ query2	ref2
 
 statement ok
 SELECT count(*) FROM align_minimap2_sharded('queries',
-    shard_directory := 'data/shards/', read_to_shard := 'read_to_shard', progress := true);
+    shard_directory := '__TEST_DIR__/', read_to_shard := 'read_to_shard', progress := true);
 
 # Two-direction EXCEPT ALL == 0 ⟺ progress:=true and the default yield equal multisets.
 query I
 SELECT
   (SELECT COUNT(*) FROM (
      SELECT read_id, reference, position, flags, cigar FROM align_minimap2_sharded('queries',
-        shard_directory := 'data/shards/', read_to_shard := 'read_to_shard', progress := true)
+        shard_directory := '__TEST_DIR__/', read_to_shard := 'read_to_shard', progress := true)
      EXCEPT ALL
      SELECT read_id, reference, position, flags, cigar FROM align_minimap2_sharded('queries',
-        shard_directory := 'data/shards/', read_to_shard := 'read_to_shard')))
+        shard_directory := '__TEST_DIR__/', read_to_shard := 'read_to_shard')))
   +
   (SELECT COUNT(*) FROM (
      SELECT read_id, reference, position, flags, cigar FROM align_minimap2_sharded('queries',
-        shard_directory := 'data/shards/', read_to_shard := 'read_to_shard')
+        shard_directory := '__TEST_DIR__/', read_to_shard := 'read_to_shard')
      EXCEPT ALL
      SELECT read_id, reference, position, flags, cigar FROM align_minimap2_sharded('queries',
-        shard_directory := 'data/shards/', read_to_shard := 'read_to_shard', progress := true)));
+        shard_directory := '__TEST_DIR__/', read_to_shard := 'read_to_shard', progress := true)));
 ----
 0
+
+# ==============================================================================
+# DUPLICATE ROUTING ROWS
+# ==============================================================================
+
+# A read listed more than once for the SAME shard is aligned against that shard
+# ONCE. The per-shard read query filters on `read_id IN (...)`, which is set
+# membership: "listed twice" and "listed once" are the same predicate. v1.0.0
+# -v1.0.1 snapshotted `query JOIN read_to_shard` instead and emitted the
+# alignment once per duplicate row, so a routing table with an accidental
+# duplicate silently double-counted that read.
+#
+# Duplicates across DIFFERENT shards still align once per shard — that is the
+# multi-shard case above, and it is unaffected.
+
+statement ok
+CREATE TABLE dup_shard_mapping AS SELECT * FROM (VALUES
+    ('query1', 'shard_a'),
+    ('query1', 'shard_a'),
+    ('query1', 'shard_a'),
+    ('query2', 'shard_b')
+) AS t(read_id, shard_name);
+
+query II
+SELECT read_id, count(*)
+FROM align_minimap2_sharded('queries',
+    shard_directory := '__TEST_DIR__/',
+    read_to_shard := 'dup_shard_mapping',
+    max_secondary := 0)
+WHERE flags & 4 = 0
+GROUP BY read_id
+ORDER BY read_id;
+----
+query1	1
+query2	1
+
+statement ok
+DROP TABLE dup_shard_mapping;
 
 # ==============================================================================
 # CLEANUP
@@ -380,6 +418,3 @@ DROP TABLE shard_a_subjects;
 
 statement ok
 DROP TABLE shard_b_subjects;
-
-# Note: Shard .mmi files (shard_a.mmi, shard_b.mmi) left in data/shards/
-# DuckDB test framework does not clean these up automatically

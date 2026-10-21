@@ -10,6 +10,8 @@ Cross-cutting design patterns and implementation notes for duckdb-miint. This fi
 - Consuming Arrow C Data Interface streams → `docs/internals/arrow-zero-copy.md`
 - Adding `sample_id` support to a table function → `docs/internals/per-sample-pattern.md`
 
+`docs/` is published at https://the-miint.github.io/duckdb-miint/. The site (`the-miint/the-miint.github.io`) copies `docs/` at build time, except `UPDATING.md`, and serves `table_of_contents.md` as the section's index page. Its navigation is a hand-maintained `nav` in its own `mkdocs.yml`, and `mkdocs build --strict` fails when a synced page is missing from that nav or an anchor link is broken, so a new, renamed or deleted page here needs a matching change there. Downstream projects read these pages as miint's contract.
+
 ## Extension Entry Point
 
 `src/miint_extension.cpp` — `LoadInternal()` registers every table function, scalar function, aggregate, and COPY format. New functionality is registered here.
@@ -46,16 +48,9 @@ For headerless SAM files and SAM writing:
 Functions like `read_ena_sequences` set both `function` (`Execute`) and `in_out_function` (`ExecuteInOut`) on the same `TableFunction`. DuckDB routes scalar-constant calls to the standard path (parallel, byte-based progress) and correlated-column or subquery calls to the in-out path (one outer row at a time, `LIMIT`-driven short-circuit via `LocalState` destruction). Shared per-run open/read/close logic lives in `miint::PerRunReader` so both paths use the same state machine and retry policy, and shared column-fill logic lives in a `FillOutputFromBatch` helper so both paths emit identical chunk layouts. The `Bind` function detects the in-out path by an empty `input.inputs` (DuckDB's table-in-out dispatcher passes no scalar constants) and sets `Data::deferred_resolution`; the per-query LRU `ENAResolverCache` on `Data` then dedupes metadata lookups across outer rows.
 
 ### Filter pushdown via `pushdown_complex_filter`
-`read_ena_attributes` is the reference implementation for translating a DuckDB `WHERE` clause into a remote-API query shape. Pattern:
+A pushed-down path must return exactly the rows of the unpushed scan that pass the filter, value for value: none the scan does not produce, and none of its matching rows missing. Leaving `filters` in place, so that DuckDB re-applies them above the scan, removes rows that fail the filter; it cannot catch a matching row the scan would not produce, or a matching row the remote drops. For example, ENA's Portal API names sample attributes differently from the sample XML that `read_ena_attributes` reads (`country` where the XML says `geographic location (country and/or sea)`), so answering `WHERE tag = 'country'` from the Portal API returns a row the unfiltered scan does not contain. Test a pushed-down path by comparing it with the unpushed scan on data where the two could differ. No table function uses the callback.
 
-1. **Abstract AST for the extractor.** `src/include/ena_attributes_filter.hpp` defines `miint::ENAFilterNode` (EQ / IN / AND / OR / UNSUPPORTED). `ExtractPushdownPredicates(vector<unique_ptr<ENAFilterNode>> conjuncts) → ENAAttributePushdown` is pure, has no DuckDB dependency, and is exhaustively unit-tested against the AST directly — no binder scaffolding required.
-2. **DuckDB → AST translator.** Lives in the table function's `.cpp` (see `read_ena_attributes.cpp`'s anonymous namespace). Handles `BoundComparisonExpression` (COMPARE_EQUAL), `BoundOperatorExpression` (COMPARE_IN), and `BoundConjunctionExpression` (AND / OR). Anything else maps to `ENAFilterNode::MakeUnsupported()`, and the extractor rejects any conjunct list containing an unsupported atom.
-3. **Column name resolution.** `BoundColumnRefExpression::binding.column_index` is a local index into `LogicalGet::GetColumnIds()`; `GetPrimaryIndex()` on that entry gives the position in `LogicalGet::names`. (Mirrors `multi_file_list.cpp:68-69`.)
-4. **Do not erase filters.** Record the predicate in `Data::pushdown`, but leave the `vector<unique_ptr<Expression>> &filters` unchanged. DuckDB re-applies the filter as a `LogicalFilter` above the scan, so any semantic mismatch between the remote matcher and SQL equality degrades to extra work, never to wrong rows. (See `read_ena_attributes.cpp`'s `PushdownComplexFilter`.)
-5. **Dual-path Execute.** `GlobalState` exposes both `FetchNextBatch` (default) and `FetchNextStructuredBatch` (pushdown). `Execute()` branches on `bind_data.pushdown.tags.empty()` at the refill site. Both paths write to the same `current_batch` member so the emission code is shared.
-6. **Allowlist-gated pushdown.** The extractor consults `ENASearchFieldRegistry::IsSearchableSampleField` and returns empty (XML fallback) if any referenced tag is unknown — even inside an `IN` list. No per-tag mixing of structured + XML.
-
-Registration: set `tf.pushdown_complex_filter = YourCallback;` in `GetFunction()`. The two filter-pushdown flags are independent:
+To register one, set `tf.pushdown_complex_filter = YourCallback;` in `GetFunction()`. The two filter-pushdown flags are independent:
 - `tf.pushdown_complex_filter` (callback) — arbitrary Expression trees, called once during optimization, scope decided by the callback.
 - `tf.filter_pushdown = true` (bool) — tells the optimizer to extract simple `col=const` / `LIKE` / `IN` predicates into `get.table_filters`. The scan then receives those via `TableFunctionInitInput::filters` and is expected to consume them at read time (e.g. parquet zonemap pruning). Setting this without implementing consumption does not drop filters for correctness (the optimizer still wraps remaining expressions in a `LogicalFilter` above the scan), but the populated `TableFilterSet` is dead weight. Leave `filter_pushdown = false` unless you actually consume `TableFilter` objects.
 
@@ -124,14 +119,14 @@ SAM alignments compute `stop_position` using HTSlib's `bam_endpos()`:
 - Critical for interval operations and coverage analysis
 
 ### Identifier-column Codec (`id_column_codec` / `id_column_utils`)
-Functions that accept user-supplied identifier columns (`read_id`, `reference`, `mate_reference`) may opt in to BIGINT in addition to VARCHAR. The pattern is split across two layers:
+Functions that accept user-supplied identifier columns (`read_id`, `reference`, `mate_reference`) may opt in to BIGINT and UUID in addition to VARCHAR; `IsAllowedIdType` in `src/include/id_column_utils.hpp` defines the accepted set. The pattern is split across two layers:
 
 - `src/include/id_column_codec.hpp` / `src/id_column_codec.cpp` — pure C++ (`miint::ParseIdAsInt64`, `miint::FormatIdFromInt64`). No DuckDB types, so the `tests` C++ binary can link it directly without pulling in DuckDB.
 - `src/include/id_column_utils.hpp` — DuckDB-aware inline header (`duckdb::IsAllowedIdType`, `ExtractIdColumnAsStrings`, `EmitIdColumnFromStrings`). Wraps the codec and handles `Vector` / `DataChunk` / `LogicalType` plumbing.
 
 In-memory carriers (e.g. `SequenceRecordBatch::read_ids`, `SAMRecordBatch::read_ids`/`references`/`mate_references`) always store `std::vector<std::string>` — BIGINT inputs are stringified at the ingress boundary and parsed back at the egress boundary. This keeps the alignment hot loop type-agnostic.
 
-Dispatch is opt-in. Schema validators take an `allow_bigint` flag (default `false`); a caller that doesn't pass `true` keeps the historical VARCHAR-only contract. The captured `LogicalType` is threaded through the bind data so the emit side knows which output type to materialise. Default-constructed `LogicalType` is `INVALID`, so any path that forgets to capture the type fails loud at the helper dispatch rather than silently producing garbage.
+Dispatch is opt-in. Schema validators take an `allow_bigint` flag (default `false`), which admits UUID as well as BIGINT; a caller that doesn't pass `true` keeps the historical VARCHAR-only contract. The captured `LogicalType` is threaded through the bind data so the emit side knows which output type to materialise. Default-constructed `LogicalType` is `INVALID`, so any path that forgets to capture the type fails loud at the helper dispatch rather than silently producing garbage.
 
 Sentinel rules (BIGINT egress): empty string and the SAM `*` sentinel both decode to NULL. The SAM `=` mate-reference sentinel has no BIGINT encoding and is the caller's responsibility to resolve to a real reference value before invoking the codec — `ParseIdAsInt64` throws on `=` to surface that contract. VARCHAR sentinels pass through unchanged.
 
@@ -154,6 +149,7 @@ Currently used by `align_minimap2` + `save_minimap2_index` (both sides), `copy_s
 4. Add to `EXTENSION_SOURCES` in `CMakeLists.txt`
 5. Create SQL test in `test/sql/`
 6. If the function should run per-sample (partitioning an input relation by a column), follow `docs/internals/per-sample-pattern.md`
+7. If an argument names a relation to read, follow `docs/internals/reading-tables-views.md`, including its [CTE guard](reading-tables-views.md#ctes-reject-them-in-bind) and the matching `cte_relation_name_guard` test case
 
 <a name="no-work-in-bind"></a>
 ### Do the work in `InitGlobal` / `Execute` — never in `Bind`

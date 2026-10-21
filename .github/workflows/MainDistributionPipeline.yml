@@ -117,20 +117,6 @@ jobs:
           # shell runs with pipefail, so the step fails and every later step —
           # including the build and the whole test suite — is skipped.
 
-      - name: Install FastTree (parity oracle)
-        shell: bash -el {0}
-        run: |
-          # bioconda's FastTree binary is the independent ML oracle for
-          # `phylogeny_fasttree_parity.test`. The vendored ext/fasttree library
-          # inside gpl-boundary is what miint actually drives at runtime;
-          # this binary is what we compare against to verify they agree.
-          conda install -y -c bioconda fasttree
-          # FastTree has no `--version` flag — invoking it with no input prints
-          # the version banner to stderr and exits non-zero. We just want to
-          # confirm the binary is reachable; swallow the exit code.
-          FastTree 2>&1 | head -1 || true
-          which FastTree
-
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11.1
         with:
@@ -194,7 +180,7 @@ jobs:
         # step's `python3` would resolve to conda's and miss those installs.
         # Using the absolute path `/usr/bin/python3` for both steps sidesteps
         # the conda env entirely for this Python concern while leaving
-        # bowtie2 / FastTree (conda-installed binaries) untouched on PATH.
+        # bowtie2 (a conda-installed binary) untouched on PATH.
         run: /usr/bin/python3 -m pip install --user duckdb==$(./build/release/duckdb -csv -noheader -c "SELECT ltrim(version(), 'v');") pyarrow pandas matplotlib
 
       - name: Run tutorial tests

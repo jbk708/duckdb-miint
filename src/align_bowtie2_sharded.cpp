@@ -495,6 +495,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 	}
 	auto bd = make_uniq<AlignBowtie2ShardedBindData>();
 	bd->query_table = input.inputs[0].ToString();
+	RejectCTERelationName(input, bd->query_table);
 
 	auto shard_dir_param = input.named_parameters.find("shard_directory");
 	if (shard_dir_param == input.named_parameters.end() || shard_dir_param->second.IsNull()) {
@@ -507,6 +508,7 @@ unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &in
 		throw BinderException("align_bowtie2_sharded requires read_to_shard parameter");
 	}
 	bd->read_to_shard_table = read_to_shard_param->second.ToString();
+	RejectCTERelationName(input, bd->read_to_shard_table);
 
 	auto &fs = FileSystem::GetFileSystem(context);
 	if (!fs.DirectoryExists(bd->shard_directory)) {
@@ -794,9 +796,12 @@ void OpenCurrentShardStream(AlignBowtie2ShardedLocalState &local, const AlignBow
 	// shard.name is a user-supplied row value from `read_to_shard`. Direct
 	// concatenation into the WHERE clause would be a SQL-injection vector
 	// (e.g. shard names containing a single quote could rewrite the predicate
-	// and silently send reads to the wrong index). WriteQuoted wraps the
-	// value in single quotes and doubles any embedded single quote, matching
-	// the convention already used in sequence_table_reader.cpp:377.
+	// and silently send reads to the wrong index), so the value is written as a
+	// SQL string literal: wrapped in single quotes, with any embedded single
+	// quote doubled. (align_minimap2_sharded no longer needs the
+	// rule: it encodes routing to an integer shard id and concatenates no
+	// user-supplied value into SQL at all. Doing the same here would mean giving
+	// this function a routing snapshot, which it deliberately does not take.)
 	select += " WHERE rts.shard_name = " + KeywordHelper::WriteQuoted(shard.name, '\'');
 
 	local.input_stream = local.input_conn->SendQuery(select);
