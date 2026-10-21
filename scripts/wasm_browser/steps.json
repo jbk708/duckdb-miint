@@ -1,0 +1,30 @@
+[
+  {
+    "name": "self_check_expected_error",
+    "sql": "SELECT error('miint browser check')",
+    "expect_error": "miint browser check"
+  },
+  {
+    "name": "setup_playground_seqs",
+    "sql": "CREATE TABLE seqs AS SELECT * FROM (VALUES ('foo', 'AAATATAGATGAGTGTGCTGTGTAGTGATCGTAGTGATCGATGTGATGTGTGAACCACACACCACCACACCGAGCTAGTCTG')) AS t(read_id, sequence1)"
+  },
+  {
+    "name": "playground_rype_extract_minimizer_set",
+    "sql": "SELECT read_id || ' ' || fwd_set::VARCHAR || ' ' || rc_set::VARCHAR FROM rype_extract_minimizer_set('seqs', 64, 10)",
+    "expect": "foo [260702866269925988, 568313787732488300, 613044543255719964] [1009790407099801668, 2760583306147559872, 3895054571825842144]"
+  },
+  {
+    "name": "setup_sequences",
+    "sql": "CREATE TABLE sequences AS SELECT * FROM (VALUES ('seq1', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'), ('seq2', 'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA'), ('seq3', 'GGGGCCCCGGGGCCCCGGGGCCCCGGGGCCCCGGGGCCCCGGGGCCCCGGGG'), ('seq4', 'ACGTTGCAAGGCTTACCGATGCATCGATCGGATCCTAGCTAGGCTAACGTTAGC')) AS t(read_id, sequence1)"
+  },
+  {
+    "name": "rype_extract_minimizer_set",
+    "sql": "SELECT count(*) || ' rows, md5=' || md5(string_agg(read_id || ':' || fwd_set::VARCHAR || '|' || rc_set::VARCHAR, ';' ORDER BY read_id)) FROM rype_extract_minimizer_set('sequences', 32, 10)",
+    "expect": "4 rows, md5=c1061b604da959dde990046e0a545109"
+  },
+  {
+    "name": "rype_extract_strand_minimizers",
+    "sql": "SELECT count(*) || ' rows, md5=' || md5(string_agg(read_id || ':' || fwd_hashes::VARCHAR || '|' || fwd_positions::VARCHAR || '|' || rc_hashes::VARCHAR || '|' || rc_positions::VARCHAR, ';' ORDER BY read_id)) FROM rype_extract_strand_minimizers('sequences', 16, 8)",
+    "expect": "4 rows, md5=cb794dd85005571c65a3c568dcefd4df"
+  }
+]

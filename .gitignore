@@ -19,6 +19,9 @@ scripts/test_wasm_harness.js
 scripts/test_wasm_harness.wasm
 scripts/test_wasm_harness.data
 
+# Installed by scripts/test_wasm_browser.sh
+scripts/wasm_browser/node_modules/
+
 # Local planning / scratch docs — keep individual files out of git
 localdocs/
 scratch/
