@@ -145,10 +145,14 @@ unique_ptr<FunctionData> SourcetrackerBind(ClientContext &context, TableFunction
 		}
 		return x;
 	};
-	auto prior = [](const std::string &key, const Value &v) -> double {
+	// alpha2 and beta must also be nonzero: at 0, st3's weight for a sequence can
+	// be 0/0 (alpha2 once Unknown holds no other sequence of the sink, beta in a
+	// one-sequence sink), and st3 then assigns it to Unknown without drawing.
+	auto prior = [](const std::string &key, const Value &v, bool allow_zero) -> double {
 		const auto x = v.GetValue<double>();
-		if (!std::isfinite(x) || x < 0) {
-			throw BinderException("sourcetracker: %s must be finite and >= 0 (got %s)", key, v.ToString());
+		if (!std::isfinite(x) || x < 0 || (x == 0 && !allow_zero)) {
+			throw BinderException("sourcetracker: %s must be finite and %s (got %s)", key, allow_zero ? ">= 0" : "> 0",
+			                      v.ToString());
 		}
 		return x;
 	};
@@ -163,11 +167,11 @@ unique_ptr<FunctionData> SourcetrackerBind(ClientContext &context, TableFunction
 		} else if (key == "assignments") {
 			data->assignments = kv.second.GetValue<bool>();
 		} else if (key == "alpha1") {
-			c.alpha1 = prior(key, kv.second);
+			c.alpha1 = prior(key, kv.second, true);
 		} else if (key == "alpha2") {
-			c.alpha2 = prior(key, kv.second);
+			c.alpha2 = prior(key, kv.second, false);
 		} else if (key == "beta") {
-			c.beta = prior(key, kv.second);
+			c.beta = prior(key, kv.second, false);
 		} else if (key == "restarts") {
 			c.restarts = at_least_one(key, kv.second);
 		} else if (key == "draws_per_restart") {

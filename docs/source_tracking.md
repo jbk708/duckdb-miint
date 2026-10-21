@@ -120,8 +120,8 @@ SourceTracker2's.
 | `loo` | `false` | [Leave-one-out](#leave-one-out): predict each source sample from the other sources instead of predicting the sinks. |
 | `assignments` | `false` | Fill the [`assignments`](#per-feature-assignments) map. Not available with `loo`. |
 | `alpha1` | `0.001` | Prior count of each feature in each source environment. Higher values trust the source data less and smooth its feature distributions; SourceTracker2 calls 0.01 a more conservative choice. |
-| `alpha2` | `0.1` | Prior count of each feature in the Unknown environment, as a fraction of the sink's depth. Higher values make Unknown smoother and less prone to absorbing whatever the sources do not explain. |
-| `beta` | `10` | Count added to each environment, Unknown included, when the mixing proportions are drawn. |
+| `alpha2` | `0.1` | Prior count of each feature in the Unknown environment, as a fraction of the sink's depth. Higher values make Unknown smoother and less prone to absorbing whatever the sources do not explain. Must be above 0. |
+| `beta` | `10` | Count added to each environment, Unknown included, when the mixing proportions are drawn. Must be above 0. |
 | `restarts` | `10` | Independent Markov chains per sink. `restarts * draws_per_restart` is the number of retained draws the mean is taken over. |
 | `draws_per_restart` | `1` | Draws retained from each chain. |
 | `burnin` | `100` | Passes over the sink's sequences before the first draw is retained. |
@@ -136,7 +136,8 @@ SourceTracker2's.
 | `env_column` | `'env'` | The metadata column holding each source's environment. |
 
 Bad parameter values are refused at bind: a `collapse` other than `mean` or `sum`, a `seed`
-below `-1`, a prior that is negative or not finite, a chain parameter below 1, a negative
+below `-1`, a prior that is negative or not finite, an `alpha2` or `beta` of 0 (the sampler's
+weights can then be 0/0), a chain parameter below 1, a negative
 depth or thread count, a NULL for any parameter, an empty or duplicated column name, or
 `assignments := true` together with `loo := true`.
 

@@ -312,7 +312,24 @@ alpha1 must be finite and >= 0
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', beta := 'nan'::DOUBLE);
 ----
-beta must be finite and >= 0
+beta must be finite and > 0
+
+# alpha2 and beta must be positive, not merely non-negative. At 0 the sampler's
+# weight for a sequence can be 0/0: alpha2 := 0 once Unknown holds no other
+# sequence of the sink, beta := 0 in a sink of one sequence. st3 then puts the
+# sequence in Unknown without drawing, so a one-sequence sink came back as 100%
+# Unknown where alpha2 or beta of 1e-9 gives 0.41 Unknown / 0.59 of its source.
+# alpha1 := 0 stays legal: every environment has sequences, so its
+# denominators are never 0 (sourcetracker.test relies on alpha1 := 0).
+statement error
+SELECT * FROM sourcetracker('synth', 'synth_meta', alpha2 := 0.0);
+----
+alpha2 must be finite and > 0 (got 0.0)
+
+statement error
+SELECT * FROM sourcetracker('synth', 'synth_meta', beta := 0.0);
+----
+beta must be finite and > 0 (got 0.0)
 
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', sink_rarefaction_depth := -1);
