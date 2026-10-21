@@ -8,6 +8,7 @@
 #include "SequenceRecord.hpp"
 #include "SequenceReader.hpp"
 #include <vector>
+#include <zlib.h>
 
 // getrlimit/geteuid and permission bits that actually deny the owner are POSIX-only; the
 // open-failure test below is compiled out elsewhere. Same guard as test_NewickParser.cpp.
@@ -46,6 +47,19 @@ public:
 
 	std::string simple_fasta(const std::string &id, const std::string &seq, const std::string &comment = "") {
 		return ">" + id + (comment.empty() ? "" : " " + comment) + "\n" + seq + "\n";
+	}
+
+	// Write `records` as one gzip member, or append them as a further member ("ab").
+	void write_temp_gz(const std::string &path, const std::vector<std::string> &records, const char *mode = "wb") {
+		gzFile out = gzopen(path.c_str(), mode);
+		if (!out) {
+			throw std::runtime_error("Failed to create temp file: " + path);
+		}
+		for (const auto &r : records) {
+			gzwrite(out, r.data(), static_cast<unsigned>(r.size()));
+		}
+		gzclose(out);
+		temp_files_.push_back(path);
 	}
 
 private:
@@ -667,4 +681,130 @@ TEST_CASE("SequenceReader byte budget default (SIZE_MAX) unchanged behavior", "[
 	miint::SequenceReader reader(path);
 	auto batch = reader.read(100); // no budget argument -> default SIZE_MAX
 	REQUIRE((batch.size() == 50));
+}
+
+// Issue #292. kseq++ reports a malformed record by failing the stream, and the reader used to
+// read a failed stream as end of file: the scan succeeded, short by the bad record and by every
+// record after it, with nothing to say so. Each case must stop the read with an error naming
+// the file and the record, so the user can find and fix the input.
+TEST_CASE("SequenceReader rejects a quality string longer than its sequence", "[SequenceReader][error]") {
+	TempFileFixture fixture;
+	auto path = "malformed_long_qual.fq";
+	fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), fixture.simple_read("b", "ACG", "IIIII"),
+	                                fixture.simple_read("c", "ACGT", "IIII")});
+
+	miint::SequenceReader reader(path);
+	REQUIRE_THROWS_WITH(
+	    reader.read(5),
+	    "malformed_long_qual.fq: record 'b' (record 2): sequence length 3 does not match quality length 5");
+}
+
+TEST_CASE("SequenceReader rejects a record whose quality line is missing at end of file", "[SequenceReader][error]") {
+	TempFileFixture fixture;
+	auto path = "malformed_missing_qual.fq";
+	fixture.write_temp_fastq(path, {fixture.simple_read("a", "ACGT", "IIII"), "@b\nACGT\n+\n"});
+
+	miint::SequenceReader reader(path);
+	REQUIRE_THROWS_WITH(
+	    reader.read(5),
+	    "malformed_missing_qual.fq: record 'b' (record 2): sequence length 4 does not match quality length 0");
+}
+
+TEST_CASE("SequenceReader names the mate file when only R2 is malformed", "[SequenceReader][error]") {
+	TempFileFixture fixture;
+	auto r1 = "malformed_mate_r1.fq";
+	auto r2 = "malformed_mate_r2.fq";
+	fixture.write_temp_fastq(r1,
+	                         {fixture.simple_read("a/1", "ACGT", "IIII"), fixture.simple_read("b/1", "ACGT", "IIII")});
+	fixture.write_temp_fastq(r2,
+	                         {fixture.simple_read("a/2", "ACGT", "IIII"), fixture.simple_read("b/2", "ACGT", "III")});
+
+	miint::SequenceReader reader(r1, r2);
+	REQUIRE_THROWS_WITH(
+	    reader.read(5),
+	    "malformed_mate_r2.fq: record 'b/2' (record 2): sequence length 4 does not match quality length 3");
+}
+
+TEST_CASE("SequenceReader reports a malformed first record as malformed, not as an empty file",
+          "[SequenceReader][error]") {
+	// The first record is read while the reader is constructed, to detect the format. A
+	// failure there used to look like a file with no records at all.
+	TempFileFixture fixture;
+	auto path = "malformed_first.fq";
+	fixture.write_temp_fastq(path,
+	                         {fixture.simple_read("a", "ACGT", "IIIIII"), fixture.simple_read("b", "ACGT", "IIII")});
+
+	REQUIRE_THROWS_WITH(miint::SequenceReader(path),
+	                    "malformed_first.fq: record 'a' (record 1): sequence length 4 does not match quality length 6");
+}
+
+// Records with varied sequence, so the gzip stream is long enough that cutting or damaging it
+// in the middle lands well inside the compressed data rather than in the header or trailer.
+static std::vector<std::string> varied_reads(TempFileFixture &fixture, int n) {
+	std::vector<std::string> records;
+	uint32_t state = 12345;
+	for (int i = 0; i < n; i++) {
+		std::string seq(100, 'A');
+		for (auto &c : seq) {
+			state = state * 1664525u + 1013904223u;
+			c = "ACGT"[state >> 30];
+		}
+		records.push_back(fixture.simple_read("r" + std::to_string(i), seq, std::string(100, 'I')));
+	}
+	return records;
+}
+
+static size_t read_all(miint::SequenceReader &reader) {
+	size_t total = 0;
+	while (true) {
+		auto batch = reader.read(1000);
+		if (batch.empty()) {
+			return total;
+		}
+		total += batch.size();
+	}
+}
+
+TEST_CASE("SequenceReader rejects a truncated gzip file", "[SequenceReader][error][compression]") {
+	// zlib does not fail a read when a gzip file ends early: it returns what it could inflate
+	// and then 0, exactly as at a real end of file. Without asking zlib, a file cut in half
+	// reads back as a smaller valid file.
+	TempFileFixture fixture;
+	auto path = "truncated.fq.gz";
+	fixture.write_temp_gz(path, varied_reads(fixture, 4000));
+	std::filesystem::resize_file(path, std::filesystem::file_size(path) / 2);
+
+	miint::SequenceReader reader(path);
+	REQUIRE_THROWS_WITH(read_all(reader), Catch::Matchers::StartsWith("truncated.fq.gz: read failed after record "));
+}
+
+TEST_CASE("SequenceReader rejects a corrupt gzip file", "[SequenceReader][error][compression]") {
+	// Damaged deflate data can inflate to garbage before zlib notices -- its checksum is only
+	// checked at the end of the member -- so the first check to trip may be a garbage record
+	// rather than zlib. Either way the read must fail, naming the file.
+	TempFileFixture fixture;
+	auto path = "corrupt.fq.gz";
+	fixture.write_temp_gz(path, varied_reads(fixture, 4000));
+	{
+		std::fstream f(path, std::ios::in | std::ios::out | std::ios::binary);
+		f.seekp(static_cast<std::streamoff>(std::filesystem::file_size(path) / 2));
+		const std::string zeros(64, '\0');
+		f.write(zeros.data(), static_cast<std::streamsize>(zeros.size()));
+	}
+
+	miint::SequenceReader reader(path);
+	REQUIRE_THROWS_WITH(read_all(reader), Catch::Matchers::StartsWith("corrupt.fq.gz: "));
+}
+
+TEST_CASE("SequenceReader reads a multi-member gzip file to the end", "[SequenceReader][compression]") {
+	// Concatenated gzip members (cat a.gz b.gz, bgzip output) are one valid file. The end of a
+	// member is not the end of the input, and must not be reported as a truncation.
+	TempFileFixture fixture;
+	auto path = "multi_member.fq.gz";
+	auto records = varied_reads(fixture, 3000);
+	fixture.write_temp_gz(path, std::vector<std::string>(records.begin(), records.begin() + 1000));
+	fixture.write_temp_gz(path, std::vector<std::string>(records.begin() + 1000, records.end()), "ab");
+
+	miint::SequenceReader reader(path);
+	REQUIRE(read_all(reader) == 3000);
 }

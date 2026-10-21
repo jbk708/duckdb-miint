@@ -29,11 +29,18 @@ namespace miint {
 class CheckedSeqStreamIn : public klibpp::SeqStreamIn::base_type {
 public:
 	explicit CheckedSeqStreamIn(const std::string &path)
-	    : klibpp::SeqStreamIn::base_type(OpenOrThrow(path), gzread, gzclose) {
+	    : klibpp::SeqStreamIn::base_type(OpenOrThrow(path), gzread, gzclose), path_(path) {
 	}
+
+	// zlib's account of how the input ended, empty if it ended cleanly. A gzip file that is
+	// cut short does not make gzread fail: it returns what it could inflate and then 0, as at
+	// a real end of file, and only gzerror says the data stopped early.
+	std::string EndOfInputError() const;
 
 private:
 	static gzFile OpenOrThrow(const std::string &path);
+
+	std::string path_;
 };
 
 class SequenceReader {
@@ -82,10 +89,19 @@ private:
 	using StreamVar = std::variant<std::unique_ptr<SeqStreamIn>>;
 #endif
 
-	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n);
+	// Read up to `n` records. Throws, naming `source` and the record, when the stream fails
+	// rather than ends; `records_read` counts that stream's records so far.
+	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n, const std::string &source,
+	                                             uint64_t &records_read);
 
 	StreamVar sequence1_reader_;
 	std::optional<StreamVar> sequence2_reader_;
+
+	// What each stream is called in errors: its path where there is one.
+	std::string source1_ = "sequence1";
+	std::string source2_ = "sequence2";
+	uint64_t records1_ = 0;
+	uint64_t records2_ = 0;
 
 	bool paired_;
 	bool first_read_; // Track if we need to return buffered data

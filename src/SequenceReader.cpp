@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <string_view>
+#include <type_traits>
 #include <system_error>
 
 #ifdef MIINT_STATIC_BUILD
@@ -24,6 +25,21 @@ gzFile CheckedSeqStreamIn::OpenOrThrow(const std::string &path) {
 		    (open_errno != 0 ? std::generic_category().message(open_errno) : std::string("gzopen failed")));
 	}
 	return handle;
+}
+
+std::string CheckedSeqStreamIn::EndOfInputError() const {
+	int errnum = Z_OK;
+	const char *msg = gzerror(this->f, &errnum);
+	if (errnum == Z_OK) {
+		return std::string();
+	}
+	std::string error = msg != nullptr ? msg : "zlib error " + std::to_string(errnum);
+	// gzerror() leads with the path the file was opened with; the caller names the file itself.
+	const std::string prefix = path_ + ": ";
+	if (error.compare(0, prefix.size(), prefix) == 0) {
+		error.erase(0, prefix.size());
+	}
+	return error;
 }
 
 // Helper function to extract base read ID by stripping /[1-9] suffix and comments.
@@ -66,18 +82,63 @@ static void validate_format_consistency(bool is_fasta1, bool is_fasta2, bool all
 
 // Read from whichever stream variant is active.
 //
+// kseq++ fails the stream both at the end of the input and on a record it cannot parse, and
+// its read(n) drops the failed record and returns what it has, so a short result looked like
+// end of file (issue #292). Records are read one at a time instead, so the record kseq++
+// rejected is still in hand to name, and each failure is asked which kind it was.
+//
 // Errors that originate in our kseq++ read callbacks (duckdb_seq_read /
 // aspera_seq_read) are reported via the thread-local g_seq_read_error
 // channel: the callback writes a message and returns -1, kseq++ surfaces -1
 // as err()/empty-result, and we raise IOException from here. This keeps the
 // throw out of kseq++'s template-instantiated frames, which previously caused
 // a recursive-terminate abort on the aspera path under some failure modes.
-std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n) {
+std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, const std::string &source,
+                                                      uint64_t &records_read) {
 #ifdef MIINT_STATIC_BUILD
 	g_seq_read_error.clear();
 #endif
-	auto result = std::visit(
-	    [n](auto &reader) { return reader->read(static_cast<std::vector<klibpp::KSeq>::size_type>(n)); }, var);
+	std::vector<klibpp::KSeq> result;
+	result.reserve(static_cast<size_t>(n));
+	std::visit(
+	    [&](auto &reader) {
+		    for (int i = 0; i < n; i++) {
+			    auto &rec = result.emplace_back();
+			    *reader >> rec;
+			    if (*reader) {
+				    records_read++;
+				    continue;
+			    }
+#ifdef MIINT_STATIC_BUILD
+			    if (!g_seq_read_error.empty()) {
+				    result.pop_back();
+				    return; // the callback's own message is raised below
+			    }
+#endif
+			    // The input itself failing outranks the record: a file cut off mid-record also
+			    // leaves that record malformed, and the truncation is the cause to report.
+			    std::string input_error;
+			    if constexpr (std::is_same_v<std::decay_t<decltype(*reader)>, CheckedSeqStreamIn>) {
+				    input_error = reader->EndOfInputError();
+			    }
+			    if (input_error.empty() && reader->err()) {
+				    input_error = "the stream reported a read error";
+			    }
+			    if (!input_error.empty()) {
+				    throw std::runtime_error(source + ": read failed after record " + std::to_string(records_read) +
+				                             ": " + input_error);
+			    }
+			    if (reader->tqs()) {
+				    throw std::runtime_error(source + ": record '" + rec.name + "' (record " +
+				                             std::to_string(records_read + 1) + "): sequence length " +
+				                             std::to_string(rec.seq.size()) + " does not match quality length " +
+				                             std::to_string(rec.qual.size()));
+			    }
+			    result.pop_back();
+			    return; // end of input
+		    }
+	    },
+	    var);
 #ifdef MIINT_STATIC_BUILD
 	if (!g_seq_read_error.empty()) {
 		std::string msg = std::move(g_seq_read_error);
@@ -91,10 +152,11 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n) {
 SequenceReader::SequenceReader(const std::string &path1, const std::optional<std::string> &path2,
                                bool allow_format_mismatch)
     : first_read_(true) {
+	source1_ = path1;
 	sequence1_reader_ = std::make_unique<SeqStreamIn>(path1);
 
 	// Check if first file is empty by attempting to peek at first record
-	buffered_read1_ = read_stream(sequence1_reader_, 1);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, records1_);
 	bool is_empty1 = buffered_read1_.empty();
 	bool is_fasta1 = !is_empty1 && buffered_read1_[0].qual.empty();
 
@@ -106,10 +168,11 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 
 	paired_ = path2.has_value() && (path2->length() > 0);
 	if (paired_) {
+		source2_ = path2.value();
 		sequence2_reader_.emplace(std::make_unique<SeqStreamIn>(path2.value()));
 
 		// Check if second file is empty and detect format
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, records2_);
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
@@ -135,11 +198,14 @@ SequenceReader::SequenceReader(DuckDBSeqStreamHandle stream1, DuckDBSeqStreamHan
 	// `release()` runs before any variant op, and the variant move-assign
 	// from rvalue unique_ptr is noexcept. On any later peek throwing, the
 	// kstream wrapper (now inside the variant) is the sole owner.
+	if (stream1 && stream1->handle) {
+		source1_ = stream1->handle->GetPath();
+	}
 	auto kstream1 = std::make_unique<DuckDBSeqStreamIn>(stream1.get(), duckdb_seq_read, duckdb_seq_close);
 	stream1.release();
 	sequence1_reader_ = std::move(kstream1);
 
-	buffered_read1_ = read_stream(sequence1_reader_, 1);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, records1_);
 	bool is_empty1 = buffered_read1_.empty();
 	bool is_fasta1 = !is_empty1 && buffered_read1_[0].qual.empty();
 
@@ -149,11 +215,14 @@ SequenceReader::SequenceReader(DuckDBSeqStreamHandle stream1, DuckDBSeqStreamHan
 
 	paired_ = (stream2_or_null.get() != nullptr);
 	if (paired_) {
+		if (stream2_or_null->handle) {
+			source2_ = stream2_or_null->handle->GetPath();
+		}
 		auto kstream2 = std::make_unique<DuckDBSeqStreamIn>(stream2_or_null.get(), duckdb_seq_read, duckdb_seq_close);
 		stream2_or_null.release();
 		sequence2_reader_.emplace(std::move(kstream2));
 
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, records2_);
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
@@ -185,14 +254,14 @@ SequenceReader::SequenceReader(AsperaSeqStreamHandle stream1, AsperaSeqStreamHan
 		sequence2_reader_.emplace(std::move(kstream2));
 	}
 
-	buffered_read1_ = read_stream(sequence1_reader_, 1);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, records1_);
 	if (buffered_read1_.empty()) {
 		throw std::runtime_error("Empty stream");
 	}
 	bool is_fasta1 = buffered_read1_[0].qual.empty();
 
 	if (paired_) {
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, records2_);
 		if (buffered_read2_.empty()) {
 			throw std::runtime_error("Empty stream (sequence2)");
 		}
@@ -321,7 +390,7 @@ SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes)
 	while ((int)batch.size() < n && cumulative_bytes < max_bytes) {
 		const int remaining = n - (int)batch.size();
 		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
-		auto more = read_stream(sequence1_reader_, poll_n);
+		auto more = read_stream(sequence1_reader_, poll_n, source1_, records1_);
 		max_poll_count_ = more.size() > max_poll_count_ ? more.size() : max_poll_count_;
 		if (more.empty()) {
 			break;
@@ -416,8 +485,8 @@ SequenceRecordBatch SequenceReader::read_pe(const int n, const size_t max_bytes)
 	while ((int)batch.size() < n && cumulative_bytes < max_bytes) {
 		const int remaining = n - (int)batch.size();
 		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
-		auto more1 = read_stream(sequence1_reader_, poll_n);
-		auto more2 = read_stream(sequence2_reader_.value(), poll_n);
+		auto more1 = read_stream(sequence1_reader_, poll_n, source1_, records1_);
+		auto more2 = read_stream(sequence2_reader_.value(), poll_n, source2_, records2_);
 		max_poll_count_ = more1.size() > max_poll_count_ ? more1.size() : max_poll_count_;
 
 		if (more1.empty() && more2.empty()) {

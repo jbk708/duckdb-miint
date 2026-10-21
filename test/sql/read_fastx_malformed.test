@@ -1,0 +1,35 @@
+# name: test/sql/read_fastx_malformed.test
+# description: a malformed record or a damaged gzip file fails the scan, naming the file and the record
+# group: [sql]
+
+# Each of these inputs used to scan "successfully": the reader took a failed record for the
+# end of the file, so the result silently stopped at the record before it (issue #292).
+# A truncated gzip file read back as a smaller valid file, and a corrupt one as an empty
+# file. A short result here is data loss nobody is told about, so each must be an error.
+
+require miint
+
+# Quality longer than its sequence: record c, which is valid, used to vanish with b.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_longer.fq');
+----
+malformed_qual_longer.fq: record 'b' (record 2): sequence length 3 does not match quality length 5
+
+# A '+' line with no quality line after it, at the end of the file.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_missing.fq');
+----
+malformed_qual_missing.fq: record 'b' (record 2): sequence length 4 does not match quality length 0
+
+# A gzip file cut in half: 497 complete records come back before the cut, which is not the file.
+statement error
+SELECT count(*) FROM read_fastx('data/fastq/truncated.fq.gz');
+----
+truncated.fq.gz: read failed after record 497: unexpected end of file
+
+# A gzip file with 64 bytes zeroed mid-stream.
+statement error
+SELECT count(*) FROM read_fastx('data/fastq/corrupt.fq.gz');
+----
+corrupt.fq.gz: read failed after record 0: incorrect data check
+
