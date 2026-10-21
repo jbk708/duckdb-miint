@@ -49,8 +49,8 @@ SELECT * FROM read_fastx('some_file.fasta');
 - Supports gzip-compressed files (.gz extension)
 - Supports stdin input using `-` or `/dev/stdin` (single file only, no paired-end)
 - Quality scores converted to integers using specified offset (Phred+33 or Phred+64)
-- FASTQ records, those whose header starts with `@`, must be four lines each: header, sequence, `+`, quality, with the quality as long as the sequence, and only blank lines may come before the first one. Blank lines, and lines of nothing but whitespace, between records are ignored. Wrapped (multi-line) FASTQ is rejected; FASTA sequences may span any number of lines, and text before the first FASTA header (such as `;` comments) is skipped
-- A malformed record, a file that ends inside a FASTQ record, a truncated or corrupt gzip file, or a NUL byte where a record should start fails the query rather than returning the records before it. The error names the file, and either the malformed record or how many records were read before the read failed; for damaged gzip data that count can stop short of the damage, since the data is inflated in blocks
+- FASTQ records, those whose header starts with `@`, must be four lines each: header, sequence, `+`, quality, with the quality as long as the sequence. Blank lines, including lines of nothing but whitespace, may come before the first record and between records, and are ignored. Wrapped (multi-line) FASTQ is rejected; FASTA sequences may span any number of lines, and text before the first FASTA header (such as `;` comments) is skipped
+- A malformed record, a file that ends inside a FASTQ record, a truncated or corrupt gzip file, or NUL bytes where a record should start (such as the zero-filled block a crash can leave) fail the query rather than returning the records before it. The error names the file, and either the malformed record or how many records were read before the read failed; for damaged gzip data that count can stop short of the damage, since the data is inflated in blocks
 - Supports parallel processing (8 threads for files, 1 thread for stdin)
 - For paired-end data, reads are matched by position in files (not by ID)
 

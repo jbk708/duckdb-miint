@@ -219,9 +219,9 @@ void SetResultVectorListUInt8(Vector &result_vector, const std::vector<miint::Qu
 		value_offset += len;
 	}
 
-	// A mask with no buffer already means all-valid. Writing the bits into a buffer gives the
-	// same answer but sends DuckDB's storage append down its row-by-row validity path for every
-	// score, so only a buffer left over from earlier use is rewritten.
+	// A mask with no buffer already means all-valid, and giving it one sends every score down the
+	// storage append's row-by-row path (docs/internals/duckdb-engine-notes.md), so only a buffer
+	// left over from earlier use is rewritten.
 	auto &validity = FlatVector::Validity(result_vector);
 	if (!validity.AllValid()) {
 		validity.SetAllValid(output_count);

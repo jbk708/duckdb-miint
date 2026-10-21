@@ -90,8 +90,8 @@ a table and a literal `NULL`.
 every row is valid; `SetAllValid()` allocates a buffer and fills it with ones. The storage
 append (`validity_uncompressed.cpp`) takes its fast path only when there is no buffer, so a
 column handed an all-ones buffer is appended row by row. On a list column this counts the
-child too: setting the score mask on `read_fastx`'s quality lists sent every score, about 3
-billion on a 10M-pair `CREATE TABLE`, down the row-by-row path. Leave a fresh output mask
+child too: an all-ones score mask on `read_fastx`'s quality lists sends every score down the
+row-by-row path, about 3 billion of them for 10M pairs of 150-base reads. Leave a fresh output mask
 alone: DuckDB resets each output chunk's masks before the source fills it
 (`PipelineExecutor` calls `Reset()`, and `VectorCache::ResetFromCache` drops the buffers).
 

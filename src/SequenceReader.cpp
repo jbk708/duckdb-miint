@@ -169,10 +169,13 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 	}
 	if (c != '+') {
 		if (fastq) {
-			problem = record() + (c ? "no '+' line before the next record; FASTQ records must be four lines"
-			                      : stream.eof()
-			                          ? "the input ends before the record's '+' line; FASTQ records must be four lines"
-			                          : "unexpected NUL byte before the record's '+' line");
+			if (!c && !stream.eof()) {
+				problem = record() + "unexpected NUL byte before the record's '+' line";
+			} else {
+				problem = record() +
+				          (c ? "no '+' line before the next record" : "the input ends before the record's '+' line") +
+				          "; FASTQ records must be four lines";
+			}
 			return ParseResult::MALFORMED;
 		}
 		return ParseResult::RECORD; // FASTA
@@ -193,6 +196,12 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 	return ParseResult::RECORD;
 }
 
+// How a failed read is reported, whichever stream it came from: the source, how many records
+// were read before it, and why it failed.
+static std::string read_failure(const std::string &source, uint64_t records_read, const std::string &why) {
+	return source + ": read failed after record " + std::to_string(records_read) + ": " + why;
+}
+
 // Read from whichever stream variant is active, one record at a time, asking the input why it
 // stopped whenever a record fails or ends with the input.
 //
@@ -200,8 +209,8 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 // aspera_seq_read) are reported via the thread-local g_seq_read_error
 // channel: the callback writes a message and returns -1, which getc() reads
 // as the end of the input, and we raise IOException from here. This keeps the
-// throw out of kseq++'s template-instantiated frames, which previously caused
-// a recursive-terminate abort on the aspera path under some failure modes.
+// throw out of kseq++'s template-instantiated frames: a throw from inside them
+// can end in a recursive terminate on the aspera path.
 std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, const std::string &source,
                                                       StreamState &state) {
 #ifdef MIINT_STATIC_BUILD
@@ -237,8 +246,7 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 				    input_error = "the input reported a read error";
 			    }
 			    if (!input_error.empty()) {
-				    throw std::runtime_error(source + ": read failed after record " +
-				                             std::to_string(state.records_read) + ": " + input_error);
+				    throw std::runtime_error(read_failure(source, state.records_read, input_error));
 			    }
 			    if (parsed == ParseResult::RECORD) {
 				    state.records_read++;
@@ -261,8 +269,7 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, con
 	    var);
 #ifdef MIINT_STATIC_BUILD
 	if (!g_seq_read_error.empty()) {
-		std::string msg =
-		    source + ": read failed after record " + std::to_string(state.records_read) + ": " + g_seq_read_error;
+		std::string msg = read_failure(source, state.records_read, g_seq_read_error);
 		g_seq_read_error.clear();
 		throw duckdb::IOException(msg);
 	}

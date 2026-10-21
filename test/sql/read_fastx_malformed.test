@@ -42,9 +42,10 @@ SELECT count(*) FROM read_fastx('data/fastq/truncated.fq.gz');
 ----
 truncated.fq.gz: read failed after record 496: unexpected end of file
 
-# A gzip file with 64 bytes zeroed mid-stream. Neither the count nor zlib's message is pinned:
-# both depend on how much input the zlib build inflates per read, which decides whether it
-# meets the damage inside the data or only at the closing checksum.
+# A gzip file with 64 bytes zeroed mid-stream. Neither the count nor zlib's message is pinned,
+# since they depend on how much input zlib inflates per read. The zlib linked here meets this
+# damage only at the closing checksum and reports "after record 0: incorrect data check",
+# though the records before the zeros are intact.
 statement error
 SELECT count(*) FROM read_fastx('data/fastq/corrupt.fq.gz');
 ----
