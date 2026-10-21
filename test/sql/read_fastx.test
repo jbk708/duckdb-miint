@@ -74,6 +74,24 @@ SELECT * FROM read_fastx('data/fastq/sequence_with_spaces.fasta')
 2	bar	NULL	GGTTAACCGGTTAATTGG	NULL	NULL	NULL
 3	baz	NULL	AAAAAAAAAA	NULL	NULL	NULL
 
+# Every ASCII whitespace byte is stripped from a sequence, not only spaces. CRLF line
+# endings are the case that matters in practice: the line splitter stops at '\n', so each
+# line of a Windows-written FASTA keeps its '\r'. The fixture also carries tab, vertical
+# tab and form feed. Run single-end and paired, since the two paths strip separately.
+query II
+SELECT sequence_index, sequence1 FROM read_fastx('data/fastq/sequence_with_ascii_whitespace.fasta')
+----
+1	ACGTACGT
+2	AACCGGTT
+
+query III
+SELECT sequence_index, sequence1, sequence2
+FROM read_fastx('data/fastq/sequence_with_ascii_whitespace.fasta',
+                sequence2 := 'data/fastq/sequence_with_ascii_whitespace.fasta')
+----
+1	ACGTACGT	ACGTACGT
+2	AACCGGTT	AACCGGTT
+
 # Test VARCHAR[] single-end (multiple files, each with per-file sequence_index)
 # Note: sequence_index now resets to 1 for each file, so we need include_filepath to distinguish
 query IIIIIIII

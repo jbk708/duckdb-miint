@@ -46,6 +46,44 @@ TEST_CASE("QualScore vector constructor", "[qualscore]") {
 	}
 }
 
+TEST_CASE("QualScore write_decoded", "[qualscore]") {
+	// write_decoded is how read_fastx turns every quality line into scores. A byte outside
+	// [offset, offset + 93] is not a score in that encoding -- typically Phred+33 data read
+	// with qual_offset=64 -- and decoding it anyway would wrap to a plausible-looking number,
+	// so the read has to stop, naming the byte so the user can tell which encoding it is.
+	uint8_t out[8] = {};
+
+	SECTION("decodes the full valid range exactly") {
+		REQUIRE(miint::QualScore(std::string("!I~")).write_decoded(out, 33) == 3);
+		CHECK(out[0] == 0);
+		CHECK(out[1] == 40);
+		CHECK(out[2] == 93);
+		REQUIRE(miint::QualScore(std::string("@h")).write_decoded(out, 64) == 2);
+		CHECK(out[0] == 0);
+		CHECK(out[1] == 40);
+	}
+
+	SECTION("rejects a byte below the offset") {
+		CHECK_THROWS_WITH(miint::QualScore(std::string("hh#h")).write_decoded(out, 64),
+		                  "Stored quality character out of range: #");
+	}
+
+	SECTION("rejects a byte more than 93 above the offset") {
+		CHECK_THROWS_WITH(miint::QualScore(std::string("II\x7fI")).write_decoded(out, 33),
+		                  "Stored quality character out of range: \x7f");
+	}
+
+	SECTION("rejects a byte with the high bit set") {
+		CHECK_THROWS_WITH(miint::QualScore(std::string("I\xc8")).write_decoded(out, 33),
+		                  "Stored quality character out of range: \xc8");
+	}
+
+	SECTION("names the first bad byte when there are several") {
+		CHECK_THROWS_WITH(miint::QualScore(std::string("I\x7f\xc8I")).write_decoded(out, 33),
+		                  "Stored quality character out of range: \x7f");
+	}
+}
+
 TEST_CASE("miint::find_low_quality_window", "[filter]") {
 	SECTION("no low quality window returns none") {
 		// 'M' => ASCII 77 → 77-33 = 44

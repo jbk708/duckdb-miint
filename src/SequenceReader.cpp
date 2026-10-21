@@ -1,6 +1,7 @@
 #include <SequenceReader.hpp>
 #include <algorithm>
 #include <cerrno>
+#include <string_view>
 #include <system_error>
 
 #ifdef MIINT_STATIC_BUILD
@@ -25,11 +26,11 @@ gzFile CheckedSeqStreamIn::OpenOrThrow(const std::string &path) {
 	return handle;
 }
 
-// Helper function to extract base read ID by stripping /[1-9] suffix and comments
-static std::string base_read_id(const std::string &id) {
+// Helper function to extract base read ID by stripping /[1-9] suffix and comments.
+// Returns a view into `id`, so comparing two IDs allocates nothing.
+static std::string_view base_read_id(std::string_view id) {
 	// First, strip comments (everything after first space)
-	size_t space_pos = id.find(' ');
-	std::string base = (space_pos == std::string::npos) ? id : id.substr(0, space_pos);
+	std::string_view base = id.substr(0, id.find(' '));
 
 	// Check if it ends with /[1-9] (single digit 1-9 only)
 	// Need at least 3 chars for pattern "x/1"
@@ -40,7 +41,7 @@ static std::string base_read_id(const std::string &id) {
 
 		// If ends with /[1-9], strip that suffix
 		if (second_last == '/' && last_char >= '1' && last_char <= '9') {
-			base = base.substr(0, len - 2);
+			base.remove_suffix(2);
 		}
 	}
 
@@ -49,10 +50,7 @@ static std::string base_read_id(const std::string &id) {
 
 // Helper function to check if two read IDs match after normalization
 static void check_ids(const std::string &name1, const std::string &name2) {
-	std::string base_id1 = base_read_id(name1);
-	std::string base_id2 = base_read_id(name2);
-
-	if (base_id1 != base_id2) {
+	if (base_read_id(name1) != base_read_id(name2)) {
 		throw std::runtime_error("Mismatched read IDs: " + name1 + " vs " + name2);
 	}
 }
@@ -238,14 +236,32 @@ static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int re
 	return remaining < poll_n ? remaining : poll_n;
 }
 
+// The bytes std::isspace accepts in the "C" locale: ' ' and '\t' through '\r'. Spelled out
+// rather than calling std::isspace, which is an out-of-line, locale-dependent call per byte.
+static inline bool is_ascii_space(unsigned char c) {
+	return (c == ' ') | (static_cast<unsigned char>(c - '\t') <= '\r' - '\t');
+}
+
+// Strip whitespace from a sequence in place. Nearly every sequence has none, so look first
+// with a branch-free pass the compiler can vectorize and rewrite only when one turns up.
+// The accumulator is unsigned char, not bool: GCC 14 leaves a bool |= reduction scalar.
+static void strip_whitespace(std::string &seq) {
+	unsigned char any = 0;
+	for (unsigned char c : seq) {
+		any |= is_ascii_space(c);
+	}
+	if (any) {
+		seq.erase(std::remove_if(seq.begin(), seq.end(), is_ascii_space), seq.end());
+	}
+}
+
 // Append a KSeq into an SE batch, stripping sequence whitespace in place.
 static void append_se(SequenceRecordBatch &batch, klibpp::KSeq &rec) {
-	rec.seq.erase(std::remove_if(rec.seq.begin(), rec.seq.end(), [](unsigned char c) { return std::isspace(c); }),
-	              rec.seq.end());
+	strip_whitespace(rec.seq);
 	batch.read_ids.emplace_back(base_read_id(rec.name));
-	batch.comments.emplace_back(rec.comment);
+	batch.comments.emplace_back(std::move(rec.comment));
 	batch.sequences1.emplace_back(std::move(rec.seq));
-	batch.quals1.emplace_back(rec.qual);
+	batch.quals1.emplace_back(std::move(rec.qual));
 }
 
 SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes) {
@@ -320,17 +336,15 @@ SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes)
 
 // Append a paired KSeq into a PE batch, stripping sequence whitespace on both mates.
 static void append_pe(SequenceRecordBatch &batch, klibpp::KSeq &rec1, klibpp::KSeq &rec2) {
-	rec1.seq.erase(std::remove_if(rec1.seq.begin(), rec1.seq.end(), [](unsigned char c) { return std::isspace(c); }),
-	               rec1.seq.end());
-	rec2.seq.erase(std::remove_if(rec2.seq.begin(), rec2.seq.end(), [](unsigned char c) { return std::isspace(c); }),
-	               rec2.seq.end());
+	strip_whitespace(rec1.seq);
+	strip_whitespace(rec2.seq);
 
 	batch.read_ids.emplace_back(base_read_id(rec1.name));
-	batch.comments.emplace_back(rec1.comment);
+	batch.comments.emplace_back(std::move(rec1.comment));
 	batch.sequences1.emplace_back(std::move(rec1.seq));
 	batch.sequences2.emplace_back(std::move(rec2.seq));
-	batch.quals1.emplace_back(rec1.qual);
-	batch.quals2.emplace_back(rec2.qual);
+	batch.quals1.emplace_back(std::move(rec1.qual));
+	batch.quals2.emplace_back(std::move(rec2.qual));
 }
 
 SequenceRecordBatch SequenceReader::read_pe(const int n, const size_t max_bytes) {
