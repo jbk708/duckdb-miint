@@ -320,6 +320,58 @@ SELECT (SELECT count(*) FROM (SELECT * FROM run_t1 EXCEPT ALL SELECT * FROM run_
 ----
 0
 
+# The threads parameter overrides the setting for one call, and the docs make
+# the same promise for it: threads := 1 and threads := 8 give identical rows.
+statement ok
+CREATE TABLE run_p1 AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', threads := 1,
+    collapse := 'sum', seed := 42, restarts := 10, draws_per_restart := 2, burnin := 20,
+    source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+CREATE TABLE run_p8 AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', threads := 8,
+    collapse := 'sum', seed := 42, restarts := 10, draws_per_restart := 2, burnin := 20,
+    source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+query I
+SELECT (SELECT count(*) FROM (SELECT * FROM run_p1 EXCEPT ALL SELECT * FROM run_t1))
+     + (SELECT count(*) FROM (SELECT * FROM run_p8 EXCEPT ALL SELECT * FROM run_t1));
+----
+0
+
+# seed := -1 draws a fresh seed on every execution, not once when the query is
+# bound: two executions of one prepared statement differ. With a fixed seed
+# they do not.
+statement ok
+CREATE TABLE prepared_runs (run INTEGER, sink_id VARCHAR, source VARCHAR, proportion DOUBLE);
+
+statement ok
+PREPARE fresh_seed AS INSERT INTO prepared_runs SELECT $1, sink_id, source, proportion FROM sourcetracker('tiny', 'tiny_meta',
+    restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+PREPARE fixed_seed AS INSERT INTO prepared_runs SELECT $1, sink_id, source, proportion FROM sourcetracker('tiny', 'tiny_meta',
+    seed := 7, restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+EXECUTE fresh_seed(1);
+
+statement ok
+EXECUTE fresh_seed(2);
+
+statement ok
+EXECUTE fixed_seed(3);
+
+statement ok
+EXECUTE fixed_seed(4);
+
+query II
+SELECT (SELECT count(*) FROM (SELECT sink_id, source, proportion FROM prepared_runs WHERE run = 1
+                              EXCEPT ALL SELECT sink_id, source, proportion FROM prepared_runs WHERE run = 2)) > 0,
+       (SELECT count(*) FROM (SELECT sink_id, source, proportion FROM prepared_runs WHERE run = 3
+                              EXCEPT ALL SELECT sink_id, source, proportion FROM prepared_runs WHERE run = 4));
+----
+true	0
+
 # ---------------------------------------------------------------------------
 # The feature table is read exactly once, at execution. The volatility sits in
 # `value`, which the reader must evaluate (an unreferenced nextval() would be
@@ -527,7 +579,74 @@ SELECT list_sort(map_keys(assignments)) FROM disjoint_run WHERE source = 'envA';
 [f1, f2]
 
 # ---------------------------------------------------------------------------
-# Leave-one-out: each SOURCE sample is held out in turn and predicted from
+# More than one vector of everything. Results leave in chunks of 2048 rows and
+# the inputs go to st3 in 2048-row slices, and every case above fits in one.
+# Here 600 sinks x 4 sources is 2400 rows, the sinks hold 4200 cells, and
+# there are 2460 features. Each sink has four features no other sample has, so
+# a row or a tally that lands on the wrong sink at a chunk boundary shows up
+# as a feature attributed in a sink that does not have it.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE many_meta AS
+SELECT 'src' || e || '_' || r AS sample_id, 'source' AS source_sink, 'env' || e AS env FROM range(3) t(e), range(2) u(r)
+UNION ALL
+SELECT printf('sink%04d', i), 'sink', NULL FROM range(600) t(i);
+
+statement ok
+CREATE TABLE many AS
+SELECT 'src' || e || '_' || r AS sample_id, printf('pool%d_%02d', e, f) AS feature_id, 5 + f AS value
+FROM range(3) t(e), range(2) u(r), range(20) v(f)
+UNION ALL
+SELECT printf('sink%04d', i), printf('pool%d_%02d', i % 3, f), 2 FROM range(600) t(i), range(3) v(f)
+UNION ALL
+SELECT printf('sink%04d', i), printf('own%04d_%d', i, j), 2 FROM range(600) t(i), range(4) v(j);
+
+statement ok
+CREATE TABLE many_run AS SELECT * FROM sourcetracker('many', 'many_meta', assignments := true,
+    seed := 1, restarts := 1, burnin := 5, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+query II
+SELECT count(*), count(DISTINCT sink_id) FROM many_run;
+----
+2400	600
+
+query I
+SELECT count(*) FROM (SELECT sink_id FROM many_run GROUP BY sink_id HAVING count(DISTINCT source) <> 4);
+----
+0
+
+statement ok
+CREATE TABLE many_cells AS
+SELECT sink_id, source, unnest(map_keys(assignments)) AS feature, unnest(map_values(assignments)) AS mean_count
+FROM many_run;
+
+# Every sink's 14 sequences are attributed, and only to its own features.
+query I
+SELECT count(*) FROM (SELECT sink_id, sum(mean_count) AS mass FROM many_cells GROUP BY sink_id) WHERE abs(mass - 14) > 1e-9;
+----
+0
+
+query I
+SELECT (SELECT count(*) FROM (SELECT DISTINCT sink_id, feature FROM many_cells
+                              EXCEPT SELECT sample_id, feature_id FROM many WHERE sample_id LIKE 'sink%'))
+     + (SELECT count(*) FROM (SELECT sample_id, feature_id FROM many WHERE sample_id LIKE 'sink%'
+                              EXCEPT SELECT DISTINCT sink_id, feature FROM many_cells));
+----
+0
+
+# Each row's map holds its own proportion of the sink.
+query I
+SELECT count(*) FROM (
+  SELECT r.sink_id, r.source, r.proportion, coalesce(sum(c.mean_count), 0) AS tallied
+  FROM many_run r LEFT JOIN many_cells c USING (sink_id, source)
+  GROUP BY r.sink_id, r.source, r.proportion
+) WHERE abs(tallied - proportion * 14) > 1e-9;
+----
+0
+
+# ---------------------------------------------------------------------------
+# Leave-one-out: each source sample is held out in turn and predicted from
 # the others, so the rows are source samples and sink_id names them. The
 # fixture's expected_loo_sum.tsv is compared at st3's own 0.03 gate for
 # tiny_test, whose environments overlap heavily (loo.rs explains the noise).

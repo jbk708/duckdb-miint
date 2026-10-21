@@ -25,8 +25,8 @@ WITH c AS (SELECT 1 AS x) SELECT * FROM sourcetracker('nope', 'c');
 sourcetracker: 'c' is a common table expression
 
 # Failure mode 2 from the main file, the one that answers wrongly: a CTE
-# shadowing a real table of the same name. Before the guard this read TABLE
-# tiny, all five sinks, and returned a full answer for data the query did not
+# shadowing a real table of the same name. Without the guard this reads TABLE
+# tiny, all five sinks, and returns a full answer for data the query did not
 # name.
 
 statement ok
