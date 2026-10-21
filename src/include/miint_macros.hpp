@@ -134,12 +134,37 @@ const std::string READ_GFF = // NOLINT
 //
 // Typed views of the two GFA record types every assembly graph has, over read_gfa's raw
 // rows. '*' -- GFA's "not stored" -- becomes NULL so it cannot be read as a one-base
-// sequence or a CIGAR.
+// sequence or a CIGAR. The tags the GFA 1 specification defines for the record type are
+// typed columns; the rest stay in `tags`.
+
+// A tag the specification types as an integer, as BIGINT: NULL when the record does not
+// carry it, and an error naming the record (`record`, built only then) when its value is not
+// a 64-bit integer. read_gfa checked the value against the type letter the file gave it,
+// which need not be i, and a cast alone would round 1.5 to 2.
+const std::string MIINT_GFA_INTEGER_TAG = // NOLINT
+    "CREATE OR REPLACE MACRO _miint_gfa_integer_tag(tags, key, record) AS "
+    "CASE WHEN tags[key] IS NULL THEN NULL "
+    "     WHEN NOT regexp_full_match(tags[key], '[-+]?[0-9]+') OR TRY_CAST(tags[key] AS BIGINT) IS NULL "
+    "     THEN error(printf('%s: tag %s is not a 64-bit integer: ''%s''', record, key, tags[key])) "
+    "     ELSE TRY_CAST(tags[key] AS BIGINT) "
+    "END; ";
+
+// `tags` without the keys a view has typed columns for.
+const std::string MIINT_GFA_OTHER_TAGS = // NOLINT
+    "CREATE OR REPLACE MACRO _miint_gfa_other_tags(tags, typed_keys) AS "
+    "map_from_entries(list_filter(map_entries(tags), lambda e: NOT list_contains(typed_keys, e.key))); ";
+
 const std::string READ_GFA_SEGMENTS = // NOLINT
     "CREATE OR REPLACE MACRO read_gfa_segments(path) AS TABLE "
     "SELECT fields[1] AS segment_id, "
     "       CASE WHEN fields[2] = '*' THEN NULL ELSE fields[2] END AS sequence, "
-    "       tags "
+    "       _miint_gfa_integer_tag(tags, 'LN', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_ln, "
+    "       _miint_gfa_integer_tag(tags, 'RC', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_rc, "
+    "       _miint_gfa_integer_tag(tags, 'FC', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_fc, "
+    "       _miint_gfa_integer_tag(tags, 'KC', printf('read_gfa_segments: segment ''%s''', fields[1])) AS tag_kc, "
+    "       tags['SH'] AS tag_sh, "
+    "       tags['UR'] AS tag_ur, "
+    "       _miint_gfa_other_tags(tags, ['LN', 'RC', 'FC', 'KC', 'SH', 'UR']) AS tags "
     "FROM read_gfa(path) "
     "WHERE record_type = 'S'; ";
 
@@ -150,7 +175,18 @@ const std::string READ_GFA_LINKS = // NOLINT
     "       fields[3] AS to_segment, "
     "       fields[4] AS to_orientation, "
     "       CASE WHEN fields[5] = '*' THEN NULL ELSE fields[5] END AS overlap, "
-    "       tags "
+    "       _miint_gfa_integer_tag(tags, 'MQ', printf('read_gfa_links: link %s%s -> %s%s', "
+    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_mq, "
+    "       _miint_gfa_integer_tag(tags, 'NM', printf('read_gfa_links: link %s%s -> %s%s', "
+    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_nm, "
+    "       _miint_gfa_integer_tag(tags, 'RC', printf('read_gfa_links: link %s%s -> %s%s', "
+    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_rc, "
+    "       _miint_gfa_integer_tag(tags, 'FC', printf('read_gfa_links: link %s%s -> %s%s', "
+    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_fc, "
+    "       _miint_gfa_integer_tag(tags, 'KC', printf('read_gfa_links: link %s%s -> %s%s', "
+    "                              fields[1], fields[2], fields[3], fields[4])) AS tag_kc, "
+    "       tags['ID'] AS tag_id, "
+    "       _miint_gfa_other_tags(tags, ['MQ', 'NM', 'RC', 'FC', 'KC', 'ID']) AS tags "
     // read_gfa refuses an orientation other than + or -, naming the file and line.
     "FROM read_gfa(path) "
     "WHERE record_type = 'L'; ";
@@ -473,14 +509,14 @@ const std::string READ_MYLOASM_CONTIGS = // NOLINT
     "                        ['mult', 'secondary', 'aligned', 'ani']) AS cmt "
     "  FROM fasta "
     "), g AS ( "
-    "  SELECT segment_id AS contig_id, tags "
+    "  SELECT segment_id AS contig_id, tag_ln, tags "
     "  FROM read_gfa_segments(_miint_myloasm_path(dir, 'final_contig_graph.gfa')) "
     ") "
     "SELECT coalesce(g.contig_id, h.hdr.contig_id) AS contig_id, "
     "       coalesce(h.dereplication_status, 'filtered') AS dereplication_status, "
     "       h.fasta_id, "
     "       h.hdr.len::BIGINT AS polished_length, "
-    "       g.tags['LN']::BIGINT AS unpolished_length, "
+    "       g.tag_ln AS unpolished_length, "
     "       h.hdr.circular AS circularity, "
     "       g.tags['DP']::DOUBLE AS depth_identity_99, "
     "       g.tags['DP2']::DOUBLE AS depth_identity_99_75, "
@@ -502,7 +538,7 @@ const std::string READ_MYLOASM_CONTIGS = // NOLINT
     "        WHEN g.contig_id IS NULL "
     "        THEN error(printf('read_myloasm_contigs: contig %s is in the %s FASTA but has no S record "
     "in final_contig_graph.gfa', h.hdr.contig_id, h.dereplication_status)) "
-    "        WHEN TRY_CAST(g.tags['LN'] AS BIGINT) IS NULL OR TRY_CAST(g.tags['DP'] AS DOUBLE) IS NULL "
+    "        WHEN g.tag_ln IS NULL OR TRY_CAST(g.tags['DP'] AS DOUBLE) IS NULL "
     "          OR TRY_CAST(g.tags['DP2'] AS DOUBLE) IS NULL OR TRY_CAST(g.tags['DP3'] AS DOUBLE) IS NULL "
     "          OR TRY_CAST(g.tags['MEDIAN_DP1'] AS DOUBLE) IS NULL "
     "        THEN error(printf('read_myloasm_contigs: S record %s lacks myloasm''s LN/DP/DP2/DP3/MEDIAN_DP1 tags', "
@@ -2724,6 +2760,9 @@ public:
 
 		register_macro(PARSE_GFF_ATTRIBUTES, "parse_gff_attributes");
 		register_macro(READ_GFF, "read_gff");
+		// The _miint_gfa_ helpers before the views that use them.
+		register_macro(MIINT_GFA_INTEGER_TAG, "_miint_gfa_integer_tag");
+		register_macro(MIINT_GFA_OTHER_TAGS, "_miint_gfa_other_tags");
 		register_macro(READ_GFA_SEGMENTS, "read_gfa_segments");
 		register_macro(READ_GFA_LINKS, "read_gfa_links");
 		// The _miint_myloasm_ helpers before the read_myloasm_ macros that delegate to them.

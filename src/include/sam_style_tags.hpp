@@ -1,19 +1,37 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace miint {
 
+// The TYPE letter of a TAG:TYPE:VALUE field, from the SAM specification's optional-field
+// section (section 1.5), which GFA 1 adopts for its tags.
+enum class TagType : char {
+	PrintableChar = 'A',
+	Integer = 'i',
+	Float = 'f',
+	String = 'Z',
+	Json = 'J',
+	HexBytes = 'H',
+	NumericArray = 'B',
+};
+
 // One optional field of a SAM-style record. SAM, PAF and GFA all write these as
-// TAG:TYPE:VALUE; the type letter is validated and then dropped, so `value` is the text
-// after the second ':'.
+// TAG:TYPE:VALUE, and `value` is the text after the second ':'. An untyped key:value field
+// has no `type`.
 struct SamStyleTag {
 	std::string key;
 	std::string value;
+	std::optional<TagType> type;
 };
+
+// True when `value` is valid for `type`: the specification's grammar for it, with an f value
+// also allowed to be nan or an infinity (IsFloat in sam_style_tags.cpp).
+bool IsValidTagValue(TagType type, std::string_view value);
 
 enum class TagSyntax {
 	// Every field must be TAG:TYPE:VALUE as the SAM and GFA specifications define it: a

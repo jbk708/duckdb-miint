@@ -83,6 +83,51 @@ SELECT * FROM read_paf('__TEST_DIR__/duplicate_tag.paf');
 ----
 duplicate_tag.paf: line 1: tag 'NM' appears more than once
 
+# minimap2's tags are typed columns. A value whose type letter is not the one minimap2
+# writes, or that does not fit its column, is an error, not a NULL or a value in the map,
+# whichever columns the query reads.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:f:1.5')
+) t(line)) TO '__TEST_DIR__/mistyped_tag.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT read_id FROM read_paf('__TEST_DIR__/mistyped_tag.paf');
+----
+mistyped_tag.paf: line 1: tag 'NM' has type 'f'; read_paf reads it into tag_nm as type 'i'
+
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:i:99999999999999999999')
+) t(line)) TO '__TEST_DIR__/tag_overflow.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT read_id FROM read_paf('__TEST_DIR__/tag_overflow.paf');
+----
+tag_overflow.paf: line 1: tag 'NM' value '99999999999999999999' does not fit tag_nm, a 64-bit integer
+
+# A writer other than minimap2 may write one of those tags untyped. Its value is read as the
+# column's type, and must be valid for it.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:five')
+) t(line)) TO '__TEST_DIR__/untyped_bad.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT read_id FROM read_paf('__TEST_DIR__/untyped_bad.paf');
+----
+untyped_bad.paf: line 1: 'NM:five' has a value that is not valid for type 'i', the type of tag_nm
+
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:5\tde:0.25\tzz:i:7\ttp:A:S')
+) t(line)) TO '__TEST_DIR__/untyped_ok.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query IRTT
+SELECT tag_nm, tag_de, tag_tp, tags FROM read_paf('__TEST_DIR__/untyped_ok.paf');
+----
+5	0.25	S	{zz=7}
+
 statement ok
 COPY (SELECT * FROM (VALUES
     (E'ok\t100\t0\t101\t+\tref\t1000\t0\t100\t100\t100\t60')
@@ -110,13 +155,30 @@ stop_position	BIGINT
 residue_matches	BIGINT
 block_length	BIGINT
 mapq	UTINYINT
+tag_tp	VARCHAR
+tag_cm	BIGINT
+tag_s1	BIGINT
+tag_s2	BIGINT
+tag_nm	BIGINT
+tag_md	VARCHAR
+tag_as	BIGINT
+tag_ms	BIGINT
+tag_nn	BIGINT
+tag_ts	VARCHAR
+tag_cg	VARCHAR
+tag_cs	VARCHAR
+tag_dv	DOUBLE
+tag_de	DOUBLE
+tag_rl	BIGINT
+tag_zd	BIGINT
 tags	MAP(VARCHAR, VARCHAR)
 
-query TTTT
-SELECT DISTINCT typeof(read_id), typeof(position), typeof(mapq), typeof(tags)
+query TTTTTTT
+SELECT DISTINCT typeof(read_id), typeof(position), typeof(mapq), typeof(tag_tp), typeof(tag_nm), typeof(tag_de),
+       typeof(tags)
 FROM read_paf('data/paf/k12_minimap2.paf');
 ----
-VARCHAR	BIGINT	UTINYINT	MAP(VARCHAR, VARCHAR)
+VARCHAR	BIGINT	UTINYINT	VARCHAR	BIGINT	DOUBLE	MAP(VARCHAR, VARCHAR)
 
 # --- Target intervals: 1-based half-open, derived from each read's name ---
 
@@ -171,18 +233,22 @@ FROM read_paf('data/paf/k12_minimap2.paf') WHERE read_id = 'unmapped';
 ----
 unmapped	3000	0	0	*	*	0	0	0	0	0	0
 
-# --- Tags: type letters dropped, values as text ---
+# --- Tags: minimap2's as typed columns, any other in the map ---
 
-query TTTT
-SELECT tags['tp'], tags['cg'], tags['NM'], tags['de']
+# Every value below is the one on the record's line, typed: the fixture writes
+# NM:i:0 ms:i:3000 AS:i:3000 nn:i:0 tp:A:P cm:i:288 s1:i:2982 s2:i:0 de:f:0 rl:i:0 cg:Z:3000M.
+# A tag the line does not carry is NULL, and nothing is left for the map.
+query TIIIITIIITTTRRIIT
+SELECT tag_tp, tag_cm, tag_s1, tag_s2, tag_nm, tag_md, tag_as, tag_ms, tag_nn, tag_ts, tag_cg, tag_cs,
+       tag_dv, tag_de, tag_rl, tag_zd, tags
 FROM read_paf('data/paf/k12_minimap2.paf') WHERE read_id = 'rev_10000_13000';
 ----
-P	3000M	0	0
+P	288	2982	0	0	NULL	3000	3000	0	NULL	3000M	NULL	NULL	0.0	0	NULL	{}
 
-query T
-SELECT tags FROM read_paf('data/paf/k12_minimap2.paf') WHERE read_id = 'unmapped';
+query IIT
+SELECT tag_rl, tag_nm, tags FROM read_paf('data/paf/k12_minimap2.paf') WHERE read_id = 'unmapped';
 ----
-{rl=0}
+0	NULL	{}
 
 # myloasm writes untyped key:value tags; read_paf keeps them and leaves the rest of
 # myloasm's conventions to its own reader.
@@ -281,7 +347,7 @@ COPY (SELECT printf(E'r%d\t100\t0\t100\t+\tref\t10000\t%d\t%d\t100\t100\t60\tNM:
 TO '__TEST_DIR__/many.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
 
 query IIII
-SELECT count(*), sum(position), sum(stop_position - position), sum(tags['NM']::INTEGER)
+SELECT count(*), sum(position), sum(stop_position - position), sum(tag_nm)
 FROM read_paf('__TEST_DIR__/many.paf');
 ----
 3000	4501500	300000	8994

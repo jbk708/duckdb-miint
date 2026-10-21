@@ -312,13 +312,33 @@ SELECT * FROM read_paf('alignments.paf');
 - `residue_matches` (BIGINT): Number of matching bases (PAF column 10)
 - `block_length` (BIGINT): Alignment block length (PAF column 11)
 - `mapq` (UTINYINT): Mapping quality; 255 means missing
-- `tags` (MAP(VARCHAR, VARCHAR)): Optional fields after column 12, as `tag → value`
+- minimap2's tags, one typed column each, NULL when the record does not carry it. These are the tags its manual documents for PAF; the names follow `read_alignments`' `tag_<name>` columns:
+
+  | Column | Type | Tag |
+  |---|---|---|
+  | `tag_tp` | VARCHAR | `tp:A`, alignment type: `P` primary, `S` secondary, `I` / `i` inversion |
+  | `tag_cm` | BIGINT | `cm:i`, minimizers on the chain |
+  | `tag_s1` | BIGINT | `s1:i`, chaining score |
+  | `tag_s2` | BIGINT | `s2:i`, chaining score of the best secondary chain |
+  | `tag_nm` | BIGINT | `NM:i`, mismatches and gaps in the alignment |
+  | `tag_md` | VARCHAR | `MD:Z`, for regenerating the reference sequence of the alignment |
+  | `tag_as` | BIGINT | `AS:i`, DP alignment score |
+  | `tag_ms` | BIGINT | `ms:i`, DP score of the best-scoring segment |
+  | `tag_nn` | BIGINT | `nn:i`, ambiguous bases in the alignment |
+  | `tag_ts` | VARCHAR | `ts:A`, transcript strand (splice mode) |
+  | `tag_cg` | VARCHAR | `cg:Z`, CIGAR |
+  | `tag_cs` | VARCHAR | `cs:Z`, difference string |
+  | `tag_dv` | DOUBLE | `dv:f`, approximate per-base divergence |
+  | `tag_de` | DOUBLE | `de:f`, gap-compressed per-base divergence |
+  | `tag_rl` | BIGINT | `rl:i`, length of query regions with repetitive seeds |
+  | `tag_zd` | BIGINT | `zd:i`, Z-drop break: bit 1 left, bit 2 right |
+- `tags` (MAP(VARCHAR, VARCHAR)): Every other optional field after column 12, as `tag → value`
 - `filepath` (VARCHAR, optional): File path when `include_filepath=true`
 
 **Behavior:**
 - Both intervals move to miint's 1-based half-open convention ([Coordinate conventions](#coordinate-conventions)): the target interval matches `read_alignments`, so `stop_position - position` is the aligned target length, and `query_stop - query_start` is the aligned query length. The query interval is on the read as sequenced, even on the `-` strand, as PAF writes it (see [Reads](#reads)).
 - An unmapped record (`minimap2 --paf-no-hit`) reports `strand` and `reference` as `*` and `position` / `stop_position` as 0, as `read_alignments` does for an unplaced unmapped SAM record (RNAME `*`, POS 0). It has no aligned block on the query either, so `query_start` / `query_stop` are 0 too.
-- Tags such as `NM:i:3` become `tags['NM'] = '3'`. The type letter is validated and dropped, so cast values when you need numbers: `tags['NM']::INTEGER`. A float (`f`) may also be `nan`, `inf` or `infinity`, in any case and with an optional sign, as htslib (and so `read_alignments`) reads one. Untyped `key:value` fields, which some tools write instead of SAM-style tags, are accepted as well.
+- minimap2's tags are typed as they are read: `NM:i:3` becomes `tag_nm = 3`. Any other tag goes into `tags` as text, `zz:i:7` as `tags['zz'] = '7'`, its type letter checked against its value and dropped; a single map has one value type, so cast these when you need numbers. A float (`f`) may also be `nan`, `inf` or `infinity`, in any case and with an optional sign, as htslib (and so `read_alignments`) reads one. Untyped `key:value` fields, which some tools write instead of SAM-style tags, are accepted as well. An untyped field with one of minimap2's names is read as its column's type.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths (`s3://`, `https://`) are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.
 - An empty file returns no rows.
@@ -330,16 +350,17 @@ SELECT * FROM read_paf('alignments.paf');
 - a field that is not a whole non-negative integer, or a mapping quality above 255
 - an interval that runs backwards or past its sequence's length
 - a strand other than `+` or `-`, except `*` on an unmapped record
-- `*` as only one of strand and target name, or an unmapped record with a non-zero target start or end
-- a target end too large to move to the 1-based axis
+- `*` as only one of strand and target name, or an unmapped record with a non-zero query or target start or end
+- a query or target end too large to take the `+ 1`
 - a malformed tag, or a tag that appears twice on one line
+- one of minimap2's tags with a type letter other than the one in the table, or a value that does not fit its column (an integer beyond 64 bits)
 
 **Examples:**
 ```sql
 -- Primary alignments of reads with at most 2% divergence
 SELECT read_id, reference, position, stop_position
 FROM read_paf('reads.paf.gz')
-WHERE tags['tp'] = 'P' AND tags['de']::DOUBLE <= 0.02;
+WHERE tag_tp = 'P' AND tag_de <= 0.02;
 
 -- Fraction of each read covered by its alignments, pooling fragments on the read
 SELECT read_id, query_length,
@@ -391,7 +412,7 @@ SELECT * FROM read_gfa('assembly_graph.gfa');
 **Behavior:**
 - Lines starting with `#` are comments and produce no row.
 - `fields` are the file's own text. No coordinate conversion is applied: a `W` walk's start and end, and a `C` containment's position, stay 0-based as GFA writes them. See [Coordinate conventions](#coordinate-conventions).
-- Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped, so cast values when you need numbers: `tags['LN']::BIGINT`. A float (`f`) may also be `nan`, `inf` or `infinity`, in any case and with an optional sign, as htslib reads one. A tag name may be any identifier (letters, digits and `_`, not starting with a digit), not only the specification's two characters: assemblers write longer ones, such as myloasm's `MEDIAN_DP1:f:33.0`.
+- Tags must be typed (`TAG:TYPE:VALUE`); the type letter is validated and dropped. `read_gfa` keeps every record type, and each type has its own tags, so they stay in one text map: cast values when you need numbers, `tags['LN']::BIGINT`. `read_gfa_segments` and `read_gfa_links` type the specification's tags as columns. A float (`f`) may also be `nan`, `inf` or `infinity`, in any case and with an optional sign, as htslib reads one. A tag name may be any identifier (letters, digits and `_`, not starting with a digit), not only the specification's two characters: assemblers write longer ones, such as myloasm's `MEDIAN_DP1:f:33.0`.
 - A header that declares a version other than GFA 1 (`VN:Z:1` or `VN:Z:1.x`) is rejected rather than read as GFA 1. GFA 2 (`VN:Z:2.0`) redefines the record types.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.
@@ -405,7 +426,10 @@ The `S` records of a GFA file.
 
 - `segment_id` (VARCHAR): Segment name
 - `sequence` (VARCHAR, nullable): Segment sequence; NULL when the file stores `*`
-- `tags` (MAP(VARCHAR, VARCHAR)): The segment's tags, e.g. `LN` (length) and depth tags
+- `tag_ln`, `tag_rc`, `tag_fc`, `tag_kc` (BIGINT, nullable): The specification's `LN` (segment length), `RC` (read count), `FC` (fragment count) and `KC` (k-mer count) tags
+- `tag_sh` (VARCHAR, nullable): `SH`, the sequence's SHA-256 checksum, in hex
+- `tag_ur` (VARCHAR, nullable): `UR`, a URI or path for the sequence
+- `tags` (MAP(VARCHAR, VARCHAR)): The segment's other tags, e.g. an assembler's depth tags
 
 #### `read_gfa_links(filename)`
 
@@ -414,14 +438,16 @@ The `L` records of a GFA file.
 - `from_segment` (VARCHAR), `from_orientation` (VARCHAR): The link's source segment and its orientation, `+` or `-`
 - `to_segment` (VARCHAR), `to_orientation` (VARCHAR): The link's target segment and its orientation
 - `overlap` (VARCHAR, nullable): The overlap CIGAR; NULL when the file stores `*`
-- `tags` (MAP(VARCHAR, VARCHAR)): The link's tags
+- `tag_mq`, `tag_nm`, `tag_rc`, `tag_fc`, `tag_kc` (BIGINT, nullable): The specification's `MQ` (mapping quality), `NM` (mismatches and gaps), `RC` (read count), `FC` (fragment count) and `KC` (k-mer count) tags
+- `tag_id` (VARCHAR, nullable): `ID`, the link's identifier
+- `tags` (MAP(VARCHAR, VARCHAR)): The link's other tags
 
-Both views read through `read_gfa`, so a malformed record of any type fails either one, as it fails `read_gfa`. Both views accept the same paths as `read_gfa` (a path, a glob, or a list); for a `filepath` column, query `read_gfa` directly.
+Both views read through `read_gfa`, so a malformed record of any type fails either one, as it fails `read_gfa`. A typed tag column is NULL when the record does not carry the tag. Read with a value that is not a 64-bit integer (a file may give `LN` a type other than `i`), it is an error naming the record. Both views accept the same paths as `read_gfa` (a path, a glob, or a list); for a `filepath` column, query `read_gfa` directly.
 
 **Examples:**
 ```sql
 -- Segment lengths, from the sequence when it is stored and from the LN tag otherwise
-SELECT segment_id, coalesce(length(sequence), tags['LN']::BIGINT) AS length
+SELECT segment_id, coalesce(length(sequence), tag_ln) AS length
 FROM read_gfa_segments('assembly_graph.gfa');
 
 -- Every segment linked to one segment, in either direction

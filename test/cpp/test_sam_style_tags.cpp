@@ -10,6 +10,7 @@ using Catch::Matchers::ContainsSubstring;
 using miint::ParseSamStyleTags;
 using miint::SamStyleTag;
 using miint::TagSyntax;
+using miint::TagType;
 
 namespace {
 
@@ -29,7 +30,7 @@ using Pairs = std::vector<std::pair<std::string, std::string>>;
 } // namespace
 
 TEST_CASE("Typed tags of every SAM/GFA type parse to key and value", "[sam_style_tags]") {
-	// Values are the spec's own shapes; the type letter is validated and dropped.
+	// Values are the spec's own shapes, after the type letter.
 	CHECK(Parse({"tp:A:P", "ST:A:+"}) == Pairs {{"tp", "P"}, {"ST", "+"}});
 	CHECK(Parse({"NM:i:0", "KC:i:-42", "XX:i:+7"}) == Pairs {{"NM", "0"}, {"KC", "-42"}, {"XX", "+7"}});
 	CHECK(Parse({"de:f:0", "fl:f:1.5e-3", "f2:f:.5", "f3:f:-2E+10"}) ==
@@ -40,6 +41,28 @@ TEST_CASE("Typed tags of every SAM/GFA type parse to key and value", "[sam_style
 	CHECK(Parse({"hx:H:1AE301", "h0:H:"}) == Pairs {{"hx", "1AE301"}, {"h0", ""}});
 	CHECK(Parse({"ba:B:i,1,-2,3", "bf:B:f,0.5,1.25", "bc:B:c"}) ==
 	      Pairs {{"ba", "i,1,-2,3"}, {"bf", "f,0.5,1.25"}, {"bc", "c"}});
+}
+
+TEST_CASE("Each tag keeps its declared type; an untyped field has none", "[sam_style_tags]") {
+	// A reader that types tags into columns needs the letter to check it against the column.
+	std::vector<SamStyleTag> tags;
+	ParseSamStyleTags({"NM:i:3", "de:f:0.5", "tp:A:P", "cg:Z:3M", "shared_mini:186"}, 0, TagSyntax::TypedOrUntyped,
+	                  tags);
+	REQUIRE(tags.size() == 5);
+	CHECK(tags[0].type == TagType::Integer);
+	CHECK(tags[1].type == TagType::Float);
+	CHECK(tags[2].type == TagType::PrintableChar);
+	CHECK(tags[3].type == TagType::String);
+	CHECK_FALSE(tags[4].type.has_value());
+}
+
+TEST_CASE("IsValidTagValue applies one type's grammar", "[sam_style_tags]") {
+	CHECK(miint::IsValidTagValue(TagType::Integer, "-12"));
+	CHECK_FALSE(miint::IsValidTagValue(TagType::Integer, "five"));
+	CHECK(miint::IsValidTagValue(TagType::Float, "-inf"));
+	CHECK_FALSE(miint::IsValidTagValue(TagType::Float, "5."));
+	CHECK(miint::IsValidTagValue(TagType::PrintableChar, "P"));
+	CHECK_FALSE(miint::IsValidTagValue(TagType::PrintableChar, "PS"));
 }
 
 TEST_CASE("Typed tags may have names longer than two characters", "[sam_style_tags]") {

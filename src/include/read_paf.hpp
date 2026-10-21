@@ -7,12 +7,22 @@
 namespace duckdb {
 
 // read_paf(path): one row per PAF record, coordinates in miint's convention
-// (docs/reading.md, "Coordinate conventions").
+// (docs/reading.md, "Coordinate conventions"), minimap2's tags as typed columns.
 class ReadPafTableFunction {
 public:
+	// The current record's value for one typed tag column.
+	struct TypedTagValue {
+		bool present = false;
+		int64_t integer = 0;
+		double real = 0;
+		std::string text;
+	};
+
 	struct LocalState : public LineScanLocalState {
 		miint::PafParser parser;
 		miint::PafRecord record;
+		// One per typed tag column, in column order; the record's other tags stay in record.tags.
+		std::vector<TypedTagValue> typed_tags;
 	};
 
 	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,

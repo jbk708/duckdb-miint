@@ -10,19 +10,8 @@ using duckdb::StringUtil;
 
 namespace {
 
-// Value types, character classes and value grammars from the SAM specification's
-// optional-field section (section 1.5), which GFA 1 adopts for its tags.
-
-// The TYPE letter of a TAG:TYPE:VALUE field.
-enum class TagType : char {
-	PrintableChar = 'A',
-	Integer = 'i',
-	Float = 'f',
-	String = 'Z',
-	Json = 'J',
-	HexBytes = 'H',
-	NumericArray = 'B',
-};
+// Character classes and value grammars from the SAM specification's optional-field
+// section (section 1.5), which GFA 1 adopts for its tags.
 
 // The first character of a B value: the type of every element after it.
 enum class ArrayElementType : char {
@@ -202,7 +191,9 @@ bool IsNumericArray(std::string_view s) {
 	return true;
 }
 
-bool IsValidValue(TagType type, std::string_view value) {
+} // namespace
+
+bool IsValidTagValue(TagType type, std::string_view value) {
 	switch (type) {
 	case TagType::PrintableChar:
 		return value.size() == 1 && IsPrintable(value[0]);
@@ -222,6 +213,8 @@ bool IsValidValue(TagType type, std::string_view value) {
 		return false;
 	}
 }
+
+namespace {
 
 // [A-Za-z_][A-Za-z0-9_]*, for typed and untyped fields alike (why: TagSyntax::Typed).
 bool IsTagName(std::string_view key) {
@@ -252,9 +245,11 @@ void ParseSamStyleTags(const std::vector<std::string_view> &fields, size_t first
 		// NAME:TYPE:VALUE: a known type letter between the first two colons.
 		const bool typed = named && colon + 2 < field.size() && IsTagType(field[colon + 1]) && field[colon + 2] == ':';
 		std::string_view value;
+		std::optional<TagType> type;
 		if (typed) {
 			value = field.substr(colon + 3);
-			if (!IsValidValue(static_cast<TagType>(field[colon + 1]), value)) {
+			type = static_cast<TagType>(field[colon + 1]);
+			if (!IsValidTagValue(*type, value)) {
 				throw std::runtime_error(Quoted(field) + " has a value that is not valid for type '" +
 				                         std::string(1, field[colon + 1]) + "'");
 			}
@@ -272,7 +267,7 @@ void ParseSamStyleTags(const std::vector<std::string_view> &fields, size_t first
 				throw std::runtime_error("tag " + Quoted(key) + " appears more than once");
 			}
 		}
-		out.push_back({std::string(key), std::string(value)});
+		out.push_back({std::string(key), std::string(value), type});
 	}
 }
 

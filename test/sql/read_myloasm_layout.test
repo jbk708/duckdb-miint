@@ -76,7 +76,7 @@ u491ctg	64	180490	196467	s00001_lina_1000487_1016486_r	+split0	0	15999	23	16000	
 query TTT
 SELECT l.contig_id,
        bool_and(l.position = coalesce(l.previous_stop, 1)),
-       max(l.stop_position) = any_value(s.tags['LN']::BIGINT) + 1
+       max(l.stop_position) = any_value(s.tag_ln) + 1
 FROM (SELECT *, lag(stop_position) OVER (PARTITION BY contig_id ORDER BY layout_order) AS previous_stop
       FROM read_myloasm_layout('__TEST_DIR__/ecoli_sim')) l
 JOIN read_gfa_segments('__TEST_DIR__/ecoli_sim/final_contig_graph.gfa') s ON s.segment_id = l.contig_id
