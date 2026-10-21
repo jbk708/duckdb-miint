@@ -53,7 +53,8 @@ split_condition	INTEGER
 #         is a_stop - a_start bases in. Reversed: the circle part comes first, so c_len.
 #   ovh   9 kb of genome then a 3 kb tail. Forward: 9000. Reversed: 3000.
 # myloasm discards [query_start, query_stop) around a breakpoint, so that interval must hold
-# the junction. Every split read is in this set; each has one breakpoint.
+# the junction, taken as the first base of the read's second part (its first part's length
+# + 1). Every split read is in this set; each has one breakpoint.
 query IIII
 SELECT count(*),
        count(*) FILTER (query_start <= junction AND junction <= query_stop),
@@ -65,7 +66,7 @@ FROM (
               WHEN p[2] = 'chim' THEN p[6]::BIGINT
               WHEN p[2] = 'ovh' AND p[6] = 'f' THEN 9000
               WHEN p[2] = 'ovh' THEN 3000
-         END AS junction
+         END + 1 AS junction
   FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_splits('__TEST_DIR__/ecoli_sim'))
 );
 ----
@@ -90,11 +91,13 @@ SELECT count(*) FROM read_myloasm_splits('__TEST_DIR__/ecoli_sim/');
 
 # The fixture's round-2 log is empty (data/myloasm/README.md), so this builds a run whose
 # round-2 log splits three reads, in the format myloasm 0.7.0 writes:
-#   s00913 (reversed chimera) +split1: round 1 cut the read at [5895, 6117), so this piece is
-#     [6117, 12000) of the original read. Round-2 positions are on the piece, so its
-#     breakpoints 1000-1200 and 3000-3100 are [7117, 7317) and [9117, 9217) on the read.
-#   s00000: contained in round 1 (no suffix anywhere), split only in round 2, at 4000-4100.
-#   s00914 +split0: round 1's first piece starts at 0, so 2000-2050 stays [2000, 2050).
+#   s00913 (reversed chimera) +split1: round 1 discarded [5896, 6118) of the read, so this
+#     piece starts 6117 bases in. Round-2 positions are 0-based on the piece, so its
+#     breakpoints 1000-1200 and 3000-3100 are [7118, 7318) and [9118, 9218) on the read.
+#   s00000: contained in round 1 (no suffix anywhere), split only in round 2, at 4000-4100:
+#     [4001, 4101).
+#   s00914 +split0: round 1's first piece starts at the read's start, so 2000-2050 is
+#     [2001, 2051).
 #
 # COPY cannot create a missing directory, but a PER_THREAD_OUTPUT copy creates its target as
 # one. The data_0.csv it leaves behind is not a file any macro reads.
@@ -125,10 +128,10 @@ TO '__TEST_DIR__/splits_round2/0-cleaning_and_unitigs/remap_temp/read_coverages.
 query TTIIIII
 SELECT * FROM read_myloasm_splits('__TEST_DIR__/splits_round2') WHERE cleaning_round = 2 ORDER BY read_id, breakpoint_order;
 ----
-s00000_lina_1000000_1008000_f	NULL	2	1	4000	4100	-4
-s00913_chim_1005000_1011000_2000000_6000_r	+split1	2	1	7117	7317	1
-s00913_chim_1005000_1011000_2000000_6000_r	+split1	2	2	9117	9217	2
-s00914_chim_1014000_1021916_2001999_6677_f	+split0	2	1	2000	2050	1
+s00000_lina_1000000_1008000_f	NULL	2	1	4001	4101	-4
+s00913_chim_1005000_1011000_2000000_6000_r	+split1	2	1	7118	7318	1
+s00913_chim_1005000_1011000_2000000_6000_r	+split1	2	2	9118	9218	2
+s00914_chim_1014000_1021916_2001999_6677_f	+split0	2	1	2001	2051	1
 
 # Round 1 is unchanged by the round-2 log.
 query I

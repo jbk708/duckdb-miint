@@ -277,7 +277,7 @@ Flag:
 - **Established field terms keep their field meaning**, and a new behaviour gets its own name instead of borrowing one that means something else. The project writes "microbial" (or "bacteria and archaea"), not "prokaryotic".
 - **Names say what they measure**, including the unit and the thing it is per (`cells_per_g_of_gdna`, not `cells_per_g`).
 - **Insider nouns in user-facing prose** are replaced with what the reader would call the thing.
-- **An interval column's name carries its axis and convention.** Reference-axis intervals are 1-based half-open `position` / `stop_position`; read-axis intervals are 0-based half-open `query_start` / `query_stop` on the read as sequenced, whatever the strand. A bare `start` / `stop` names neither axis (`cigar_query_intervals` returns read-axis ones, `alignment_slice` takes reference-axis ones), so a new interval column does not use it. A reader converts the file's convention when it reads. An interval column with another name, another convention, or the file's convention passed through is a finding (`docs/reading.md`, "Coordinate conventions").
+- **Every interval is 1-based half-open, on a reference and on a read alike.** Reference intervals are `position` / `stop_position`; read intervals are `query_start` / `query_stop` on the read as sequenced, whatever the strand. A reader converts the file's convention when it reads. A new interval in another convention, or with the file's convention passed through, is a finding (`docs/reading.md`, "Coordinate conventions"; its "Exceptions" lists the functions that predate the rule).
 
 ### R10 — Performance claims are probes [soft, always handed off]
 

@@ -66,7 +66,7 @@ SELECT read_id, split_suffix, piece_offset, piece_length, query_start, query_sto
 FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim')
 WHERE read_id = 's00000_lina_1000000_1008000_f';
 ----
-s00000_lina_1000000_1008000_f	NULL	0	8000	487	8000	-	u491ctg	188954	196467
+s00000_lina_1000000_1008000_f	NULL	0	8000	488	8001	-	u491ctg	188954	196467
 
 # --- Intent: reverse-strand query coordinates are flipped onto the read as sequenced ---
 
@@ -87,8 +87,8 @@ SELECT contig_id,
        max(offset_on_circle) - min(offset_on_circle) < 50
 FROM (
   SELECT contig_id, strand, query_start, query_stop, piece_length,
-         (position - 1 - CASE WHEN p[5] = 'f' THEN p[3]::BIGINT - 2000000 + query_start
-                              ELSE p[3]::BIGINT - 2000000 + p[4]::BIGINT - query_stop END + 400000) % 40000
+         (position - 1 - CASE WHEN p[5] = 'f' THEN p[3]::BIGINT - 2000000 + query_start - 1
+                              ELSE p[3]::BIGINT - 2000000 + p[4]::BIGINT - query_stop + 1 END + 400000) % 40000
            AS offset_on_circle
   FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'))
   WHERE p[2] IN ('circ', 'circb')
@@ -101,30 +101,30 @@ u982ctg	74	12	true
 # --- Intent: split pieces are placed on the original read ---
 
 # Each overhang read is 9 kb of genome joined to a 3 kb tail from a region no other read
-# covers, so only the genomic part can map: [0, 9000) when forward and [3000, 12000) when
+# covers, so only the genomic part can map: [1, 9001) when forward and [3001, 12001) when
 # reversed. myloasm cuts the tail off, so the PAF describes a piece; its coordinates must be
 # moved back onto the read by the piece's offset for this to hold.
 query III
 SELECT count(DISTINCT read_id),
        count(*),
-       count(*) FILTER (CASE WHEN p[6] = 'f' THEN query_stop <= 9000 ELSE query_start >= 3000 END)
+       count(*) FILTER (CASE WHEN p[6] = 'f' THEN query_stop <= 9001 ELSE query_start >= 3001 END)
 FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'))
 WHERE p[2] = 'ovh';
 ----
 20	20	20
 
 # Each chimera is strain A joined to the circle, at a junction known from its name (the name
-# fields are described in data/myloasm/README.md). A forward read starts
-# with its strain A part, so the junction is that part's length; a reverse read is the
-# reverse complement, so it starts with the circle part, and the junction is that part's
-# length. Every alignment must lie on the side of the junction that matches what it aligns
-# to: strain A contigs (u491ctg, u826ctg) or the circle (u840ctg, u982ctg).
+# fields are described in data/myloasm/README.md). A forward read starts with its strain A
+# part, so the second part starts at that part's length + 1; a reverse read is the reverse
+# complement, so it starts with the circle part, and the second part starts at that part's
+# length + 1. Every alignment must lie on the side of that junction that matches what it
+# aligns to: strain A contigs (u491ctg, u826ctg) or the circle (u840ctg, u982ctg).
 query II
 SELECT count(*),
        count(*) FILTER (CASE WHEN (contig_id IN ('u491ctg', 'u826ctg')) = (p[7] = 'f')
                              THEN query_stop <= junction ELSE query_start >= junction END)
 FROM (
-  SELECT *, CASE WHEN p[7] = 'f' THEN p[4]::BIGINT - p[3]::BIGINT ELSE p[6]::BIGINT END AS junction
+  SELECT *, CASE WHEN p[7] = 'f' THEN p[4]::BIGINT - p[3]::BIGINT ELSE p[6]::BIGINT END + 1 AS junction
   FROM (SELECT *, string_split(read_id, '_') AS p FROM read_myloasm_mappings('__TEST_DIR__/ecoli_sim'))
   WHERE p[2] = 'chim'
 );
@@ -133,11 +133,13 @@ FROM (
 
 # A piece runs from the breakpoint before it to the breakpoint after it, or to the end of the
 # read (lengths from the read names). Checked against read_myloasm_splits, every piece's
-# offset and myloasm's own piece length must agree with that span.
+# offset and myloasm's own piece length must agree with that span: the piece is
+# [piece_offset + 1, piece_offset + piece_length + 1) on the read, starting where the
+# breakpoint before it stops and stopping where the one after it starts.
 query II
 SELECT count(*),
-       count(*) FILTER (m.piece_offset + m.piece_length = coalesce(next_bp.query_start, m.read_length)
-                        AND m.piece_offset = coalesce(this_bp.query_stop, 0))
+       count(*) FILTER (m.piece_offset + m.piece_length + 1 = coalesce(next_bp.query_start, m.read_length + 1)
+                        AND m.piece_offset + 1 = coalesce(this_bp.query_stop, 1))
 FROM (
   SELECT *,
          regexp_extract(split_suffix, '[0-9]+$')::BIGINT AS piece_index,
@@ -165,16 +167,18 @@ WHERE read_id = 's00007_lina_1002721_1016739_r';
 # --- Two-level pieces, constructed from the real run ---
 
 # Round-2 breakpoint lines, written below, plus PAF records for the pieces they create,
-# appended to the real PAF in myloasm's format. Expected read intervals:
-#   s00913 +split1 is [6117, 12000). Round 2 cuts it at [1000, 1200) and [3000, 3100):
-#     +split1+split0  starts with its parent:  offset 6117,  [0, 1000) +  -> [6117, 7117)
+# appended to the real PAF in myloasm's format. Breakpoints and PAF intervals are 0-based on
+# the piece, as myloasm writes them; the expected read intervals are 1-based on the read:
+#   s00913 +split1 starts 6117 bases into its read. Round 2 cuts it at [1000, 1200) and
+#   [3000, 3100):
+#     +split1+split0  starts with its parent:  offset 6117,  [0, 1000) +  -> [6118, 7118)
 #     +split1+split1  offset 6117 + 1200:      [100, 1800) - on its 1800 bp reverse
-#                     complement is [0, 1700) forward          -> [7317, 9017)
-#     +split1+split2  offset 6117 + 3100:      [0, 2783) +     -> [9217, 12000)
+#                     complement is [0, 1700) forward          -> [7318, 9018)
+#     +split1+split2  offset 6117 + 3100:      [0, 2783) +     -> [9218, 12001)
 #   s00000, split only in round 2 at [4000, 4100): +split1 offset 4100, [0, 3900) -
-#                                                               -> [4100, 8000)
-#   s00914 +split0 is [0, 7807); round 2 cuts it at [2000, 2050):
-#     +split0+split1  offset 0 + 2050,         [0, 5757) -     -> [2050, 7807)
+#                                                               -> [4101, 8001)
+#   s00914 +split0 starts at the read's start; round 2 cuts it at [2000, 2050):
+#     +split0+split1  offset 0 + 2050,         [0, 5757) -     -> [2051, 7808)
 statement ok
 COPY (SELECT 1 AS x) TO '__TEST_DIR__/mappings_round2' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
 
@@ -226,11 +230,11 @@ WHERE split_suffix LIKE '+split%+split%'
    OR (read_id = 's00000_lina_1000000_1008000_f' AND split_suffix IS NOT NULL)
 ORDER BY query_start, read_id;
 ----
-s00914_chim_1014000_1021916_2001999_6677_f	+split0+split1	2050	5757	2050	7807	-
-s00000_lina_1000000_1008000_f	+split1	4100	3900	4100	8000	-
-s00913_chim_1005000_1011000_2000000_6000_r	+split1+split0	6117	1000	6117	7117	+
-s00913_chim_1005000_1011000_2000000_6000_r	+split1+split1	7317	1800	7317	9017	-
-s00913_chim_1005000_1011000_2000000_6000_r	+split1+split2	9217	2783	9217	12000	+
+s00914_chim_1014000_1021916_2001999_6677_f	+split0+split1	2050	5757	2051	7808	-
+s00000_lina_1000000_1008000_f	+split1	4100	3900	4101	8001	-
+s00913_chim_1005000_1011000_2000000_6000_r	+split1+split0	6117	1000	6118	7118	+
+s00913_chim_1005000_1011000_2000000_6000_r	+split1+split1	7317	1800	7318	9018	-
+s00913_chim_1005000_1011000_2000000_6000_r	+split1+split2	9217	2783	9218	12001	+
 
 query III
 SELECT shared_minimizers, shared_snpmers, differing_snpmers

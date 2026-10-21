@@ -10,17 +10,17 @@
 namespace miint {
 
 // One PAF record, with coordinates in miint's convention (docs/reading.md, "Coordinate
-// conventions"): the read axis stays 0-based half-open as PAF writes it, and the
-// reference axis becomes 1-based half-open.
+// conventions"): PAF's 0-based half-open intervals become 1-based half-open on both the
+// query and the target.
 struct PafRecord {
 	std::string read_id;
 	int64_t query_length = 0;
-	int64_t query_start = 0; // read axis, 0-based half-open, on the read as sequenced
+	int64_t query_start = 0; // 1-based half-open, on the read as sequenced; 0 for an unmapped record
 	int64_t query_stop = 0;
 	std::string strand;    // "+" or "-"; "*" for an unmapped record
 	std::string reference; // "*" for an unmapped record
 	int64_t reference_length = 0;
-	int64_t position = 0;      // reference axis, 1-based half-open; 0 for an unmapped record
+	int64_t position = 0;      // 1-based half-open, on the target; 0 for an unmapped record
 	int64_t stop_position = 0; // 0 for an unmapped record
 	int64_t residue_matches = 0;
 	int64_t block_length = 0;

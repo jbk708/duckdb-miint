@@ -302,12 +302,12 @@ SELECT * FROM read_paf('alignments.paf');
 **Output schema:**
 - `read_id` (VARCHAR): Query sequence name (PAF column 1)
 - `query_length` (BIGINT): Query sequence length
-- `query_start` (BIGINT): Start of the aligned block on the query — **read axis**, 0-based
-- `query_stop` (BIGINT): End of the aligned block on the query, exclusive
+- `query_start` (BIGINT): Start of the aligned block on the query, 1-based; PAF's 0-based start `+ 1`
+- `query_stop` (BIGINT): End of the aligned block on the query, exclusive; PAF's end `+ 1`
 - `strand` (VARCHAR): `+` or `-`; `*` for an unmapped record
 - `reference` (VARCHAR): Target sequence name; `*` for an unmapped record
 - `reference_length` (BIGINT): Target sequence length
-- `position` (BIGINT): Start of the aligned block on the target — **reference axis**, 1-based; PAF's 0-based start `+ 1`
+- `position` (BIGINT): Start of the aligned block on the target, 1-based; PAF's 0-based start `+ 1`
 - `stop_position` (BIGINT): End of the aligned block on the target, exclusive; PAF's end `+ 1`
 - `residue_matches` (BIGINT): Number of matching bases (PAF column 10)
 - `block_length` (BIGINT): Alignment block length (PAF column 11)
@@ -316,8 +316,8 @@ SELECT * FROM read_paf('alignments.paf');
 - `filepath` (VARCHAR, optional): File path when `include_filepath=true`
 
 **Behavior:**
-- Coordinates follow the two axes in [Coordinate conventions](#coordinate-conventions). The target interval moves to the 1-based reference axis, matching `read_alignments`, so `stop_position - position` is the aligned target length. The query interval stays 0-based on the read as sequenced, matching `cigar_query_intervals`, even on the `-` strand (see [Read axis](#read-axis)).
-- An unmapped record (`minimap2 --paf-no-hit`) reports `strand` and `reference` as `*` and `position` / `stop_position` as 0, as `read_alignments` does for an unplaced unmapped SAM record (RNAME `*`, POS 0).
+- Both intervals move to miint's 1-based half-open convention ([Coordinate conventions](#coordinate-conventions)): the target interval matches `read_alignments`, so `stop_position - position` is the aligned target length, and `query_stop - query_start` is the aligned query length. The query interval is on the read as sequenced, even on the `-` strand, as PAF writes it (see [Reads](#reads)).
+- An unmapped record (`minimap2 --paf-no-hit`) reports `strand` and `reference` as `*` and `position` / `stop_position` as 0, as `read_alignments` does for an unplaced unmapped SAM record (RNAME `*`, POS 0). It has no aligned block on the query either, so `query_start` / `query_stop` are 0 too.
 - Tags such as `NM:i:3` become `tags['NM'] = '3'`. The type letter is validated and dropped, so cast values when you need numbers: `tags['NM']::INTEGER`. A float (`f`) may also be `nan`, `inf` or `infinity`, in any case and with an optional sign, as htslib (and so `read_alignments`) reads one. Untyped `key:value` fields, which some tools write instead of SAM-style tags, are accepted as well.
 - gzip-compressed files (`.gz`) are decompressed transparently, including multi-member (bgzip) files. Remote paths (`s3://`, `https://`) are read through DuckDB's file system.
 - One thread reads each file; several files are read in parallel.
@@ -341,7 +341,7 @@ SELECT read_id, reference, position, stop_position
 FROM read_paf('reads.paf.gz')
 WHERE tags['tp'] = 'P' AND tags['de']::DOUBLE <= 0.02;
 
--- Fraction of each read covered by its alignments, pooling fragments on the read axis
+-- Fraction of each read covered by its alignments, pooling fragments on the read
 SELECT read_id, query_length,
        list_sum([iv.stop - iv.start FOR iv IN compress_intervals(query_start, query_stop)]) / query_length
            AS fraction_aligned
@@ -455,9 +455,9 @@ The formats were verified against myloasm 0.7.0's source and its real output; an
 
 myloasm tells strains apart with **SNPmers**: k-mers that span a variable site. Two reads, or a read and a contig, that share many SNPmers and contradict few come from the same strain.
 
-**Coordinates.** Contig intervals (`position`, `stop_position`) are on the **reference axis**, 1-based half-open, on the **unpolished** contig: the coordinates of the GFA and the PAF. Polishing shifts positions slightly, and trims the overlapping ends of a circular contig, whose unpolished length then exceeds its polished length by the overlap. Use the polished FASTA for which contig a read belongs to, not for positions in it. Read intervals (`query_start`, `query_stop`) are on the **read axis**, 0-based half-open, on the **original read as sequenced**. myloasm writes neither directly, and these functions convert both:
+**Coordinates.** Every interval is 1-based half-open, as everywhere in miint ([Coordinate conventions](#coordinate-conventions)). Contig intervals (`position`, `stop_position`) are on the **unpolished** contig: the coordinates of the GFA and the PAF. Polishing shifts positions slightly, and trims the overlapping ends of a circular contig, whose unpolished length then exceeds its polished length by the overlap. Use the polished FASTA for which contig a read belongs to, not for positions in it. Read intervals (`query_start`, `query_stop`) are on the **original read as sequenced**. myloasm writes every interval 0-based half-open, and its read intervals on something other than the read, so these functions convert them:
 - For a `-` alignment, myloasm writes the query interval on the reverse complement of the read. It is flipped back.
-- myloasm splits reads it judges chimeric and renames each piece `<read>+split<i>`. A second cleaning round can split a piece again, giving `<read>+split<i>+split<j>`. Coordinates are written relative to the piece. `read_id` is the read's own name, `split_suffix` keeps the suffix, `piece_offset` is where the piece starts in the read, and `query_start` / `query_stop` are moved onto the read. A `+split0` suffix does not by itself mean the read was split. In each cleaning round, myloasm checks for chimeras only the reads no other read contains (its "outer" reads); each of those gets a suffix, and one with no breakpoint becomes a single full-length `+split0` piece.
+- myloasm splits reads it judges chimeric and renames each piece `<read>+split<i>`. A second cleaning round can split a piece again, giving `<read>+split<i>+split<j>`. Coordinates are written relative to the piece. `read_id` is the read's own name, `split_suffix` keeps the suffix, `piece_offset` is the number of read bases before the piece (0 for the first), and `query_start` / `query_stop` are moved onto the read. A `+split0` suffix does not by itself mean the read was split. In each cleaning round, myloasm checks for chimeras only the reads no other read contains (its "outer" reads); each of those gets a suffix, and one with no breakpoint becomes a single full-length `+split0` piece.
 
 See [Coordinate conventions](#coordinate-conventions).
 
@@ -568,7 +568,7 @@ FROM read_fastx('reads.fastq.gz') r
 ANTI JOIN read_myloasm_mappings('myloasm_out') m ON m.read_id = r.read_id;
 
 -- The bases of each read that align, cut from the read itself
-SELECT m.read_id, m.contig_id, substr(r.sequence1, m.query_start + 1, m.query_stop - m.query_start) AS aligned
+SELECT m.read_id, m.contig_id, substr(r.sequence1, m.query_start, m.query_stop - m.query_start) AS aligned
 FROM read_myloasm_mappings('myloasm_out') m
 JOIN read_fastx('reads.fastq.gz') r USING (read_id);
 
@@ -1236,16 +1236,14 @@ SELECT parse_gff_attributes('ID=gene1;Name=TEST1;biotype=protein_coding');
 
 ### Coordinate conventions
 
-miint reports positions on two axes. A reader converts the file's own convention when it reads, so intervals from different readers compose without adjustment; the [exceptions](#exceptions) are listed below.
+**Every miint interval is 1-based half-open**, on a reference and on a read alike, so the same base of a sequence has the same number wherever it appears and intervals from different functions compose without adjustment. A length is `stop - start`, never `+ 1`, and the bases of an interval are `substr(sequence, start, stop - start)`. A reader converts the file's own convention when it reads; the [exceptions](#exceptions) are listed below.
 
-| Axis | Columns | Convention | Length |
-|---|---|---|---|
-| **Reference**: a reference, contig or annotated sequence | `position`, `stop_position` | 1-based half-open `[position, stop_position)` | `stop_position - position` |
-| **Read**: offsets into a read, in the orientation it was sequenced | `query_start`, `query_stop` | 0-based half-open `[query_start, query_stop)` | `query_stop - query_start` |
+| Sequence | Columns | Interval |
+|---|---|---|
+| A reference, contig or annotated sequence | `position`, `stop_position` | `[position, stop_position)` |
+| A read, in the orientation it was sequenced | `query_start`, `query_stop` | `[query_start, query_stop)` |
 
-Neither length takes a `+ 1`. `position`/`stop_position` and `query_start`/`query_stop` always name their axis. A bare `start`/`stop` does not, so check the function's documentation: `cigar_query_intervals` and `extract_linked_amplicon` return read-axis `start`/`stop`, `alignment_slice` and `interval_bins` take reference-axis ones, and `compress_intervals` takes either.
-
-#### Reference axis
+#### References
 
 `position` / `stop_position` are used by `read_alignments`, `align_minimap2` / `align_bowtie2` and friends, `alignment_slice`, `compute_coverage_depth`, `genome_coverage` / `genome_coverage_per_sample`, `read_gff`, `read_ncbi_annotation`, `read_paf`, `read_myloasm_layout` and `read_myloasm_mappings`.
 
@@ -1259,16 +1257,23 @@ The value a file contained is always recoverable: GFF's closed `end` is `stop_po
 
 > **Changed behaviour.** `read_gff` and `read_ncbi_annotation` previously emitted the source format's closed `end` directly under the same `stop_position` column name. Queries that consumed it now see a value one larger. Anything computing a length as `stop_position - position + 1` should drop the `+ 1`; anything that compensated with its own `+ 1` before feeding another miint function should remove that compensation. The motivation was that the mismatch was silent: feeding `read_gff` output to `genome_coverage` (which computes `SUM(stop - start)`) type-checked, ran, raised nothing, and under-counted every feature by exactly one base.
 
-#### Read axis
+#### Reads
 
-Read-axis intervals say which bases of a read an alignment covers. They are 0-based because they are offsets into the read's sequence. `cigar_query_intervals` returns them as `start` / `stop`, and `compress_intervals` merges them as they are. `read_paf` reports `query_start` / `query_stop` on the same axis, so a PAF interval can be pooled with intervals from SAM records of the same read without conversion.
+Read intervals say which bases of a read an alignment covers. `read_paf` reports them as `query_start` / `query_stop`, and the [myloasm](#myloasm) functions report them on the original read.
 
-Read-axis intervals are always on the read **as sequenced**, whatever strand the alignment is on. A reverse-strand alignment covering the read's last 3000 of 4500 bases is `[1500, 4500)`, not `[0, 3000)`. PAF already writes forward-strand query coordinates; `cigar_query_intervals` mirrors a reverse-strand CIGAR onto the read for the same reason. myloasm does not, and the [myloasm](#myloasm) functions flip its `-` intervals and move its split-piece intervals onto the original read.
+| Source convention | Formats | How miint converts it |
+|---|---|---|
+| 0-based half-open `[start, end)` on the read as sequenced | PAF query columns | `query_start = start + 1`, `query_stop = end + 1` |
+| 0-based half-open on a read piece, on its reverse complement for `-` | myloasm's PAF, GFA `a` lines and breakpoint logs | mirrored back for `-`, moved onto the original read, then `+ 1` |
 
-DuckDB's `substr` is 1-based, so the aligned bases of a read are `substr(sequence1, query_start + 1, query_stop - query_start)`.
+Read intervals are always on the read **as sequenced**, whatever strand the alignment is on. A reverse-strand alignment covering the read's last 3000 of 4500 bases is `[1501, 4501)`, not `[1, 3001)`. PAF already writes forward-strand query coordinates; myloasm does not, and its functions flip its `-` intervals. The aligned bases of a read are `substr(sequence1, query_start, query_stop - query_start)` on `read_fastx`'s `sequence1`, the read as sequenced. `read_alignments`' `sequence` is SAM's SEQ instead: reverse-complemented on a reverse-strand record, and missing any hard-clipped bases.
+
+An unmapped PAF record has no aligned block, so it reports `query_start = 0` and `query_stop = 0`, like its `position` / `stop_position`.
 
 #### Exceptions
 
+- `cigar_query_intervals` and `extract_linked_amplicon` return **0-based** half-open read intervals as `start` / `stop`. Add 1 to both ends to compare them with `read_paf` or the myloasm functions. Moving them to the rule is tracked in [#330](https://github.com/the-miint/duckdb-miint/issues/330).
+- `blast` reports BLAST's own 1-based **closed** `query_start` / `query_end` and `subject_start` / `subject_end`; the subject pair is reversed for a minus-strand hit. `align_sortmerna_rrna` reports 1-based **closed** `ref_start` / `ref_end`. Both are tracked in [#330](https://github.com/the-miint/duckdb-miint/issues/330).
 - `read_gfa` returns a file's fields as written, so a `W` walk's start and end and a `C` containment's position stay 0-based. See [GFA](#gfa).
 - Bin indices from `bin_of` / `bin_start` / `interval_bins` ([Genome bins](alignment_analysis.md#genome-bins)) are 0-based array positions, not coordinates.
 - `absquant_orf_copies` takes 1-based **closed** ORF coordinates, the convention woltka's `coords.txt` uses; see [Absolute quantification](absolute_quantification.md).

@@ -25,11 +25,15 @@ int64_t ParseCount(std::string_view field, const char *what) {
 	return value;
 }
 
-void CheckInterval(const char *axis, int64_t start, int64_t stop, int64_t length) {
+void CheckInterval(const char *sequence, int64_t start, int64_t stop, int64_t length) {
 	if (start > stop || stop > length) {
-		throw std::runtime_error(std::string(axis) + " interval [" + std::to_string(start) + ", " +
-		                         std::to_string(stop) + ") is not within the " + axis + " length " +
+		throw std::runtime_error(std::string(sequence) + " interval [" + std::to_string(start) + ", " +
+		                         std::to_string(stop) + ") is not within the " + sequence + " length " +
 		                         std::to_string(length));
+	}
+	if (stop == std::numeric_limits<int64_t>::max()) {
+		throw std::runtime_error(std::string(sequence) + " end " + std::to_string(stop) +
+		                         " is too large for a 1-based position");
 	}
 }
 
@@ -52,8 +56,8 @@ void PafParser::Parse(std::string_view line, PafRecord &record) {
 
 	record.read_id.assign(fields_[0]);
 	record.query_length = ParseCount(fields_[1], "query length");
-	record.query_start = ParseCount(fields_[2], "query start");
-	record.query_stop = ParseCount(fields_[3], "query end");
+	const int64_t query_start = ParseCount(fields_[2], "query start");
+	const int64_t query_end = ParseCount(fields_[3], "query end");
 	record.strand.assign(fields_[4]);
 	record.reference.assign(fields_[5]);
 	record.reference_length = ParseCount(fields_[6], "target length");
@@ -79,23 +83,27 @@ void PafParser::Parse(std::string_view line, PafRecord &record) {
 		                         record.strand + "' and target '" + record.reference + "'");
 	}
 
-	CheckInterval("query", record.query_start, record.query_stop, record.query_length);
 	if (unmapped) {
+		if (query_start != 0 || query_end != 0) {
+			throw std::runtime_error("an unmapped record must have query start and end 0, found [" +
+			                         std::to_string(query_start) + ", " + std::to_string(query_end) + ")");
+		}
 		if (target_start != 0 || target_end != 0) {
 			throw std::runtime_error("an unmapped record must have target start and end 0, found [" +
 			                         std::to_string(target_start) + ", " + std::to_string(target_end) + ")");
 		}
 		// read_alignments reports an unplaced unmapped record (RNAME *, POS 0) at position 0;
-		// match it.
+		// match it. The query has no aligned block either, so it gets the same 0.
+		record.query_start = 0;
+		record.query_stop = 0;
 		record.position = 0;
 		record.stop_position = 0;
 	} else {
+		CheckInterval("query", query_start, query_end, record.query_length);
 		CheckInterval("target", target_start, target_end, record.reference_length);
-		if (target_end == std::numeric_limits<int64_t>::max()) {
-			throw std::runtime_error("target end " + std::to_string(target_end) +
-			                         " is too large for a 1-based position");
-		}
-		// PAF targets are 0-based half-open; miint's reference axis is 1-based half-open.
+		// PAF intervals are 0-based half-open; miint's are 1-based half-open.
+		record.query_start = query_start + 1;
+		record.query_stop = query_end + 1;
 		record.position = target_start + 1;
 		record.stop_position = target_end + 1;
 	}

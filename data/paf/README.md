@@ -15,7 +15,7 @@ from how the read was built instead of copying it from minimap2's output.
 
 ## Reads
 
-Coordinates are 0-based half-open on `k12_100000_120000`, the same convention PAF uses.
+Coordinates are 0-based half-open on `k12_100000_120000`, the same convention PAF uses; `read_paf` reports each interval with both ends `+ 1`.
 
 | Read | Construction | Alignment it must produce |
 |---|---|---|

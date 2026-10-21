@@ -1,15 +1,14 @@
 # name: test/sql/read_paf.test
-# description: read_paf reads PAF into miint's two coordinate axes and fails loudly on malformed records
+# description: read_paf reads PAF into miint's 1-based half-open intervals and fails loudly on malformed records
 # group: [sql]
 
 require miint
 
 # The fixture's reads were cut from k12_100000_120000 at the coordinates in their names
 # (data/paf/README.md), so every expected interval below is derived from how a read was
-# built, not copied from minimap2's output. PAF writes target intervals 0-based half-open;
-# miint's reference axis is 1-based half-open, so [s, e) in a name must come back as
-# position s + 1, stop_position e + 1. Query intervals stay 0-based on the read as
-# sequenced (docs/reading.md, "Coordinate conventions").
+# built, not copied from minimap2's output. PAF writes intervals 0-based half-open on the
+# target and the query alike; miint's are 1-based half-open, so [s, e) in a name must come
+# back as s + 1, e + 1 on either sequence (docs/reading.md, "Coordinate conventions").
 
 # --- Errors ---
 
@@ -119,7 +118,7 @@ FROM read_paf('data/paf/k12_minimap2.paf');
 ----
 VARCHAR	BIGINT	UTINYINT	MAP(VARCHAR, VARCHAR)
 
-# --- Reference axis: 1-based half-open, derived from each read's name ---
+# --- Target intervals: 1-based half-open, derived from each read's name ---
 
 # Every mapped read must land exactly where it was cut from. The CASE keeps the name
 # parsing off the unmapped read, whose name carries no coordinates (a WHERE conjunct would
@@ -143,24 +142,27 @@ SELECT count(*) FROM read_paf('data/paf/k12_minimap2.paf') WHERE reference <> '*
 ----
 6
 
-# --- Read axis: 0-based half-open on the read as sequenced ---
+# --- Query intervals: on the read as sequenced ---
 
 # Exact chunks align end to end in either orientation. The forward overhang read aligns
-# over its first 4000 bases; the reverse one is foreign sequence [0, 1500) followed by the
-# reverse-complemented slice, so its aligned block is [1500, 4500). Mirroring that onto
-# the reverse strand would give [0, 3000), which is the foreign sequence.
+# over its first 4000 bases; the reverse one is 1500 bases of foreign sequence followed by
+# the reverse-complemented slice, so its aligned block is [1501, 4501). Mirroring that onto
+# the reverse strand would give [1, 3001), which is the foreign sequence.
 query TIIIT
 SELECT read_id, query_length, query_start, query_stop, strand
 FROM read_paf('data/paf/k12_minimap2.paf') WHERE reference <> '*' ORDER BY read_id;
 ----
-fwd_1000_3000	2000	0	2000	+
-fwd_5000_9000	4000	0	4000	+
-ovhfwd_16000_20000	5500	0	4000	+
-ovhrev_17000_20000	4500	1500	4500	-
-rev_10000_13000	3000	0	3000	-
-rev_14000_18000	4000	0	4000	-
+fwd_1000_3000	2000	1	2001	+
+fwd_5000_9000	4000	1	4001	+
+ovhfwd_16000_20000	5500	1	4001	+
+ovhrev_17000_20000	4500	1501	4501	-
+rev_10000_13000	3000	1	3001	-
+rev_14000_18000	4000	1	4001	-
 
 # --- Unmapped records match read_alignments: reference '*', positions 0 ---
+
+# An unmapped record has no interval on either sequence, so both report 0, as an unplaced
+# unmapped SAM record's position does.
 
 query TIIITTIIIIII
 SELECT read_id, query_length, query_start, query_stop, strand, reference, reference_length,
@@ -190,12 +192,13 @@ FROM read_paf('data/myloasm/ecoli_sim/3-mapping/map_to_unitigs.paf.gz');
 ----
 1085	1085	1085	1085
 
-# --- Agreement with the embedded aligner on both axes ---
+# --- Agreement with the embedded aligner on the target and the read ---
 
 # The same reads aligned by align_minimap2 report SAM-derived coordinates. The reference
-# interval must match read_paf's, and the read-axis interval from cigar_query_intervals
-# must match read_paf's query interval -- which is what lets PAF and SAM intervals for
-# one read be pooled without conversion.
+# interval must match read_paf's, and the read interval from cigar_query_intervals must
+# match read_paf's query interval, which is what lets PAF and SAM intervals for one read be
+# pooled. cigar_query_intervals still reports 0-based intervals, an exception listed in
+# docs/reading.md until #330 moves it to the rule, so its values take + 1 here.
 statement ok
 CREATE TEMP TABLE paf_reads AS SELECT * FROM read_fastx('data/paf/k12_reads.fa.gz');
 
@@ -205,8 +208,8 @@ CREATE TEMP TABLE paf_ref AS SELECT * FROM read_fastx('data/paf/k12_ref.fa.gz');
 statement ok
 CREATE TEMP TABLE sam AS
 SELECT read_id, reference, position, stop_position,
-       list_min([iv.start FOR iv IN cigar_query_intervals(cigar, flags)]) AS query_start,
-       list_max([iv.stop FOR iv IN cigar_query_intervals(cigar, flags)]) AS query_stop
+       list_min([iv.start FOR iv IN cigar_query_intervals(cigar, flags)]) + 1 AS query_start,
+       list_max([iv.stop FOR iv IN cigar_query_intervals(cigar, flags)]) + 1 AS query_stop
 FROM align_minimap2('paf_reads', subject_table := 'paf_ref', preset := 'map-hifi', max_secondary := 0)
 WHERE NOT alignment_is_unmapped(flags);
 

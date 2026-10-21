@@ -56,7 +56,7 @@ std::string WithField(size_t index, const std::string &value) {
 
 TEST_CASE("PafParser converts the target interval to 1-based half-open", "[paf]") {
 	// The read is reference bases [1000, 3000) in PAF's 0-based half-open terms. miint's
-	// reference axis is 1-based half-open, so both ends move up by one and the length is
+	// intervals are 1-based half-open, so both ends move up by one and the length is
 	// unchanged: [1001, 3001).
 	auto r = Parse(kForward);
 	CHECK(r.read_id == "fwd_1000_3000");
@@ -71,16 +71,18 @@ TEST_CASE("PafParser converts the target interval to 1-based half-open", "[paf]"
 	CHECK(r.mapq == 60);
 }
 
-TEST_CASE("PafParser keeps the query interval 0-based on the read as sequenced", "[paf]") {
-	// The reverse overhang read is foreign sequence [0, 1500) followed by the reverse
+TEST_CASE("PafParser converts the query interval to 1-based half-open on the read as sequenced", "[paf]") {
+	// The reverse overhang read is 1500 bases of foreign sequence followed by the reverse
 	// complement of the reference slice, so the aligned block is the read's last 3000
-	// bases. PAF already reports forward-strand query coordinates; mirroring them would
-	// give [0, 3000) and point at the foreign sequence.
+	// bases: [1500, 4500) as PAF writes it, [1501, 4501) in miint's convention. PAF already
+	// reports forward-strand query coordinates; mirroring them would give [1, 3001) and
+	// point at the foreign sequence.
 	auto r = Parse(kReverseOverhang);
 	CHECK(r.strand == "-");
 	CHECK(r.query_length == 4500);
-	CHECK(r.query_start == 1500);
-	CHECK(r.query_stop == 4500);
+	CHECK(r.query_start == 1501);
+	CHECK(r.query_stop == 4501);
+	CHECK(r.query_stop - r.query_start == 3000);
 	CHECK(r.position == 17001);
 	CHECK(r.stop_position == 20001);
 }
@@ -89,7 +91,8 @@ TEST_CASE("PafParser reports an unmapped record the way read_alignments does", "
 	// minimap2 --paf-no-hit writes strand and target as '*' with zero coordinates.
 	// read_alignments reports an unmapped SAM record as reference '*' at position 0, so a
 	// query filtering unmapped rows works the same on both readers; position 1 would look
-	// like an alignment at the reference's first base.
+	// like an alignment at the reference's first base. The query has no aligned block
+	// either, so its interval is 0 too, not an empty one at the read's first base.
 	auto r = Parse(kUnmapped);
 	CHECK(r.read_id == "unmapped");
 	CHECK(r.strand == "*");
@@ -116,11 +119,11 @@ TEST_CASE("PafParser keeps tags in order with their type letters dropped", "[paf
 TEST_CASE("PafParser accepts myloasm's PAF, untyped tags and all, without interpreting it", "[paf]") {
 	// myloasm writes untyped tags and puts '-' query coordinates on the reverse complement.
 	// read_paf reports what the file says; fixing myloasm's coordinates is the myloasm
-	// reader's job, so the values here are exactly as written (the target moved by one).
+	// reader's job, so the values here are as written, each moved up by one.
 	auto r = Parse(kMyloasm);
 	CHECK(r.read_id == "r953-s00933_ovh_1003000_1012000_4200000_r+split1");
-	CHECK(r.query_start == 6712);
-	CHECK(r.query_stop == 8895);
+	CHECK(r.query_start == 6713);
+	CHECK(r.query_stop == 8896);
 	CHECK(r.position == 1);
 	CHECK(r.stop_position == 2184);
 	CHECK(r.mapq == 255);
@@ -151,11 +154,15 @@ TEST_CASE("PafParser rejects malformed records with a message naming the defect"
 		CHECK_THROWS_WITH(Parse(WithField(7, "3001")), ContainsSubstring("target"));  // start > stop
 		CHECK_THROWS_WITH(Parse(WithField(8, "20001")), ContainsSubstring("target")); // stop > length
 	}
-	SECTION("a target end with no 1-based position") {
-		// stop_position is target end + 1, which the largest integer does not have.
+	SECTION("an end with no 1-based position") {
+		// stop_position is target end + 1, and query_stop is query end + 1, which the largest
+		// integer does not have.
 		CHECK_THROWS_WITH(Parse("r\t10\t0\t10\t+\tref\t9223372036854775807\t9223372036854775797\t"
 		                        "9223372036854775807\t10\t10\t60"),
-		                  ContainsSubstring("too large"));
+		                  ContainsSubstring("target end 9223372036854775807 is too large"));
+		CHECK_THROWS_WITH(Parse("r\t9223372036854775807\t9223372036854775797\t9223372036854775807\t+\tref\t"
+		                        "20\t0\t10\t10\t10\t60"),
+		                  ContainsSubstring("query end 9223372036854775807 is too large"));
 	}
 	SECTION("a strand that is not + or -") {
 		CHECK_THROWS_WITH(Parse(WithField(4, "x")), ContainsSubstring("strand"));
@@ -165,6 +172,8 @@ TEST_CASE("PafParser rejects malformed records with a message naming the defect"
 		CHECK_THROWS_WITH(Parse(WithField(4, "*")), ContainsSubstring("unmapped"));
 		CHECK_THROWS_WITH(Parse(WithField(5, "*")), ContainsSubstring("unmapped"));
 		CHECK_THROWS_WITH(Parse("unmapped\t3000\t0\t0\t*\t*\t0\t5\t9\t0\t0\t0"), ContainsSubstring("unmapped"));
+		CHECK_THROWS_WITH(Parse("unmapped\t3000\t5\t9\t*\t*\t0\t0\t0\t0\t0\t0"),
+		                  ContainsSubstring("an unmapped record must have query start and end 0"));
 	}
 	SECTION("a mapping quality above 255") {
 		CHECK_THROWS_WITH(Parse(WithField(11, "256")), ContainsSubstring("mapping quality"));

@@ -162,14 +162,15 @@ const std::string READ_GFA_LINKS = // NOLINT
 // real output (data/myloasm/README.md); the user-facing caveats are in docs/reading.md. Each
 // macro reads only the member files it needs, and a missing one is the reader's file error.
 //
-// Coordinates follow miint's two axes: contig `position`/`stop_position` are 1-based
-// half-open on the unpolished contig (the GFA's and PAF's); read `query_start`/`query_stop`
-// are 0-based half-open on the original read as sequenced. myloasm gives neither directly:
+// Coordinates follow miint's convention, 1-based half-open: contig `position`/`stop_position`
+// on the unpolished contig (the GFA's and PAF's), and read `query_start`/`query_stop` on the
+// original read as sequenced. myloasm writes 0-based half-open intervals (read_paf has
+// already converted the PAF's), and gives neither directly:
 //   * '-' query intervals (PAF and GFA 'a' lines) are on the reverse complement of the read;
 //   * a chimera split renames each piece <read>+split<i> (a second cleaning round appends a
-//     second suffix) and gives coordinates on the piece. A piece's offset in the read comes
-//     from the breakpoint logs: piece i >= 1 starts at breakpoint i's stop, and +split0
-//     starts where its parent does.
+//     second suffix) and gives coordinates on the piece. A piece's offset in the read, the
+//     number of read bases before it, comes from the breakpoint logs: piece i >= 1 starts at
+//     breakpoint i's stop, and +split0 starts where its parent does.
 // Malformed values raise error() from one CASE in the WHERE clause; see "Validation in a
 // table macro" in docs/internals/duckdb-engine-notes.md.
 
@@ -203,16 +204,18 @@ const std::string MIINT_MYLOASM_OFFSET_PIECE = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_offset_piece(name) AS "
     "CASE WHEN contains(name, '+split') THEN regexp_replace(name, '([+]split0)+$', '') ELSE name END; ";
 
-// A piece's interval [start, stop) moved onto the original read: myloasm writes a '-'
-// interval on the piece's reverse complement, so it is mirrored back first, then shifted by
-// where the piece starts in the read.
+// A piece's 1-based half-open interval [start, stop) moved onto the original read: myloasm
+// writes a '-' interval on the piece's reverse complement, so it is mirrored back first, then
+// shifted by the bases before the piece. On a piece of length L, base p of the reverse
+// complement is base L + 1 - p of the piece, so [start, stop) mirrors to
+// [L + 2 - stop, L + 2 - start).
 const std::string MIINT_MYLOASM_QUERY_START = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_query_start(piece_offset, strand, piece_length, start, stop) AS "
-    "piece_offset + CASE WHEN strand = '+' THEN start ELSE piece_length - stop END; ";
+    "piece_offset + CASE WHEN strand = '+' THEN start ELSE piece_length + 2 - stop END; ";
 
 const std::string MIINT_MYLOASM_QUERY_STOP = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_query_stop(piece_offset, strand, piece_length, start, stop) AS "
-    "piece_offset + CASE WHEN strand = '+' THEN stop ELSE piece_length - start END; ";
+    "piece_offset + CASE WHEN strand = '+' THEN stop ELSE piece_length + 2 - start END; ";
 
 // TRUE for a piece name the breakpoint logs account for, given its looked-up `piece_offset`;
 // otherwise an error naming it after `context`. For the ELSE arm of a WHERE-clause CASE, so it
@@ -275,9 +278,9 @@ const std::string MIINT_MYLOASM_BREAKPOINTS = // NOLINT
     "       regexp_extract(e.unnest, 'COND:(-?[0-9]+)$', 1)::INTEGER AS split_condition "
     "FROM checked, unnest(entries) WITH ORDINALITY e; ";
 
-// read_myloasm_splits(dir): the breakpoints moved onto the original read. A round-2 line
-// splits a round-1 piece (one suffix at most: there are two rounds), whose own offset is the
-// stop of the round-1 breakpoint that starts it.
+// read_myloasm_splits(dir): the breakpoints moved onto the original read, 1-based. A round-2
+// line splits a round-1 piece (one suffix at most: there are two rounds), whose own offset is
+// the 0-based stop of the round-1 breakpoint that starts it.
 const std::string READ_MYLOASM_SPLITS = // NOLINT
     "CREATE OR REPLACE MACRO read_myloasm_splits(dir) AS TABLE "
     "WITH b AS (SELECT * FROM _miint_myloasm_breakpoints(dir)) "
@@ -285,8 +288,8 @@ const std::string READ_MYLOASM_SPLITS = // NOLINT
     "       _miint_myloasm_split_suffix(b.split_key) AS parent_split_suffix, "
     "       b.cleaning_round, "
     "       b.breakpoint_order, "
-    "       coalesce(parent.piece_stop, 0) + b.piece_start AS query_start, "
-    "       coalesce(parent.piece_stop, 0) + b.piece_stop AS query_stop, "
+    "       coalesce(parent.piece_stop, 0) + b.piece_start + 1 AS query_start, "
+    "       coalesce(parent.piece_stop, 0) + b.piece_stop + 1 AS query_stop, "
     "       b.split_condition "
     "FROM b "
     "LEFT JOIN b AS parent "
@@ -301,11 +304,12 @@ const std::string READ_MYLOASM_SPLITS = // NOLINT
     "        ELSE _miint_myloasm_check_piece(b.split_key, parent.piece_stop, 'read_myloasm: breakpoint logs: ') "
     "      END; ";
 
-// Every piece that starts at a breakpoint, with that start on the original read.
+// Every piece that starts at a breakpoint, with the number of read bases before it. The piece
+// starts at the breakpoint's 1-based stop, so query_stop - 1 bases come before it.
 const std::string MIINT_MYLOASM_PIECE_OFFSETS = // NOLINT
     "CREATE OR REPLACE MACRO _miint_myloasm_piece_offsets(dir) AS TABLE "
     "SELECT read_id || coalesce(parent_split_suffix, '') || '+split' || breakpoint_order AS piece, "
-    "       query_stop AS piece_offset "
+    "       query_stop - 1 AS piece_offset "
     "FROM read_myloasm_splits(dir); ";
 
 // read_myloasm_layout(dir): the GFA's 'a' lines, which myloasm writes in each contig's
@@ -346,9 +350,9 @@ const std::string READ_MYLOASM_LAYOUT = // NOLINT
     "       coalesce(o.piece_offset, 0) AS piece_offset, "
     "       a.stats.read_len::BIGINT AS piece_length, "
     "       _miint_myloasm_query_start(coalesce(o.piece_offset, 0), a.strand, a.stats.read_len::BIGINT, "
-    "                                  a.slice.start::BIGINT, a.slice.stop::BIGINT) AS query_start, "
+    "                                  a.slice.start::BIGINT + 1, a.slice.stop::BIGINT + 1) AS query_start, "
     "       _miint_myloasm_query_stop(coalesce(o.piece_offset, 0), a.strand, a.stats.read_len::BIGINT, "
-    "                                 a.slice.start::BIGINT, a.slice.stop::BIGINT) AS query_stop, "
+    "                                 a.slice.start::BIGINT + 1, a.slice.stop::BIGINT + 1) AS query_stop, "
     "       a.strand, "
     "       a.stats.dp1::DOUBLE AS read_depth_identity_99, "
     "       a.stats.dp2::DOUBLE AS read_depth_identity_99_75, "
