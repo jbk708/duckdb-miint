@@ -567,9 +567,9 @@ void ReadENASequencesTableFunction::FillOutputFromBatch(DataChunk &output, const
 		if (run.format == miint::ENASequenceFormat::SFF) {
 			filepath = run.sff_url;
 		} else if (reader.UsesAspera() && !run.aspera_paths.empty()) {
-			filepath = run.aspera_paths[0].host + ":" + run.aspera_paths[0].remote_path;
+			filepath = run.aspera_paths[0].HostPath();
 			for (size_t u = 1; u < run.aspera_paths.size(); u++) {
-				filepath += ";" + run.aspera_paths[u].host + ":" + run.aspera_paths[u].remote_path;
+				filepath += ";" + run.aspera_paths[u].HostPath();
 			}
 		} else if (!run.fastq_urls.empty()) {
 			filepath = run.fastq_urls[0];
