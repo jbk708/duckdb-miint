@@ -33,10 +33,10 @@ fi
 # is test/scripts/ena_webin_mock.py, which serves that run from data/ena/: EBI's outages
 # would otherwise fail these tests for reasons no change made. CI runs them live nightly.
 if [ "${MIINT_TUTORIAL_LIVE:-0}" != "1" ]; then
-    MOCK_BOOT="$OUTDIR/ena_mock.boot"
+    MOCK_BOOT=$(mktemp)
     python3 "$SCRIPT_DIR/../test/scripts/ena_webin_mock.py" 0 > "$MOCK_BOOT" 2>&1 &
     MOCK_PID=$!
-    trap 'kill $MOCK_PID 2>/dev/null || true' EXIT
+    trap 'kill $MOCK_PID 2>/dev/null || true; rm -f "$MOCK_BOOT"' EXIT
     for _ in $(seq 1 50); do
         grep -q '^ENA_WEBIN_MOCK_URL=' "$MOCK_BOOT" 2>/dev/null && break
         sleep 0.1

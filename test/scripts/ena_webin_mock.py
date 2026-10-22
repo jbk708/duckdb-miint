@@ -52,6 +52,7 @@ import json
 import os
 import re
 import sys
+from functools import cache
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -77,6 +78,13 @@ _READ_RUNS = {
 # A run whose reported md5 does not match its file.
 MD5_MISMATCH_RUN = "ERR9999999"
 _READ_RUNS[MD5_MISMATCH_RUN] = dict(_READ_RUNS["ERR1074767"], fastq_md5="0" * 32)
+
+
+@cache
+def _fastq_size_and_md5(name: str) -> tuple[int, str]:
+    payload = (_ENA_DATA_DIR / name).read_bytes()
+    return len(payload), hashlib.md5(payload).hexdigest()
+
 
 _CHECKLIST_TST000001 = """<?xml version="1.0" encoding="UTF-8"?>
 <CHECKLIST_SET>
@@ -392,13 +400,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
-        payload = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "application/gzip")
-        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Content-Length", str(path.stat().st_size))
         self.end_headers()
         if not head_only:
-            self.wfile.write(payload)
+            self.wfile.write(path.read_bytes())
 
     def do_HEAD(self):
         if self.path.startswith("/fastq/"):
@@ -540,8 +547,7 @@ class Handler(BaseHTTPRequestHandler):
             meta = _READ_RUNS.get(run)
             if meta is None:
                 continue
-            fastq = _ENA_DATA_DIR / meta["fastq_file"]
-            payload = fastq.read_bytes()
+            size, md5 = _fastq_size_and_md5(meta["fastq_file"])
             row = {
                 "run_accession": run,
                 "sample_accession": meta["sample_accession"],
@@ -549,8 +555,8 @@ class Handler(BaseHTTPRequestHandler):
                 "study_accession": meta["study_accession"],
                 "library_layout": meta["library_layout"],
                 "fastq_ftp": f"http://{host}:{port}/fastq/{meta['fastq_file']}",
-                "fastq_bytes": str(len(payload)),
-                "fastq_md5": meta.get("fastq_md5", hashlib.md5(payload).hexdigest()),
+                "fastq_bytes": str(size),
+                "fastq_md5": meta.get("fastq_md5", md5),
             }
             lines.append("\t".join(row.get(name, "") for name in names))
         return "\n".join(lines) + "\n"

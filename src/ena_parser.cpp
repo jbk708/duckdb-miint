@@ -75,14 +75,18 @@ void ENAParser::ValidateFields(const std::string &fields) {
 
 // ---- URL construction ----
 
+std::string TrimTrailingSlash(std::string s) {
+	if (!s.empty() && s.back() == '/') {
+		s.pop_back();
+	}
+	return s;
+}
+
 std::string ResolvePortalBaseFromEnv() {
 	const char *override_base = std::getenv("MIINT_ENA_PORTAL_URL_BASE");
-	std::string base = (override_base != nullptr && *override_base != '\0') ? std::string(override_base)
-	                                                                        : std::string(DEFAULT_PORTAL_BASE);
-	if (!base.empty() && base.back() == '/') {
-		base.pop_back();
-	}
-	return base;
+	const std::string base = (override_base != nullptr && *override_base != '\0') ? std::string(override_base)
+	                                                                              : std::string(DEFAULT_PORTAL_BASE);
+	return TrimTrailingSlash(base);
 }
 
 std::string ENAParser::BuildSearchURL(const std::string &accession, const std::string &result_type,

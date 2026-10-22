@@ -205,10 +205,17 @@ fi
 # Live ENA tests, opt-in: `MIINT_ENA_LIVE_TEST=1 bash run_tests.sh`. EBI's Portal API
 # and file servers fail often enough (HTTP 500s, empty answers, md5 mismatches lasting
 # days) that a run gated on them fails for reasons no change made; CI runs them nightly
-# instead. They need the real Portal, so they run in a pass of their own after the httpfs
-# pass, without the mock Portal URL this script exports below; ENA_AVAILABLE is set only
-# there. With the opt-in set, the probe still skips them when the Portal does not answer.
+# instead. They need the real ENA, so they run under with_live_ena: without the mock URLs
+# this script exports below, and with ENA_AVAILABLE, which is set nowhere else. With the
+# opt-in set, the probe still skips them when the Portal does not answer.
 ENA_LIVE=0
+with_live_ena() {
+    (
+        unset MIINT_ENA_PORTAL_URL_BASE MIINT_ENA_CHECKLIST_URL_BASE MIINT_ENA_REPORTS_URL_BASE
+        export ENA_AVAILABLE=1
+        "$@"
+    )
+}
 if [ "${MIINT_ENA_LIVE_TEST:-0}" = "1" ]; then
     if curl -sSf --max-time 10 -o /dev/null \
             "https://www.ebi.ac.uk/ena/portal/api/search?result=read_run&query=run_accession%3D%22ERR1074767%22&fields=run_accession&limit=1&format=tsv" \
@@ -756,11 +763,7 @@ run_httpfs_files "$HTTPFS_TESTS" "$PWD/build/release/httpfs_tests.log"
 # The live ENA tests, which the pass above skipped (see MIINT_ENA_LIVE_TEST above).
 if [ "$ENA_LIVE" = "1" ]; then
     ENA_LIVE_TESTS=$(grep -rl --include='*.test' '^require-env ENA_AVAILABLE' test/sql | paste -sd, -)
-    (
-        unset MIINT_ENA_PORTAL_URL_BASE
-        export ENA_AVAILABLE=1
-        run_httpfs_files "$ENA_LIVE_TESTS" "$PWD/build/release/httpfs_ena_live_tests.log"
-    ) || exit 1
+    with_live_ena run_httpfs_files "$ENA_LIVE_TESTS" "$PWD/build/release/httpfs_ena_live_tests.log" || exit 1
 fi
 
 # Run shell script tests. A script that loads httpfs runs with the httpfs pass's HOME
@@ -773,7 +776,12 @@ for test_script in test/shell/*.sh; do
         if grep -qi 'load httpfs' "$test_script"; then
             script_home="$HTTPFS_TEST_HOME"
         fi
-        if ! HOME="$script_home" bash "$test_script"; then
+        # A script that checks ENA_AVAILABLE is a live ENA test, and skips itself without it.
+        live=""
+        if [ "$ENA_LIVE" = "1" ] && grep -q 'ENA_AVAILABLE' "$test_script"; then
+            live=with_live_ena
+        fi
+        if ! $live env HOME="$script_home" bash "$test_script"; then
             echo "Shell test failed: $test_script"
             exit 1
         fi

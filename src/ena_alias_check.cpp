@@ -73,15 +73,6 @@ std::vector<std::string> ParseAliasTSV(const std::string &tsv) {
 	return aliases;
 }
 
-// Strip a single trailing slash from a base URL so callers passing
-// "https://.../api" and "https://.../api/" produce identical query URLs.
-std::string TrimTrailingSlash(std::string s) {
-	if (!s.empty() && s.back() == '/') {
-		s.pop_back();
-	}
-	return s;
-}
-
 } // namespace
 
 const char *AliasObjectKindName(AliasObjectKind kind) {

@@ -70,9 +70,13 @@ public:
 constexpr const char *DEFAULT_PORTAL_BASE = "https://www.ebi.ac.uk/ena/portal/api";
 
 // The Portal API base for every Portal request, reads and pre-INSERT checks
-// alike: env-var override, falling back to DEFAULT_PORTAL_BASE. Trailing
-// slashes stripped.
+// alike: env-var override, falling back to DEFAULT_PORTAL_BASE, without a
+// trailing slash.
 std::string ResolvePortalBaseFromEnv();
+
+// Strip a single trailing slash from a base URL so callers passing
+// "https://.../api" and "https://.../api/" produce identical URLs.
+std::string TrimTrailingSlash(std::string s);
 
 // Percent-encode a value spliced into an ENA URL, as a query parameter value
 // or a path segment. Encodes every byte outside the RFC 3986 unreserved set
