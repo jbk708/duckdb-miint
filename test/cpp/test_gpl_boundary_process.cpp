@@ -10,7 +10,7 @@
 using namespace duckdb::miint::gpl_boundary;
 
 // =============================================================================
-// Cycle 1.1 — Find gpl-boundary on PATH
+// Find gpl-boundary on PATH
 // =============================================================================
 //
 // Contract: returns the absolute path when the named binary is found on PATH,
@@ -21,7 +21,8 @@ using namespace duckdb::miint::gpl_boundary;
 // What we DO assert in both branches: the path-discovery function does not
 // throw, does not deadlock, and returns a sensible value. That is enough to
 // prove the fork+pipe+exec plumbing is right; correctness against a real
-// gpl-boundary daemon is exercised in Phase 4 with require-env GPL_BOUNDARY_AVAILABLE.
+// gpl-boundary daemon is exercised by the SQL tests guarded by
+// require-env GPL_BOUNDARY_AVAILABLE.
 
 TEST_CASE("FindGplBoundary returns absolute path when on PATH", "[gpl-boundary][process]") {
 	const std::string result = FindGplBoundary();
@@ -70,7 +71,7 @@ TEST_CASE("FindExecutableInPath returns empty for a missing binary", "[gpl-bound
 }
 
 // =============================================================================
-// Cycle 1.1b — Cache-dir lookup + lookup priority for FindGplBoundary
+// Cache-dir lookup + lookup priority for FindGplBoundary
 // =============================================================================
 //
 // `install_gpl_boundary()` deposits binaries into miint's cache dir
@@ -200,7 +201,7 @@ TEST_CASE("FindGplBoundary falls back to PATH when cache empty", "[gpl-boundary]
 }
 
 // =============================================================================
-// Cycle 1.2 — Spawn child + bidirectional pipes
+// Spawn child + bidirectional pipes
 // =============================================================================
 //
 // We need a long-lived NDJSON daemon, but the spawn primitive itself is
@@ -325,7 +326,7 @@ TEST_CASE("ChildProcess fails clearly when the binary does not exist", "[gpl-bou
 }
 
 // =============================================================================
-// Cycle 1.2b — ReapAndDescribe: signal-decoded termination diagnostics
+// ReapAndDescribe: signal-decoded termination diagnostics
 // =============================================================================
 //
 // Session::Submit's EPIPE/EOF paths use ReapAndDescribe to turn a bare "Broken
@@ -373,7 +374,7 @@ TEST_CASE("ReapAndDescribe is idempotent and leaves Wait consistent", "[gpl-boun
 }
 
 // =============================================================================
-// Cycle 1.2 — gpl-boundary --version (skip if absent)
+// gpl-boundary --version (skip if absent)
 // =============================================================================
 
 TEST_CASE("ChildProcess can spawn gpl-boundary --version", "[gpl-boundary][process][!mayfail]") {
@@ -392,7 +393,7 @@ TEST_CASE("ChildProcess can spawn gpl-boundary --version", "[gpl-boundary][proce
 }
 
 // =============================================================================
-// Cycle 1.3 — Line-delimited JSON I/O
+// Line-delimited JSON I/O
 // =============================================================================
 //
 // gpl-boundary's protocol is NDJSON: one JSON object per line on stdin/stdout.
@@ -476,6 +477,239 @@ TEST_CASE("WriteLine appends newline and flushes immediately", "[gpl-boundary][p
 	REQUIRE(line == R"({"k":"v","n":42})");
 	REQUIRE(reader.ReadLine(line));
 	REQUIRE(line == R"({"shutdown":true})");
+	REQUIRE_FALSE(reader.ReadLine(line));
+	child.Wait();
+}
+
+// =============================================================================
+// Hosts that live beside other hosts and clean up after themselves
+// =============================================================================
+//
+// skb-arrow's host shuts down on stdin EOF, notices a dead caller by its
+// stdout losing its reader, and must be killable with everything it started.
+// Several can run at once, from DuckDB worker threads. These pin the
+// ChildProcess behavior that makes that safe.
+
+#include <fcntl.h>
+#include <cerrno>
+#include <memory>
+#include <stdexcept>
+
+#include "process_test_helpers.hpp"
+
+using miint_test::EofWithin;
+using miint_test::Witness;
+
+TEST_CASE("ChildProcess pipe ends do not leak into a later child", "[gpl-boundary][process]") {
+	// Each child's parent-side pipe ends must be close-on-exec. Otherwise a
+	// child spawned later inherits them, and the first child never sees stdin
+	// EOF while the later one lives: skb-arrow's close-stdin shutdown would
+	// hang, and its dead-caller check would never fire.
+	const std::string cat_path = FindExecutableInPath("cat");
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(cat_path.empty());
+	REQUIRE_FALSE(bash_path.empty());
+	ChildProcess first({cat_path});
+	ChildProcess later({bash_path, "-c", "sleep 30"});
+	first.CloseStdin();
+	const std::string desc = first.ReapAndDescribe(2000);
+	INFO("first child: " << desc);
+	REQUIRE_THAT(desc, Catch::Matchers::ContainsSubstring("exited with code 0"));
+}
+
+TEST_CASE("ChildProcess wires the child's stdin when the parent's fd 0 is closed", "[gpl-boundary][process]") {
+	// A DuckDB embedded in a daemon may run with fd 0 closed. pipe() then hands
+	// out fd 0 itself, and the child must still find its stdin pipe on fd 0.
+	const std::string cat_path = FindExecutableInPath("cat");
+	REQUIRE_FALSE(cat_path.empty());
+	std::string out;
+	{
+		const int saved = ::dup(STDIN_FILENO);
+		REQUIRE(saved >= 0);
+		struct Restore {
+			int saved;
+			~Restore() {
+				::dup2(saved, STDIN_FILENO);
+				::close(saved);
+			}
+		} restore {saved};
+		::close(STDIN_FILENO);
+		ChildProcess child({cat_path});
+		WriteLine(child.stdin_fd(), "round trip");
+		child.CloseStdin();
+		out = drain_fd(child.stdout_fd());
+		child.Wait();
+	}
+	REQUIRE(out == "round trip\n");
+}
+
+TEST_CASE("ChildProcess new_session makes the child lead its own process group", "[gpl-boundary][process]") {
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	ChildProcessOptions opts;
+	opts.new_session = true;
+	ChildProcess child({bash_path, "-c", "sleep 30"}, opts);
+	REQUIRE(::getpgid(child.pid()) == child.pid());
+}
+
+TEST_CASE("ChildProcess by default stays in the caller's process group", "[gpl-boundary][process]") {
+	// The control for the test above: without new_session the group is ours.
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	ChildProcess child({bash_path, "-c", "sleep 30"});
+	REQUIRE(::getpgid(child.pid()) == ::getpgid(0));
+}
+
+TEST_CASE("KillGroup kills the child and everything it started", "[gpl-boundary][process]") {
+	// Cancelling a query must stop the host and anything it started: a
+	// grandchild left behind keeps the host's pipes (and its memory) alive.
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	Witness witness;
+	ChildProcessOptions opts;
+	opts.new_session = true;
+	ChildProcess child({bash_path, "-c", "sleep 30 & echo started; wait"}, opts);
+	witness.CloseWriteEnd();
+	LineReader reader(child.stdout_fd());
+	std::string line;
+	REQUIRE(reader.ReadLine(line));
+	REQUIRE(line == "started");
+	child.KillGroup();
+	// The witness reaches EOF only once bash AND its `sleep` have exited.
+	const bool all_gone = EofWithin(witness.read_fd, 2000);
+	REQUIRE(all_gone);
+	const int status = child.Wait();
+	REQUIRE(WIFSIGNALED(status));
+	REQUIRE(WTERMSIG(status) == SIGKILL);
+}
+
+TEST_CASE("KillGroup requires new_session", "[gpl-boundary][process]") {
+	// Without its own group, killpg would hit the caller's group: DuckDB itself.
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	ChildProcess child({bash_path, "-c", "sleep 30"});
+	REQUIRE_THROWS_AS(child.KillGroup(), std::logic_error);
+}
+
+TEST_CASE("Destroying a new_session ChildProcess kills its whole group", "[gpl-boundary][process]") {
+	// An exception unwinding past a host must not leave its descendants running.
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	Witness witness;
+	{
+		ChildProcessOptions opts;
+		opts.new_session = true;
+		ChildProcess child({bash_path, "-c", "sleep 30 & echo started; wait"}, opts);
+		witness.CloseWriteEnd();
+		LineReader reader(child.stdout_fd());
+		std::string line;
+		REQUIRE(reader.ReadLine(line));
+		REQUIRE(line == "started");
+	}
+	REQUIRE(EofWithin(witness.read_fd, 2000));
+}
+
+TEST_CASE("ChildProcessOptions set_env and unset_env shape the child's environment", "[gpl-boundary][process]") {
+	// skb-arrow's thread caps travel in the host's environment, and a
+	// Python-hosted DuckDB's PYTHONHOME/PYTHONPATH must not reach the host.
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	ScopedEnv keep("MIINT_TEST_KEEP", "kept");
+	ScopedEnv replace("MIINT_TEST_REPLACE", "old");
+	ScopedEnv drop("MIINT_TEST_DROP", "present");
+	ChildProcessOptions opts;
+	opts.set_env = {{"MIINT_TEST_REPLACE", "new"}, {"MIINT_TEST_ADD", "3"}};
+	opts.unset_env = {"MIINT_TEST_DROP"};
+	const RunResult r =
+	    RunCapture({bash_path, "-c",
+	                "echo \"$MIINT_TEST_KEEP|$MIINT_TEST_REPLACE|$MIINT_TEST_ADD|${MIINT_TEST_DROP-unset}\"; "
+	                "env | grep -c '^MIINT_TEST_REPLACE='"},
+	               opts);
+	INFO("stderr: " << r.stderr_text);
+	// The count proves the replaced variable appears once, not twice.
+	REQUIRE(r.stdout_text == "kept|new|3|unset\n1\n");
+}
+
+TEST_CASE("RunCapture drains stderr while the child still writes", "[gpl-boundary][process]") {
+	// 200 KB on stderr before anything on stdout. Reading stdout to EOF first
+	// leaves the child blocked on a full stderr pipe, and both sides wait
+	// forever; uv's installer is chatty enough on stderr to hit this.
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	const RunResult r = RunCapture({bash_path, "-c", "head -c 200000 /dev/zero >&2; echo ok"});
+	REQUIRE(r.spawned);
+	REQUIRE(r.exited_normally);
+	REQUIRE(r.exit_code == 0);
+	REQUIRE(r.stdout_text == "ok\n");
+	REQUIRE(r.stderr_text.size() == 200000);
+}
+
+#if defined(__linux__)
+namespace {
+// Spawn on a thread that exits right after, as a DuckDB worker thread may.
+std::unique_ptr<ChildProcess> SpawnOnExitingThread(const std::vector<std::string> &argv,
+                                                   const ChildProcessOptions &opts) {
+	std::unique_ptr<ChildProcess> child;
+	std::thread spawner([&]() { child = std::make_unique<ChildProcess>(argv, opts); });
+	spawner.join();
+	return child;
+}
+} // namespace
+
+TEST_CASE("Without parent_death_signal a child outlives the thread that spawned it", "[gpl-boundary][process]") {
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	ChildProcessOptions opts;
+	opts.parent_death_signal = false;
+	auto child = SpawnOnExitingThread({bash_path, "-c", "sleep 30"}, opts);
+	REQUIRE_THAT(child->ReapAndDescribe(300), Catch::Matchers::ContainsSubstring("still running"));
+}
+
+TEST_CASE("By default a child dies with the thread that spawned it", "[gpl-boundary][process]") {
+	// The control for the test above, and the hazard it avoids: prctl(2)'s
+	// PR_SET_PDEATHSIG fires when the forking *thread* exits.
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	auto child = SpawnOnExitingThread({bash_path, "-c", "sleep 30"}, {});
+	REQUIRE_THAT(child->ReapAndDescribe(2000), Catch::Matchers::ContainsSubstring("signal 15"));
+}
+#endif
+
+// =============================================================================
+// LineReader for a caller that polls between reads
+// =============================================================================
+//
+// skb-arrow calls can run for minutes. The caller polls the host's stdout so
+// it can check for a cancelled query between waits, and must never block in
+// ReadLine on half a line.
+
+namespace {
+// FillOnce until a line (or EOF) is buffered, at most `max_reads` times.
+bool FillUntilLine(LineReader &reader, int max_reads) {
+	for (int i = 0; i < max_reads && !reader.HasLine(); ++i) {
+		reader.FillOnce();
+	}
+	return reader.HasLine();
+}
+} // namespace
+
+TEST_CASE("LineReader::FillOnce buffers part of a line without blocking for the rest", "[gpl-boundary][process]") {
+	const std::string bash_path = FindExecutableInPath("bash");
+	REQUIRE_FALSE(bash_path.empty());
+	ChildProcess child({bash_path, "-c", "printf 'par'; sleep 0.3; printf 'tial\\n'; printf 'next\\n'"});
+	LineReader reader(child.stdout_fd());
+	REQUIRE_FALSE(reader.HasLine());
+	reader.FillOnce(); // "par": returns without waiting for the newline
+	REQUIRE_FALSE(reader.HasLine());
+	REQUIRE(FillUntilLine(reader, 100));
+	std::string line;
+	REQUIRE(reader.ReadLine(line));
+	REQUIRE(line == "partial");
+	REQUIRE(FillUntilLine(reader, 100));
+	REQUIRE(reader.ReadLine(line));
+	REQUIRE(line == "next");
+	// At EOF, HasLine is true so the caller's ReadLine reports EOF at once.
+	REQUIRE(FillUntilLine(reader, 100));
 	REQUIRE_FALSE(reader.ReadLine(line));
 	child.Wait();
 }
