@@ -231,8 +231,9 @@ unique_ptr<FunctionData> SourcetrackerBind(ClientContext &context, TableFunction
 	}
 	c.loo = data->loo ? 1 : 0;
 	c.contingency = data->assignments ? 1 : 0;
-	// st3 counts a chain's passes and a sink's draws in 32 bits, and a count past
-	// that wraps without an error.
+	// st3 counts a chain's passes in 32 bits, which wrap without an error. It counts
+	// a sink's draws in a usize, which is 32 bits under WASM, and keeps every draw,
+	// so more draws than that could not be held on any platform.
 	const uint64_t passes = uint64_t(c.burnin) + uint64_t(c.draws_per_restart - 1) * c.delay + 1;
 	if (passes > UINT32_MAX) {
 		throw BinderException("sourcetracker: burnin + (draws_per_restart - 1) * delay + 1, the passes per chain, "
@@ -335,6 +336,12 @@ void CheckInterrupt(ClientContext &context) {
 // ---------------------------------------------------------------------------
 
 struct ArrowExport {
+	ArrowExport() = default;
+	// ArrowSchemaWrapper copies rather than moves, so a moved export would release
+	// its schema twice.
+	ArrowExport(ArrowExport &&) = delete;
+	ArrowExport &operator=(ArrowExport &&) = delete;
+
 	ArrowArrayWrapper array;
 	ArrowSchemaWrapper schema;
 	void Taken() {

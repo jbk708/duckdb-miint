@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Umbrella crate that bundles rype + sylph into a single staticlib so they
-# share one copy of the Rust standard library. Linking two independent Rust
+# Umbrella crate that bundles rype, sylph and st3 into a single staticlib so
+# they share one copy of the Rust standard library. Linking two independent Rust
 # staticlibs into the same binary produces duplicate-symbol errors
 # (rust_eh_personality, std::panicking::EMPTY_PANIC, ...) — this crate is
 # the canonical fix per https://doc.rust-lang.org/reference/linkage.html
