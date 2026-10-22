@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include "Minimap2Aligner.hpp"
 #include "SAMRecord.hpp"
 #include "SequenceRecord.hpp"
@@ -7,10 +8,13 @@
 #include <atomic>
 #include <cstdio>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -1205,4 +1209,296 @@ TEST_CASE("Coverage filter preserves full-length alignments", "[Minimap2Aligner]
 		}
 	}
 	REQUIRE(has_mapped);
+}
+
+// =============================================================================
+// any_mapped: the keep/drop decision of a host filter, without SAM output
+// =============================================================================
+
+// A filter that drops every read minimap2 maps must decide exactly as
+// align_minimap2(...) + ANTI JOIN on read_id does, or switching a pipeline to the
+// filter would change which reads survive. align() emits at least one row for a
+// query exactly when some region has a valid reference id, so any_mapped is
+// checked against align()'s rows rather than against hand-picked expectations.
+
+static std::string random_dna(std::mt19937 &rng, size_t length) {
+	static const char bases[] = "ACGT";
+	std::uniform_int_distribution<int> pick(0, 3);
+	std::string seq(length, 'A');
+	for (auto &c : seq) {
+		c = bases[pick(rng)];
+	}
+	return seq;
+}
+
+// Substitutes each base with probability `rate`, so reads range from clean hits to
+// ones minimap2 can no longer place.
+static std::string mutate(std::mt19937 &rng, std::string seq, double rate) {
+	static const char bases[] = "ACGT";
+	std::uniform_real_distribution<double> coin(0.0, 1.0);
+	std::uniform_int_distribution<int> pick(0, 3);
+	for (auto &c : seq) {
+		if (coin(rng) < rate) {
+			c = bases[pick(rng)];
+		}
+	}
+	return seq;
+}
+
+struct AnyMappedFixture {
+	std::mt19937 rng {20261021};
+	std::vector<AlignmentSubject> subjects;
+	Minimap2Config config;
+
+	AnyMappedFixture() {
+		config.preset = "sr";
+		subjects.push_back({"ref_a", random_dna(rng, 6000)});
+		subjects.push_back({"ref_b", random_dna(rng, 6000)});
+	}
+
+	// A 150-base read: drawn from a reference (either strand, mutated at `rate`), or
+	// random when `rate` is negative.
+	std::string read(double rate) {
+		if (rate < 0) {
+			return random_dna(rng, 150);
+		}
+		const auto &ref = subjects[rng() % subjects.size()].sequence;
+		std::string seq = ref.substr(rng() % (ref.size() - 150), 150);
+		if (rng() % 2) {
+			seq = dna_reverse_complement(seq);
+		}
+		return mutate(rng, seq, rate);
+	}
+
+	// A 150-base read of random flanks around `length` bases from a reference. Short matches
+	// still chain, but the aligned score can fall below the DP cutoff, which is where a decision
+	// made from chains alone would differ from align()'s.
+	std::string partial(size_t length) {
+		const auto &ref = subjects[rng() % subjects.size()].sequence;
+		const std::string core = ref.substr(rng() % (ref.size() - length), length);
+		const size_t left = (150 - length) / 2;
+		return random_dna(rng, left) + core + random_dna(rng, 150 - length - left);
+	}
+};
+
+TEST_CASE("any_mapped is true for a read from the reference and false for a random one", "[Minimap2Aligner]") {
+	AnyMappedFixture fx;
+	Minimap2Aligner aligner(fx.config);
+	aligner.build_index(fx.subjects);
+
+	const std::string hit = fx.subjects[0].sequence.substr(1000, 150);
+	const std::string miss = random_dna(fx.rng, 150);
+	REQUIRE(aligner.any_mapped(hit, "", "hit"));
+	REQUIRE_FALSE(aligner.any_mapped(miss, "", "miss"));
+}
+
+TEST_CASE("any_mapped treats a pair as mapped when either mate maps", "[Minimap2Aligner]") {
+	AnyMappedFixture fx;
+	Minimap2Aligner aligner(fx.config);
+	aligner.build_index(fx.subjects);
+
+	const std::string &ref = fx.subjects[1].sequence;
+	const std::string r1_hit = ref.substr(2000, 150);
+	const std::string r2_hit = dna_reverse_complement(ref.substr(2250, 150));
+	const std::string r1_miss = random_dna(fx.rng, 150);
+	const std::string r2_miss = random_dna(fx.rng, 150);
+
+	// A host filter drops the whole pair if any mate is host: the mate that does
+	// not map must not rescue it.
+	REQUIRE(aligner.any_mapped(r1_hit, r2_hit, "both"));
+	REQUIRE(aligner.any_mapped(r1_miss, r2_hit, "r2_only"));
+	REQUIRE(aligner.any_mapped(r1_hit, r2_miss, "r1_only"));
+	REQUIRE_FALSE(aligner.any_mapped(r1_miss, r2_miss, "neither"));
+}
+
+TEST_CASE("any_mapped routes an empty mate the way align() does", "[Minimap2Aligner]") {
+	AnyMappedFixture fx;
+	Minimap2Aligner aligner(fx.config);
+	aligner.build_index(fx.subjects);
+
+	// align() takes the single-end path when sequence2 is empty, so an empty mate
+	// is a single-end read, not a pair with a missing mate.
+	const std::string hit = fx.subjects[0].sequence.substr(300, 150);
+	REQUIRE(aligner.any_mapped(hit, "", "se") == aligner.any_mapped(hit, std::string_view(), "se"));
+	REQUIRE(aligner.any_mapped(hit, "", "se"));
+	// minimap2 is never called on an empty query; align() emits nothing for it.
+	REQUIRE_FALSE(aligner.any_mapped("", "", "empty"));
+}
+
+TEST_CASE("any_mapped requires an index", "[Minimap2Aligner]") {
+	Minimap2Config config;
+	config.preset = "sr";
+	Minimap2Aligner aligner(config);
+	REQUIRE_THROWS_AS(aligner.any_mapped("ACGTACGTACGT", "", "q"), std::runtime_error);
+}
+
+TEST_CASE("any_mapped agrees with align() on a mixed single-end batch", "[Minimap2Aligner]") {
+	AnyMappedFixture fx;
+	Minimap2Aligner aligner(fx.config);
+	aligner.build_index(fx.subjects);
+
+	// Mutation rates straddle the point where minimap2 stops placing a read, so the
+	// batch holds clear hits, clear misses and marginal reads.
+	const std::vector<double> rates = {0.0, 0.02, 0.05, 0.10, 0.15, 0.20, 0.30, -1.0};
+	SequenceRecordBatch queries(false);
+	for (int i = 0; i < 240; i++) {
+		queries.read_ids.push_back("se" + std::to_string(i));
+		queries.comments.push_back("");
+		queries.sequences1.push_back(fx.read(rates[i % rates.size()]));
+		queries.quals1.push_back(QualScore(""));
+	}
+	for (int i = 0; i < 160; i++) {
+		queries.read_ids.push_back("se_partial" + std::to_string(i));
+		queries.comments.push_back("");
+		queries.sequences1.push_back(fx.partial(16 + (i % 50)));
+		queries.quals1.push_back(QualScore(""));
+	}
+
+	SAMRecordBatch rows;
+	aligner.align(queries, rows);
+	const std::set<std::string> aligned(rows.read_ids.begin(), rows.read_ids.end());
+
+	size_t mapped = 0;
+	for (size_t i = 0; i < queries.size(); i++) {
+		const bool expected = aligned.count(queries.read_ids[i]) > 0;
+		INFO("read " << queries.read_ids[i]);
+		REQUIRE(aligner.any_mapped(queries.sequences1[i], "", queries.read_ids[i].c_str()) == expected);
+		mapped += expected;
+	}
+	// Both outcomes must be well represented, or agreement proves nothing.
+	REQUIRE(mapped >= 40);
+	REQUIRE(queries.size() - mapped >= 40);
+}
+
+TEST_CASE("any_mapped agrees with align() on a mixed paired batch", "[Minimap2Aligner]") {
+	AnyMappedFixture fx;
+	Minimap2Aligner aligner(fx.config);
+	aligner.build_index(fx.subjects);
+
+	const std::vector<double> rates = {0.0, 0.05, 0.10, 0.20, -1.0};
+	SequenceRecordBatch queries(true);
+	for (int i = 0; i < 200; i++) {
+		queries.read_ids.push_back("pe" + std::to_string(i));
+		queries.comments.push_back("");
+		queries.sequences1.push_back(fx.read(rates[i % rates.size()]));
+		queries.sequences2.push_back(fx.read(rates[(i / rates.size()) % rates.size()]));
+		queries.quals1.push_back(QualScore(""));
+		queries.quals2.push_back(QualScore(""));
+	}
+	for (int i = 0; i < 120; i++) {
+		queries.read_ids.push_back("pe_partial" + std::to_string(i));
+		queries.comments.push_back("");
+		queries.sequences1.push_back(fx.partial(16 + (i % 50)));
+		queries.sequences2.push_back(i % 2 ? fx.read(-1.0) : fx.partial(16 + ((i * 7) % 50)));
+		queries.quals1.push_back(QualScore(""));
+		queries.quals2.push_back(QualScore(""));
+	}
+
+	SAMRecordBatch rows;
+	aligner.align(queries, rows);
+	const std::set<std::string> aligned(rows.read_ids.begin(), rows.read_ids.end());
+
+	size_t mapped = 0;
+	for (size_t i = 0; i < queries.size(); i++) {
+		const bool expected = aligned.count(queries.read_ids[i]) > 0;
+		INFO("pair " << queries.read_ids[i]);
+		REQUIRE(aligner.any_mapped(queries.sequences1[i], queries.sequences2[i], queries.read_ids[i].c_str()) ==
+		        expected);
+		mapped += expected;
+	}
+	REQUIRE(mapped >= 40);
+	REQUIRE(queries.size() - mapped >= 20);
+}
+
+// =============================================================================
+// IsMultiPartIndex: answering "single part?" without loading the index
+// =============================================================================
+
+// A filter that refuses multi-part indexes must say so before it starts work, not
+// after loading part 1 (9 s for a human reference). The answer must match what the
+// loaders decide, or the early check and the load would disagree about the file.
+
+static void write_bytes(const std::string &path, const std::string &bytes) {
+	std::ofstream out(path, std::ios::binary | std::ios::trunc);
+	REQUIRE(out.good());
+	out << bytes;
+}
+
+static std::string read_bytes(const std::string &path) {
+	std::ifstream in(path, std::ios::binary);
+	REQUIRE(in.good());
+	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+}
+
+TEST_CASE("IsMultiPartIndex agrees with Minimap2PartCursor on single- and multi-part files", "[Minimap2Aligner]") {
+	const std::string part1 = "data/shards/test_is_multipart_p1.mmi";
+	const std::string part2 = "data/shards/test_is_multipart_p2.mmi";
+	const std::string multipart = "data/shards/test_is_multipart.mmi";
+	build_multipart_mmi_fixture(part1, part2, multipart);
+
+	Minimap2Config config;
+	config.preset = "sr";
+	config.k = 5;
+
+	REQUIRE_FALSE(Minimap2Aligner::IsMultiPartIndex(part1));
+	REQUIRE_FALSE(Minimap2PartCursor(part1, config, nullptr).IsMultiPart());
+
+	REQUIRE(Minimap2Aligner::IsMultiPartIndex(multipart));
+	REQUIRE(Minimap2PartCursor(multipart, config, nullptr).IsMultiPart());
+
+	std::remove(part1.c_str());
+	std::remove(part2.c_str());
+	std::remove(multipart.c_str());
+}
+
+TEST_CASE("IsMultiPartIndex treats trailing bytes after one part as single-part, as the loaders do",
+          "[Minimap2Aligner]") {
+	const std::string part1 = "data/shards/test_is_multipart_trailing_p1.mmi";
+	const std::string part2 = "data/shards/test_is_multipart_trailing_p2.mmi";
+	const std::string multipart = "data/shards/test_is_multipart_trailing.mmi";
+	const std::string padded = "data/shards/test_is_multipart_trailing_padded.mmi";
+	build_multipart_mmi_fixture(part1, part2, multipart);
+	write_bytes(padded, read_bytes(part1) + std::string(64, '\0'));
+
+	Minimap2Config config;
+	config.preset = "sr";
+	config.k = 5;
+	REQUIRE_FALSE(Minimap2Aligner::IsMultiPartIndex(padded));
+	REQUIRE_FALSE(Minimap2PartCursor(padded, config, nullptr).IsMultiPart());
+
+	for (const auto &path : {part1, part2, multipart, padded}) {
+		std::remove(path.c_str());
+	}
+}
+
+TEST_CASE("IsMultiPartIndex fails loudly, naming the file, on a damaged or foreign file", "[Minimap2Aligner]") {
+	const std::string part1 = "data/shards/test_is_multipart_bad_p1.mmi";
+	const std::string part2 = "data/shards/test_is_multipart_bad_p2.mmi";
+	const std::string multipart = "data/shards/test_is_multipart_bad.mmi";
+	const std::string truncated = "data/shards/test_is_multipart_truncated.mmi";
+	const std::string foreign = "data/shards/test_is_multipart_foreign.mmi";
+	build_multipart_mmi_fixture(part1, part2, multipart);
+
+	const std::string whole = read_bytes(part1);
+	write_bytes(truncated, whole.substr(0, whole.size() / 2));
+	write_bytes(foreign, ">ref\nACGTACGTACGTACGTACGT\n");
+
+	auto message_of = [](const std::string &path) {
+		try {
+			Minimap2Aligner::IsMultiPartIndex(path);
+		} catch (const std::runtime_error &e) {
+			return std::string(e.what());
+		}
+		return std::string("no error");
+	};
+	// A cut-short index cannot be answered for: guessing "single part" would let a
+	// later load fail far from the cause.
+	REQUIRE_THAT(message_of(truncated), Catch::Matchers::ContainsSubstring(truncated));
+	REQUIRE_THAT(message_of(foreign), Catch::Matchers::ContainsSubstring(foreign));
+	REQUIRE_THAT(message_of("data/shards/no_such_index.mmi"),
+	             Catch::Matchers::ContainsSubstring("data/shards/no_such_index.mmi"));
+
+	for (const auto &path : {part1, part2, multipart, truncated, foreign}) {
+		std::remove(path.c_str());
+	}
 }

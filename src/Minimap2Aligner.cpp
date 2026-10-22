@@ -3,6 +3,8 @@
 #include <minimap2/mmpriv.h>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 // When MIINT_USE_JEMALLOC is defined, minimap2 is compiled with malloc/free
@@ -590,6 +592,54 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 	}
 }
 
+bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view sequence2, const char *qname) {
+	if (!active_index()) {
+		throw std::runtime_error("No index built. Call build_index() or attach_shared_index() first.");
+	}
+	// align() emits a row for each region whose reference id is in range; that is the whole test.
+	const auto n_subjects = active_subject_names().size();
+	const auto any_valid = [n_subjects](const mm_reg1_t *regs, int n_regs) {
+		for (int j = 0; j < n_regs; j++) {
+			if (regs[j].rid >= 0 && static_cast<size_t>(regs[j].rid) < n_subjects) {
+				return true;
+			}
+		}
+		return false;
+	};
+
+	// Routed as align() routes: an empty sequence2 is a single-end read.
+	if (sequence2.empty()) {
+		if (sequence1.empty()) {
+			return false; // align_single never calls minimap2 on an empty query
+		}
+		int n_regs = 0;
+		mm_reg1_t *regs = mm_map(active_index(), static_cast<int>(sequence1.size()), sequence1.data(), &n_regs,
+		                         tbuf_.get(), active_mapopt(), qname);
+		const bool mapped = any_valid(regs, n_regs);
+		for (int j = 0; j < n_regs; j++) {
+			MM_FREE(regs[j].p);
+		}
+		MM_FREE(regs);
+		return mapped;
+	}
+
+	int qlens[2] = {static_cast<int>(sequence1.size()), static_cast<int>(sequence2.size())};
+	const char *seqs[2] = {sequence1.data(), sequence2.data()};
+	int n_regs[2] = {0, 0};
+	mm_reg1_t *regs[2] = {nullptr, nullptr};
+	mm_mapopt_t mopt_copy = *active_mapopt();
+	mopt_copy.flag |= MM_F_FRAG_MODE;
+	mm_map_frag(active_index(), 2, qlens, seqs, n_regs, regs, tbuf_.get(), &mopt_copy, qname);
+	const bool mapped = any_valid(regs[0], n_regs[0]) || any_valid(regs[1], n_regs[1]);
+	for (int seg = 0; seg < 2; seg++) {
+		for (int j = 0; j < n_regs[seg]; j++) {
+			MM_FREE(regs[seg][j].p);
+		}
+		MM_FREE(regs[seg]);
+	}
+	return mapped;
+}
+
 void Minimap2Aligner::append_unmapped(const std::string &read_id, int segment_idx, bool mate_mapped, bool mate_rev,
                                       int32_t mate_rid, int32_t mate_pos, SAMRecordBatch &batch) {
 	const bool is_paired = (segment_idx >= 0);
@@ -909,6 +959,84 @@ void Minimap2Aligner::save_index(const std::string &output_path) const {
 	if (fclose(fp) != 0) {
 		throw std::runtime_error("Error closing index file: " + output_path);
 	}
+}
+
+bool Minimap2Aligner::IsMultiPartIndex(const std::string &path) {
+	// Follows mm_idx_dump's layout (ext/minimap2/index.c): magic, then {w, k, b, n_seq, flag}, then per
+	// sequence a 1-byte name length, the name and a 4-byte length; then 2^b buckets, each a count n,
+	// n 8-byte positions, a count size and size 16-byte hash entries; then the packed sequence unless
+	// MM_I_NO_SEQ. Only the counts are read. A small buffer keeps each skipped bucket to one short read
+	// (2 x 2^b of them, 16384 at the default b = 14) instead of a full default-sized refill.
+	std::error_code ec;
+	const uint64_t file_size = std::filesystem::file_size(path, ec);
+	if (ec) {
+		throw std::runtime_error("Cannot open index file: " + path);
+	}
+	char buffer[512];
+	std::ifstream in;
+	in.rdbuf()->pubsetbuf(buffer, sizeof(buffer));
+	in.open(path, std::ios::binary);
+	if (!in) {
+		throw std::runtime_error("Cannot open index file: " + path);
+	}
+	const auto truncated = [&]() {
+		return std::runtime_error("Index file '" + path + "' ends inside its first part (truncated or damaged)");
+	};
+	uint64_t offset = 0;
+	const auto read = [&](void *out, size_t n) {
+		if (!in.read(static_cast<char *>(out), static_cast<std::streamsize>(n))) {
+			throw truncated();
+		}
+		offset += n;
+	};
+	const auto skip = [&](uint64_t n) {
+		offset += n;
+		if (offset > file_size) {
+			throw truncated();
+		}
+		in.seekg(static_cast<std::streamoff>(offset));
+	};
+
+	char magic[4];
+	if (!in.read(magic, sizeof(magic)) || memcmp(magic, MM_IDX_MAGIC, sizeof(magic)) != 0) {
+		throw std::runtime_error("File is not a valid minimap2 index: " + path);
+	}
+	offset = sizeof(magic);
+	uint32_t header[5]; // w, k, b, n_seq, flag
+	read(header, sizeof(header));
+	const uint32_t bucket_bits = header[2];
+	const uint32_t n_seq = header[3];
+	const uint32_t flag = header[4];
+	if (bucket_bits >= 32) {
+		throw std::runtime_error("Index file '" + path + "' has an invalid header (bucket bits " +
+		                         std::to_string(bucket_bits) + ")");
+	}
+
+	uint64_t sum_len = 0;
+	char name[255];
+	for (uint32_t i = 0; i < n_seq; i++) {
+		uint8_t name_len;
+		read(&name_len, 1);
+		read(name, name_len);
+		uint32_t seq_len;
+		read(&seq_len, sizeof(seq_len));
+		sum_len += seq_len;
+	}
+	for (uint64_t i = 0; i < (uint64_t(1) << bucket_bits); i++) {
+		uint32_t n;
+		read(&n, sizeof(n));
+		skip(uint64_t(n) * 8);
+		uint32_t size;
+		read(&size, sizeof(size));
+		skip(uint64_t(size) * 16);
+	}
+	if (!(flag & MM_I_NO_SEQ)) {
+		skip((sum_len + 7) / 8 * 4);
+	}
+
+	// The same test NextPartExists applies once part 1 is loaded: another part begins with the magic.
+	char next[4];
+	return in.read(next, sizeof(next)) && memcmp(next, MM_IDX_MAGIC, sizeof(next)) == 0;
 }
 
 bool Minimap2Aligner::is_index_file(const std::string &path) {

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace miint {
@@ -176,6 +177,12 @@ public:
 	// Check if file is a valid minimap2 index
 	static bool is_index_file(const std::string &path);
 
+	// True if the .mmi at `path` holds more than one part. Reads part 1's counts and seeks over its
+	// payloads, so nothing is loaded. Like the loaders, it takes trailing bytes that do not start
+	// with the index magic as the end of a single-part file. Throws, naming the file, if it is
+	// missing, is not a minimap2 index, or ends inside part 1.
+	static bool IsMultiPartIndex(const std::string &path);
+
 	// Static helpers for option/index initialization (shared with SharedMinimap2Index)
 	static void InitOptions(const Minimap2Config &config, mm_idxopt_t &iopt, mm_mapopt_t &mopt);
 	static void LoadIndexFromFile(const std::string &path, const mm_idxopt_t &iopt, mm_idx_t *&out_idx,
@@ -193,6 +200,12 @@ public:
 	// Align queries against current index, append results to batch
 	// Uses SequenceRecordBatch which matches read_fastx output schema
 	void align(const SequenceRecordBatch &queries, SAMRecordBatch &output);
+
+	// Whether align() would emit at least one row for this query, without building any: an empty
+	// sequence2 means a single-end read, otherwise the pair maps when either mate does. Same
+	// options, routing and reference-id check as align(). qname seeds minimap2's tie-breaking hash,
+	// as the read id does in align(), so pass the same name for the same decision.
+	bool any_mapped(std::string_view sequence1, std::string_view sequence2, const char *qname);
 
 private:
 	Minimap2Config config_;
