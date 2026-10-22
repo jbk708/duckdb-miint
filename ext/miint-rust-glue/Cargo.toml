@@ -34,10 +34,10 @@ rype-fastx = ["rype/fastx"]
 rype  = { path = "../rype",  default-features = false, features = ["arrow-ffi"] }
 sylph = { path = "../sylph", default-features = false, features = ["arrow-ffi"], optional = true }
 # sc-capi is the sc_* C-API (opaque handles + Arrow C Data Interface I/O). It
-# pulls sc-arrow and sc-core transitively. Its build.rs regenerates
-# ext/sc/include/sc.h via cbindgen whenever the C API's sources or the crate
-# version change, so the header the C++ side includes follows the linked
-# symbols.
+# pulls sc-arrow and sc-core transitively. Its build.rs regenerates sc.h via
+# cbindgen into $SC_HEADER_DIR, which CMakeLists.txt sets to the build
+# directory, whenever the C API's sources, the crate version or SC_HEADER_DIR
+# change, so the header the C++ side includes follows the linked symbols.
 sc-capi = { path = "../sc/crates/sc-capi" }
 # Only for miint_rust_glue_init (src/lib.rs), which seeds the global pool that
 # rype and sc share. Already in the graph through both, so no new crate.
