@@ -1,0 +1,89 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>miint WASM browser check</title></head>
+<body>
+<script type="module">
+// The playground's boot sequence (the-miint.github.io, docs/playground.md):
+// same duckdb-wasm version, selectBundle(getJsDelivrBundles()), a Blob worker,
+// instantiate(mainModule, pthreadWorker), open({allowUnsignedExtensions}).
+// The pin below must run the DuckDB core the extension targets; docs/UPDATING.md
+// bumps it with DuckDB.
+import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev64.0/+esm';
+
+let conn = null;
+
+const withTimeout = (p, ms, what) => Promise.race([
+  p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timed out after ${ms} ms: ${what}`)), ms))]);
+
+const fmt = v => (v === null || v === undefined ? 'NULL' : String(v));
+
+// The extension is built for the eh bundle (wasm_eh), which the playground gets
+// on a page without cross-origin isolation; any other bundle is a different test.
+async function boot(expectedVersion) {
+  const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+  if (!/\/duckdb-eh\.wasm$/.test(bundle.mainModule)) throw new Error(`expected eh bundle, got ${bundle.mainModule}`);
+  const workerUrl = URL.createObjectURL(
+    new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
+  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(workerUrl));
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  URL.revokeObjectURL(workerUrl);
+  await db.open({ allowUnsignedExtensions: true });
+  conn = await db.connect();
+  const platform = (await conn.query('PRAGMA platform')).toArray()[0].platform;
+  if (platform !== 'wasm_eh') throw new Error(`expected platform wasm_eh, got ${platform}`);
+  const v = (await conn.query('SELECT library_version, source_id FROM pragma_version()')).toArray()[0];
+  const bare = s => String(s).replace(/^v/, '');
+  if (bare(v.library_version) !== bare(expectedVersion)) {
+    throw new Error(`duckdb-wasm runs DuckDB ${v.library_version}, but the extension targets ${expectedVersion}; `
+      + 'bump the @duckdb/duckdb-wasm pin in scripts/wasm_browser/index.html');
+  }
+  return { ok: true, mainModule: bundle.mainModule, platform, version: `${v.library_version} @ ${v.source_id}` };
+}
+
+window.__boot = async expectedVersion => {
+  try {
+    return await withTimeout(boot(expectedVersion), 120000, 'boot');
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+};
+
+window.__load = async url => {
+  try {
+    await withTimeout(conn.query(`LOAD '${url}'`), 120000, 'LOAD');
+    const t = await withTimeout(conn.query('SELECT miint_version() AS v'), 60000, 'miint_version() after LOAD');
+    return { ok: true, version: fmt(t.toArray()[0].v) };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+};
+
+// Whether the database still answers, asked the same way native mode asks.
+async function alive() {
+  try {
+    const t = await withTimeout(conn.query("SELECT 'alive' AS alive"), 20000, 'alive');
+    return fmt(t.toArray()[0].alive) === 'alive';
+  } catch {
+    return false;
+  }
+}
+
+// Run one step and return the first cell of its first row, or its error, and
+// whether the database still answers afterwards.
+window.__step = async sql => {
+  let r;
+  try {
+    const t = await withTimeout(conn.query(sql), 180000, sql.slice(0, 60));
+    const rows = t.toArray();
+    const fields = t.schema.fields;
+    const col = fields.length ? fields[0].name : null;
+    r = { ok: true, value: rows.length && col !== null ? fmt(rows[0][col]) : null,
+          varchar: fields.length === 1 && String(fields[0].type) === 'Utf8',
+          shape: `${fields.length} column(s): ${fields.map(f => String(f.type)).join(', ')}` };
+  } catch (e) {
+    r = { ok: false, error: String(e && e.message || e) };
+  }
+  return { ...r, alive: await alive() };
+};
+window.__ready = true;
+</script>
+</body></html>

@@ -17,6 +17,7 @@ as follows:
   - `Dockerfile` `ARG DUCKDB_VERSION` (local default; `docker.yml` resolves the newest Docker Hub tag at runtime and passes `--build-arg`)
   - `DUCKDB_VERSION` default in `scripts/cron-publish-extension.sh` — it drives the `miint-<ver>-extension-*` artifact prefix and the published paths, so a stale value makes every publish reject
   - `duckdb==` pin in `python/pyproject.toml` — the CLI `LOAD`s the extension, so its DuckDB must match exactly
+  - `@duckdb/duckdb-wasm` pin in `scripts/wasm_browser/index.html`, the runtime of the browser check (`scripts/test_wasm_browser.sh`). Its npm version does not follow DuckDB's numbering: pick the release that reports the new core in `pragma_version()`, the same one the playground moves to (its pin is in [`docs/playground.md`](https://github.com/the-miint/the-miint.github.io/blob/main/docs/playground.md) of the-miint.github.io). The scripts do not rewrite it; the browser check fails, naming the file, until it matches.
 
 Outside this repo (do these after CI is green and a release tag is pushed):
 

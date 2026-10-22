@@ -9,6 +9,17 @@ if grep -nE '\bmake\b[^\n]*\bclean\b[^\n]*(\blib[A-Za-z0-9_]+\.a\b|\ball\b)' CMa
     exit 1
 fi
 
+# MIINT_TEST_JOBS=N runs the SQL files and the C++ tests on N parallel workers
+# (test/scripts/run_tests_parallel.py) instead of one after another. The same tests run
+# either way. Unset, as in CI, it is 1: the serial pass. Checked before the setup below.
+MIINT_TEST_JOBS="${MIINT_TEST_JOBS:-1}"
+case "$MIINT_TEST_JOBS" in
+    *[!0-9]* | 0*)
+        echo "ERROR: MIINT_TEST_JOBS must be a positive integer, got '$MIINT_TEST_JOBS'" >&2
+        exit 1
+        ;;
+esac
+
 # mmvec compiles its objective once per instruction set and picks at load time, so
 # a fit's result depends on the CPU running it -- the same property scikit-bio has
 # through OpenBLAS, and an accepted one. Expected values in the SQL tests are
@@ -25,6 +36,10 @@ fi
 # works for a deliberate cross-check.
 export MIINT_SIMD="${MIINT_SIMD:-baseline}"
 echo "MIINT_SIMD=$MIINT_SIMD (mmvec kernel; expected values are carved against 'baseline')"
+
+# Under this config every error fails its test; by default unittest skips some
+# (docs/testing.md, "Guards and skipped tests").
+export DUCKDB_TEST_CONFIG="${DUCKDB_TEST_CONFIG:-$PWD/test/configs/no_skipped_errors.json}"
 
 # Start local HTTP server for HTTPS reader tests (unless already set externally)
 HTTP_SERVER_PID=""
@@ -175,9 +190,14 @@ ft_regenerate_one "data/fasttree/moderate.fa" "data/fasttree/moderate.golden.nwk
 # the goldens against that manifest and fails on a mismatch. To refresh: rerun
 # the generator under a SciPy env.
 
-# NCBI BLAST network reachability. Probes the BLAST CGI endpoint so
-# live blast tests can skip gracefully in offline CI.
-if curl -sSf --max-time 5 -o /dev/null \
+# Live NCBI BLAST tests, opt-in. miint's BLAST client waits up to about two hours per
+# submission (src/blast_client.cpp), and that the endpoint answers says nothing about
+# NCBI's queue (one submission was still queued after 28 minutes on 2026-10-15). That is
+# past the httpfs pass's default limit below, so raise it too:
+# `MIINT_BLAST_LIVE_TEST=1 MIINT_HTTPFS_TIMEOUT_SECONDS=10800 bash run_tests.sh`. With the
+# opt-in set, the probe still skips them when BLAST does not answer.
+if [ "${MIINT_BLAST_LIVE_TEST:-0}" = "1" ] &&
+    curl -sSf --max-time 5 -o /dev/null \
         "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi" 2>/dev/null; then
     export BLAST_LIVE_AVAILABLE=1
 fi
@@ -189,6 +209,13 @@ if curl -sSf --max-time 3 -o /dev/null \
         "https://www.ebi.ac.uk/ena/portal/api/search?result=read_run&query=run_accession%3D%22ERR1074767%22&fields=run_accession&limit=1&format=tsv" \
         2>/dev/null; then
     export ENA_AVAILABLE=1
+fi
+
+# NCBI network reachability, for the live read_ncbi* tests: they use both E-utilities and
+# the Datasets API, so both must answer.
+if curl -sSf --max-time 5 -o /dev/null "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/einfo.fcgi" 2>/dev/null &&
+    curl -sSf --max-time 5 -o /dev/null "https://api.ncbi.nlm.nih.gov/datasets/v2/version" 2>/dev/null; then
+    export NCBI_AVAILABLE=1
 fi
 
 # NCBI taxonomy dump reachability (opt-in integration test; the test downloads
@@ -242,7 +269,7 @@ if [ -z "$ENA_WEBIN_MOCK_URL" ] && python3 -c "import http.server" 2>/dev/null; 
         sleep 0.1
     done
     if [ -z "$ENA_WEBIN_MOCK_URL" ]; then
-        echo "Warning: ENA Webin mock failed to start; submission round-trip tests will skip"
+        echo "Warning: ENA Webin mock failed to start; its tests will skip, which fails the httpfs pass"
         kill $ENA_MOCK_PID 2>/dev/null || true
     else
         # Phase 8 Step 8a alias collision check: the operator sends an
@@ -617,12 +644,18 @@ if [ -f "$SMR_ORACLE_GZ" ] && [ -f "$SMR_ORACLE_SHA" ]; then
     fi
 fi
 
-make test
-./build/release/extension/miint/tests
+# The main pass, on MIINT_TEST_JOBS workers (checked at the top).
+if [ "$MIINT_TEST_JOBS" -gt 1 ]; then
+    python3 test/scripts/run_tests_parallel.py --jobs "$MIINT_TEST_JOBS" \
+        --unittest ./build/release/test/unittest --cpp-tests ./build/release/extension/miint/tests
+else
+    make test
+    ./build/release/extension/miint/tests
+fi
 
 # read_fastx_fd_release.test must run under a low RLIMIT_NOFILE: it asserts that one scan
 # over many paths holds descriptors proportional to thread count, not to path count, and
-# a process with the usual limit cannot tell those two apart. `make test` above has no way
+# a process with the usual limit cannot tell those two apart. The main pass above has no way
 # to set a limit, so the file holds itself back with `require-env MIINT_LOW_FD_TEST` and
 # runs here instead.
 #
@@ -647,12 +680,75 @@ echo "Running $FD_RELEASE_TEST with RLIMIT_NOFILE<=$FD_RELEASE_LIMIT..."
     MIINT_LOW_FD_TEST=1 ./build/release/test/unittest "$FD_RELEASE_TEST"
 ) || exit 1
 
-# Run shell script tests
+# The httpfs pass: every SQL file that needs httpfs, all of which `make test` above skips.
+# docs/testing.md ("Guards and skipped tests") says why, and how this pass loads httpfs and
+# this build's miint. The files' require-env guards still decide whether each runs: a live
+# test runs only when its service answered the probe above.
+HTTPFS_TESTS=$(grep -rl --include='*.test' '^require httpfs' test/sql | paste -sd, -)
+HTTPFS_TEST_HOME="$PWD/build/release/httpfs_test_home"
+mkdir -p "$HTTPFS_TEST_HOME"
+# INSTALL httpfs downloads it on the first run only. -unsigned because this build is unsigned.
+if ! HOME="$HTTPFS_TEST_HOME" ./build/release/duckdb -unsigned -c "INSTALL httpfs; LOAD httpfs;
+        FORCE INSTALL '$PWD/build/release/extension/miint/miint.duckdb_extension';" > /dev/null; then
+    echo "ERROR: could not install httpfs and this build's miint into $HTTPFS_TEST_HOME; the tests that need httpfs cannot run" >&2
+    exit 1
+fi
+HTTPFS_LOG="$PWD/build/release/httpfs_tests.log"
+# A stalled remote transfer would otherwise hang the run instead of failing it.
+HTTPFS_TIMEOUT_SECONDS="${MIINT_HTTPFS_TIMEOUT_SECONDS:-1800}"
+TIMEOUT_CMD=$(command -v timeout || command -v gtimeout || true)
+if [ -z "$TIMEOUT_CMD" ]; then
+    echo "WARNING: no timeout or gtimeout command, so a stalled transfer hangs this run instead of failing it" >&2
+fi
+echo "Running the $(echo "$HTTPFS_TESTS" | tr ',' '\n' | wc -l) test files that need httpfs (log: $HTTPFS_LOG)..."
+HTTPFS_RC=0
+HTTPFS_START=$SECONDS
+# on_init's LOAD fails every file when httpfs cannot load (under autoloading, `require
+# httpfs` alone passes without loading it). --require miint fails a file whose miint
+# cannot load, where it would otherwise be skipped; -w NoTests fails the run when any file
+# in the list matches no test.
+HOME="$HTTPFS_TEST_HOME" DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' \
+    ${TIMEOUT_CMD:+"$TIMEOUT_CMD" --kill-after=60 "$HTTPFS_TIMEOUT_SECONDS"} \
+    ./build/release/test/unittest --require miint -w NoTests "$HTTPFS_TESTS" \
+    > "$HTTPFS_LOG" 2>&1 || HTTPFS_RC=$?
+HTTPFS_ELAPSED=$((SECONDS - HTTPFS_START))
+if [ "$HTTPFS_RC" -ne 0 ]; then
+    # In full: CI keeps the console output, not the log file.
+    cat "$HTTPFS_LOG"
+    # timeout exits 124, or 137 when it has to kill; 137 is also any other SIGKILL, such as
+    # the out-of-memory killer's, so only a run that lasted the limit counts as timed out.
+    if { [ "$HTTPFS_RC" -eq 124 ] || [ "$HTTPFS_RC" -eq 137 ]; } &&
+        [ "$HTTPFS_ELAPSED" -ge "$HTTPFS_TIMEOUT_SECONDS" ]; then
+        echo "ERROR: tests that need httpfs did not finish within ${HTTPFS_TIMEOUT_SECONDS}s" >&2
+    else
+        echo "ERROR: tests that need httpfs failed (exit $HTTPFS_RC after ${HTTPFS_ELAPSED}s)" >&2
+    fi
+    exit 1
+fi
+tail -n 20 "$HTTPFS_LOG"
+# Which skips are allowed: docs/testing.md, "Guards and skipped tests". A skip does not
+# change unittest's exit status, so a disallowed one, such as a skip for the mock server's
+# URL that this script exports, is caught here.
+HTTPFS_ALLOWED_SKIPS='ENA_AVAILABLE|NCBI_AVAILABLE|BLAST_LIVE_AVAILABLE|MIINT_TAXDUMP_REMOTE|ENA_WEBIN_TEST_(USER|PASSWORD|AVAILABLE)|ASPERA_AVAILABLE|HDF5_AVAILABLE'
+HTTPFS_BAD_SKIPS=$(sed -n '/^Skipped tests for the following reasons:/,$p' "$HTTPFS_LOG" | tail -n +2 |
+    grep -vE "^(require-env ($HTTPFS_ALLOWED_SKIPS): [0-9]+)?$" || true)
+if [ -n "$HTTPFS_BAD_SKIPS" ]; then
+    echo "ERROR: the httpfs pass skipped files for reasons this run should have provided:" >&2
+    echo "$HTTPFS_BAD_SKIPS" >&2
+    exit 1
+fi
+
+# Run shell script tests. A script that loads httpfs runs with the httpfs pass's HOME
+# (docs/testing.md, "Shell Script Tests").
 echo "Running shell script tests..."
 for test_script in test/shell/*.sh; do
     if [ -f "$test_script" ]; then
         echo "Running $test_script..."
-        if ! bash "$test_script"; then
+        script_home="$HOME"
+        if grep -qi 'load httpfs' "$test_script"; then
+            script_home="$HTTPFS_TEST_HOME"
+        fi
+        if ! HOME="$script_home" bash "$test_script"; then
             echo "Shell test failed: $test_script"
             exit 1
         fi
