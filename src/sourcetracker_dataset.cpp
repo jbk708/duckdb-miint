@@ -267,15 +267,14 @@ void CheckEnvironments(const Dataset &dataset, bool mean_collapse, bool loo) {
 			}
 			return false;
 		};
-		if (!loo) {
-			if (!keeps_a_sequence(nullptr, samples.size())) {
-				Fail("environment '" + env + "'" + explain(samples.size()));
-			}
-			continue;
+		// In sink mode the environment is collapsed whole; under loo so is every
+		// fold that holds out another environment's sample.
+		if ((!loo || members.size() > 1) && !keeps_a_sequence(nullptr, samples.size())) {
+			Fail("environment '" + env + "'" + explain(samples.size()));
 		}
 		// A fold holding out an environment's only member drops the environment,
 		// and one holding out one of two leaves a whole sample.
-		if (samples.size() < 3) {
+		if (!loo || samples.size() < 3) {
 			continue;
 		}
 		for (const auto held : samples) {

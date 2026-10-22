@@ -320,7 +320,8 @@ beta must be finite and > 0
 # sequence in Unknown without drawing: a one-sequence sink comes out 100%
 # Unknown, where alpha2 or beta of 1e-9 gives 0.41 Unknown / 0.59 of its source.
 # alpha1 := 0 stays legal: an environment that collapses to no sequences is
-# refused (below), so every environment's denominators are positive
+# refused (below), so every environment's denominators are positive, except
+# under loo with source rarefaction, where the folds collapse rarefied samples
 # (sourcetracker.test relies on alpha1 := 0).
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', alpha2 := 0.0);
@@ -334,7 +335,8 @@ beta must be finite and > 0 (got 0.0)
 
 # st3 counts a chain's passes in 32 bits. At burnin := 1, 65537 draws 65537
 # passes apart wrap to a chain of 65538 passes holding one draw, and the
-# per-sink assignment mass is then 6e-5 of the sink's depth instead of the depth.
+# per-sink assignment mass is then 1.5e-5 of the sink's depth instead of the
+# depth.
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', draws_per_restart := 65537, delay := 65537);
 ----
@@ -371,6 +373,31 @@ SELECT count(*) FROM sourcetracker('empty_env', 'empty_env_meta', collapse := 's
     source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
 ----
 3
+
+# Under loo the fold holding out b1 collapses A whole.
+statement error
+SELECT * FROM sourcetracker('empty_env', 'empty_env_meta', loo := true, source_rarefaction_depth := 0);
+----
+environment 'A' has no sequences after collapse
+
+# Bind's bounds sit exactly at 4294967295: passes 65534 + 65535 * 65536 + 1 and
+# draws 65537 * 65535 are accepted (DESCRIBE binds without running), one more
+# is refused.
+statement ok
+DESCRIBE SELECT * FROM sourcetracker('synth', 'synth_meta', burnin := 65534, draws_per_restart := 65536, delay := 65536);
+
+statement error
+DESCRIBE SELECT * FROM sourcetracker('synth', 'synth_meta', burnin := 65535, draws_per_restart := 65536, delay := 65536);
+----
+must be at most 4294967295 (got 4294967296)
+
+statement ok
+DESCRIBE SELECT * FROM sourcetracker('synth', 'synth_meta', restarts := 65537, draws_per_restart := 65535);
+
+statement error
+DESCRIBE SELECT * FROM sourcetracker('synth', 'synth_meta', restarts := 65536, draws_per_restart := 65536);
+----
+must be at most 4294967295 (got 4294967296)
 
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', sink_rarefaction_depth := -1);

@@ -75,10 +75,12 @@ void CheckDepths(const Dataset &dataset, int32_t source_depth, int32_t sink_dept
 // collapsed. Mean collapse (`mean_collapse`) rounds each feature's mean down, so
 // an environment whose members share no feature at low counts can collapse to
 // nothing; st3 would then sample an environment with an empty profile. Sum
-// collapse keeps every sequence. In leave-one-out (`loo`) each fold collapses
-// the members left after one is held out, so each fold is checked. The check is
-// on the counts as given: under leave-one-out, source rarefaction thins each
-// sample before the folds collapse, which st3 does not check.
+// collapse keeps every sequence. In leave-one-out (`loo`) every fold collapses
+// all the remaining sources, so an environment is checked whole (for the folds
+// holding out another environment's sample) and without each of its own
+// members. The check is on the counts as given: under leave-one-out, source
+// rarefaction thins each sample before the folds collapse, which st3 does not
+// check.
 //
 // Throws std::invalid_argument naming the environment (and the held-out sample).
 void CheckEnvironments(const Dataset &dataset, bool mean_collapse, bool loo);

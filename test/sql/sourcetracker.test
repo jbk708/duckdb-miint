@@ -334,7 +334,9 @@ CREATE TABLE run_p8 AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', threads 
 
 query I
 SELECT (SELECT count(*) FROM (SELECT * FROM run_p1 EXCEPT ALL SELECT * FROM run_t1))
-     + (SELECT count(*) FROM (SELECT * FROM run_p8 EXCEPT ALL SELECT * FROM run_t1));
+     + (SELECT count(*) FROM (SELECT * FROM run_t1 EXCEPT ALL SELECT * FROM run_p1))
+     + (SELECT count(*) FROM (SELECT * FROM run_p8 EXCEPT ALL SELECT * FROM run_t1))
+     + (SELECT count(*) FROM (SELECT * FROM run_t1 EXCEPT ALL SELECT * FROM run_p8));
 ----
 0
 

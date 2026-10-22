@@ -67,8 +67,8 @@ Requirements, all enforced with errors that name the offending sample:
   and the two rows would be indistinguishable in the result.
 - Every environment keeps at least one sequence once collapsed. `collapse := 'mean'` rounds
   each feature's mean down, so an environment whose samples share no feature at low counts
-  can average to nothing; under `loo` this holds for each fold. `collapse := 'sum'` keeps
-  every sequence.
+  can average to nothing; under `loo` this holds for each fold, checked on the counts before
+  source rarefaction. `collapse := 'sum'` keeps every sequence.
 
 The examples use two soil sources, two gut sources, one water source and two sinks, six
 features, about 200 to 270 sequences per sample:
@@ -128,7 +128,7 @@ and the sampler are SourceTracker2's; the metadata column names differ (see
 | `assignments` | `false` | Fill the [`assignments`](#per-feature-assignments) map. Not available with `loo`. |
 | `alpha1` | `0.001` | Prior count of each feature in each source environment. Higher values trust the source data less and smooth its feature distributions; SourceTracker2 calls 0.01 a more conservative choice. |
 | `alpha2` | `0.1` | Prior count of each feature in the Unknown environment, as a fraction of the sink's depth. Higher values make Unknown smoother and less prone to absorbing whatever the sources do not explain. Must be above 0. |
-| `beta` | `10` | Count added to each environment's sequence count, Unknown included, each time a sequence is reassigned. Must be above 0. |
+| `beta` | `10` | Count added to the count of the sink's sequences assigned to each environment, Unknown included, each time a sequence is reassigned. Must be above 0. |
 | `restarts` | `10` | Independent Markov chains per sink. `restarts * draws_per_restart` is the number of retained draws the mean is taken over. |
 | `draws_per_restart` | `1` | Draws retained from each chain. |
 | `burnin` | `100` | Passes over the sink's sequences before the first draw is retained. |
@@ -144,8 +144,8 @@ and the sampler are SourceTracker2's; the metadata column names differ (see
 
 Bad parameter values are refused at bind: a `collapse` other than `mean` or `sum`, a `seed`
 below `-1`, a prior that is negative or not finite, an `alpha2` or `beta` of 0 (the sampler's
-weights can then be 0/0), a chain parameter below 1, a chain longer than st3 can count
-(`burnin + (draws_per_restart - 1) * delay + 1` passes, or `restarts * draws_per_restart`
+weights can then be 0/0), a chain parameter below 1, a chain longer than st3 can count or
+hold (`burnin + (draws_per_restart - 1) * delay + 1` passes, or `restarts * draws_per_restart`
 draws, above 4294967295), a negative depth or thread count, a NULL for any parameter, an
 empty or duplicated column name or one naming `sample_id`, or `assignments := true` together
 with `loo := true`.

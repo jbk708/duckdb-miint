@@ -348,3 +348,29 @@ TEST_CASE("CheckEnvironments: leave-one-out checks each fold's remaining members
 		REQUIRE_NOTHROW(CheckEnvironments(IngestDataset(cells, pair), true, true));
 	}
 }
+
+TEST_CASE("CheckEnvironments: leave-one-out also collapses each environment whole", "[sourcetracker]") {
+	// Every fold collapses all the sources it keeps, so the fold holding out
+	// F's sample x sees E with all its members.
+	std::vector<MetadataRow> m;
+	AddMeta(m, "a", "source", "E");
+	AddMeta(m, "b", "source", "E");
+	AddMeta(m, "x", "source", "F");
+	AddMeta(m, "k", "sink", "");
+	const std::vector<CooRow> cells = {{"a", "f1", 1.0}, {"b", "f2", 1.0}, {"x", "f5", 10.0}, {"k", "f1", 3.0}};
+	REQUIRE_THROWS_WITH(CheckEnvironments(IngestDataset(cells, m), true, true), ContainsSubstring("environment 'E'"));
+
+	SECTION("three members that each keep a sequence in their own folds but not together") {
+		std::vector<MetadataRow> m3;
+		AddMeta(m3, "a", "source", "E");
+		AddMeta(m3, "b", "source", "E");
+		AddMeta(m3, "c", "source", "E");
+		AddMeta(m3, "x", "source", "F");
+		AddMeta(m3, "k", "sink", "");
+		const std::vector<CooRow> c3 = {{"a", "f1", 1.0}, {"a", "f3", 1.0}, {"b", "f1", 1.0},  {"b", "f2", 1.0},
+		                                {"c", "f2", 1.0}, {"c", "f3", 1.0}, {"x", "f5", 10.0}, {"k", "f1", 3.0}};
+		const Dataset ds3 = IngestDataset(c3, m3);
+		REQUIRE_THROWS_WITH(CheckEnvironments(ds3, true, true), ContainsSubstring("environment 'E'"));
+		REQUIRE_THROWS_WITH(CheckEnvironments(ds3, true, false), ContainsSubstring("environment 'E'"));
+	}
+}
