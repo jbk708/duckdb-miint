@@ -255,7 +255,7 @@ When two similar code paths solve the same problem differently, factor out the s
 Flag:
 - **Development-process narration:** planning handles (PR-level check 5), test counts, status language, "this ticket", "a follow-up".
 - **Forward-looking or historical narration:** what the code used to do, what an earlier draft called something, "an earlier version" for something never shipped. Git carries history.
-- **A docstring or doc that enumerates the current members of a set that will grow** ("the three metrics"; a header comment listing the functions it registers; a cross-reference that lists the functions another page documents; not a pointer to one function) where a rule or a link would stay true: state the rule, or link to the page that owns the list.
+- **A comment, docstring or doc that enumerates the current members of a set that will grow** ("the three metrics"; a header comment listing the functions it registers; a cross-reference that lists the functions another page documents; not a pointer to one function) where a rule or a link would stay true: state the rule, or link to the page that owns the list.
 - **A comment that contradicts the code beside it**, or the PR's own measurements; and the module comment a PR's change falsifies. Read the comments of every changed file, not only the hunks.
 - **A doc asserting a capability, URL, option or error timing that does not exist**, or denying one that does. Verify against the code.
 - **User-facing docs carrying internal notes.** Design rationale, benchmarks and implementation history go in `docs/internals/`; task pages say what a function does, its parameters, its output and its caveats, with the caveats beside the function they qualify.
