@@ -178,6 +178,10 @@ public:
 		//! False when the relation turned out to be empty, so the caller can tell
 		//! a real measurement from the fallback.
 		bool sampled;
+		//! What holding one scanned row costs, every column counted: the first
+		//! chunk's allocation over its rows. 0 when not sampled. A filter stream
+		//! holds a group of these for its caller.
+		idx_t held_bytes_per_row = 0;
 	};
 
 	//! Measure `avg_read_length` and `is_paired` from the first source chunk
@@ -228,6 +232,12 @@ public:
 	//! Filter streams only: the rows the current group has sent to Arrow, in scan
 	//! order, moved out to the caller.
 	vector<RypeHeldRows> TakeGroup();
+
+	//! The types of the scan's columns, as the query bound them. Only while the
+	//! scan is open (before ReleaseScan).
+	const vector<LogicalType> &ScanTypes() const {
+		return result->GetTypes();
+	}
 
 	//! Drop the scan (streaming QueryResult and its chunk state) without
 	//! destroying the object. Called from the release callback so the scan's

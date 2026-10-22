@@ -1783,6 +1783,7 @@ set(EXTENSION_SOURCES
     src/align_pairwise_ksw2_dual_affine_functions.cpp
     src/align_pairwise_ksw2_splice_functions.cpp
     src/rype_classify.cpp
+    src/rype_filter.cpp
     src/rype_extract.cpp
     src/rype_index_create.cpp
     src/rype_input_stream.cpp

@@ -294,6 +294,22 @@ TEST_CASE("A filter stream holds every column as the relation types it, and send
 	CHECK_FALSE(stream->BeginGroup());
 }
 
+TEST_CASE("SampleSizing reports the bytes a held row costs, every column counted", "[RypeInputStream]") {
+	// rype_filter sizes its groups by what holding a row costs, and a held row carries every column,
+	// not just the sequences RYpe is sent. Two relations with the same sequences, one with a 1000-byte
+	// extra column, must differ by at least that much per row.
+	FilterStreamFixture f;
+	f.Exec("CREATE TABLE lean AS SELECT repeat('ACGT', 25) AS sequence1 FROM range(3000) t(i)");
+	f.Exec("CREATE TABLE wide AS SELECT repeat('ACGT', 25) AS sequence1, repeat('x', 1000) || i AS note "
+	       "FROM range(3000) t(i)");
+	const auto lean = f.Open("lean", {"sequence1"}, 7)->SampleSizing();
+	const auto wide = f.Open("wide", {"sequence1", "note"}, 7)->SampleSizing();
+	CHECK(lean.avg_read_length == 100);
+	CHECK(wide.avg_read_length == 100);
+	CHECK(lean.held_bytes_per_row >= 100);
+	CHECK(wide.held_bytes_per_row >= lean.held_bytes_per_row + 1000);
+}
+
 TEST_CASE("A BLOB sequence1 with no sequence2 goes to Arrow as a single-end batch", "[RypeInputStream]") {
 	FilterStreamFixture f;
 	f.Exec("CREATE TABLE reads AS SELECT 'r' || i AS read_id, ('S' || i)::BLOB AS sequence1 FROM range(3) t(i)");

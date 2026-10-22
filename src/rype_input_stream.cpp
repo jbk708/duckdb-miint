@@ -314,6 +314,7 @@ RypeInputStream::Sizing RypeInputStream::SampleSizing(size_t fallback_read_lengt
 		// rype_calculate_batch_config requires avg_read_length > 0; a chunk of
 		// empty sequences would otherwise round to zero.
 		sizing.avg_read_length = MaxValue<size_t>(total_bytes / counted, 1);
+		sizing.held_bytes_per_row = chunk.GetAllocationSize() / chunk_size;
 	}
 
 	// A relation with no sequence2 column is projected as NULL::BLOB by

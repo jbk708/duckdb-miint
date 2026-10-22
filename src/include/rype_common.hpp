@@ -211,21 +211,21 @@ inline size_t ResolveRypeBatchSize(ClientContext &context, const char *label, co
 // Both facts now come from the head of the single pass:
 // RypeInputStream::SampleSizing.
 
-//! Column names (lowercased) and their storage types for a table/view,
-//! index-aligned. The single backing query for both GetTableColumnNamesLower
-//! and the id-type capture in ValidateSequenceTable.
-struct LowercasedColumns {
+//! Column names and their storage types for a table/view, index-aligned. The
+//! single backing query for GetTableColumnNamesLower, the id-type capture in
+//! ValidateSequenceTable, and rype_filter's output schema.
+struct TableColumns {
 	vector<string> names;
 	vector<LogicalType> types;
 };
 
-//! Look up a table or view by name and return its column names (lowercased) and
+//! Look up a table or view by name and return its column names, as declared, and
 //! types, index-aligned. Throws BinderException if the entry does not exist or
 //! is not a table/view. `role` names the entry in the "does not exist" message
 //! (e.g. "Table or view", "chunk table"), so callers can produce role-specific
 //! diagnostics.
-inline LowercasedColumns GetTableColumnsLower(ClientContext &context, const std::string &table_name,
-                                              const std::string &role = "Table or view") {
+inline TableColumns GetTableColumns(ClientContext &context, const std::string &table_name,
+                                    const std::string &role = "Table or view") {
 	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_name)), QueryErrorContext());
 	auto entry = Catalog::GetEntry(context, lookup_info, OnEntryNotFound::RETURN_NULL);
 
@@ -233,13 +233,13 @@ inline LowercasedColumns GetTableColumnsLower(ClientContext &context, const std:
 		throw BinderException("%s '%s' does not exist", role, table_name);
 	}
 
-	LowercasedColumns cols;
+	TableColumns cols;
 	if (entry->type == CatalogType::TABLE_ENTRY) {
 		auto &table = entry->Cast<TableCatalogEntry>();
 		auto &columns = table.GetColumns();
 		for (idx_t i = 0; i < columns.LogicalColumnCount(); i++) {
 			auto &col = columns.GetColumn(LogicalIndex(i));
-			cols.names.push_back(StringUtil::Lower(col.Name().GetIdentifierName()));
+			cols.names.push_back(col.Name().GetIdentifierName());
 			cols.types.push_back(col.Type());
 		}
 	} else if (entry->type == CatalogType::VIEW_ENTRY) {
@@ -247,11 +247,21 @@ inline LowercasedColumns GetTableColumnsLower(ClientContext &context, const std:
 		view.BindView(context);
 		auto col_info = view.GetColumnInfo();
 		for (idx_t i = 0; i < col_info->names.size(); i++) {
-			cols.names.push_back(StringUtil::Lower(col_info->names[i].GetIdentifierName()));
+			cols.names.push_back(col_info->names[i].GetIdentifierName());
 			cols.types.push_back(col_info->types[i]);
 		}
 	} else {
 		throw BinderException("'%s' is not a table or view", table_name);
+	}
+	return cols;
+}
+
+//! GetTableColumns with the names lowercased, for case-insensitive lookups.
+inline TableColumns GetTableColumnsLower(ClientContext &context, const std::string &table_name,
+                                         const std::string &role = "Table or view") {
+	auto cols = GetTableColumns(context, table_name, role);
+	for (auto &name : cols.names) {
+		name = StringUtil::Lower(name);
 	}
 	return cols;
 }
