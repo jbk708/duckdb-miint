@@ -1,0 +1,68 @@
+# name: test/sql/read_fastx_qual_validity.test
+# description: qual1/qual2 lists and every score in them stay non-NULL across reused output chunks
+# group: [sql]
+
+# The quality columns are written straight into the scan's output vectors, which DuckDB
+# reuses from one chunk to the next. A NULL list, or a NULL score inside a list, is not a
+# parse error anyone would see: it silently drops a read's or a base's quality, and COPY
+# FORMAT FASTQ then fails on the NULL list, or writes whatever byte the NULL score's slot
+# held. These files are larger than one output chunk so the vectors are reused, and the scan
+# is pinned to one thread so the FASTA file's NULL qual1 chunks run before FASTQ chunks that
+# must come out fully valid. DuckDB resets an output chunk's validity before the scan fills
+# it, so this pins the output; it does not reach the branch that rewrites a leftover buffer.
+
+require miint
+
+statement ok
+SET threads=1;
+
+statement ok
+CREATE TABLE src AS
+SELECT 'r' || i AS read_id,
+       repeat('ACGT', 10) AS sequence1,
+       repeat('TTGCA', 8) AS sequence2,
+       list_transform(range(40), j -> ((i + j) % 42)::UTINYINT) AS qual1,
+       list_transform(range(40), j -> ((i * 3 + j) % 42)::UTINYINT) AS qual2
+FROM range(5000) t(i);
+
+statement ok
+COPY (SELECT read_id, sequence1 FROM src) TO '__TEST_DIR__/qual_validity.fasta' (FORMAT FASTA);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM src) TO '__TEST_DIR__/qual_validity.fq' (FORMAT FASTQ);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1, sequence2, qual2 FROM src) TO '__TEST_DIR__/qual_validity_{ORIENTATION}.fq' (FORMAT FASTQ);
+
+# FASTA rows carry no quality at all; FASTQ rows carry a 40-score list on every row.
+query IIII
+SELECT count(*) FILTER (WHERE qual1 IS NULL AND filepath LIKE '%.fasta'),
+       count(*) FILTER (WHERE qual1 IS NOT NULL AND filepath LIKE '%.fq'),
+       count(*) FILTER (WHERE len(qual1) = 40),
+       count(*)
+FROM read_fastx(['__TEST_DIR__/qual_validity.fasta', '__TEST_DIR__/qual_validity.fq'], include_filepath := true);
+----
+5000	5000	5000	10000
+
+# Not one score inside the FASTQ lists is NULL, and every one is the score that was written.
+query II
+SELECT count(*) FILTER (WHERE q IS NULL), count(*) FILTER (WHERE q IS DISTINCT FROM expected)
+FROM (
+    SELECT unnest(r.qual1) AS q, unnest(s.qual1) AS expected
+    FROM read_fastx(['__TEST_DIR__/qual_validity.fasta', '__TEST_DIR__/qual_validity.fq']) r
+    JOIN src s USING (read_id)
+    WHERE r.qual1 IS NOT NULL
+);
+----
+0	0
+
+# Paired: both mates' lists are valid and exact on every row.
+query IIII
+SELECT count(*) FILTER (WHERE r.qual1 IS NULL OR r.qual2 IS NULL),
+       count(*) FILTER (WHERE r.qual1 IS DISTINCT FROM s.qual1),
+       count(*) FILTER (WHERE r.qual2 IS DISTINCT FROM s.qual2),
+       count(*)
+FROM read_fastx('__TEST_DIR__/qual_validity_R1.fq', sequence2 := '__TEST_DIR__/qual_validity_R2.fq') r
+JOIN src s USING (read_id);
+----
+0	0	0	5000

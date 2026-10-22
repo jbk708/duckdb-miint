@@ -534,18 +534,18 @@ int aspera_seq_close(AsperaSeqStream *stream) {
 	return 0;
 }
 
-AsperaSeqStream *CreateAsperaSeqStream(AsperaProcess *process, bool is_gzipped) {
-	auto stream = new AsperaSeqStream();
+AsperaSeqStream *CreateAsperaSeqStream(AsperaProcess *process, bool is_gzipped, const std::string &source) {
+	auto stream = std::make_unique<AsperaSeqStream>();
 	stream->process = process;
 	stream->is_gzipped = is_gzipped;
+	stream->source = source;
 	if (is_gzipped) {
 		if (inflateInit2(&stream->zs, 16 + MAX_WBITS) != Z_OK) {
-			delete stream;
 			throw duckdb::IOException("Failed to initialize zlib for Aspera stream");
 		}
 		stream->zs_initialized = true;
 	}
-	return stream;
+	return stream.release();
 }
 
 } // namespace miint

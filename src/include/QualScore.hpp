@@ -48,14 +48,25 @@ public:
 
 	//! Write decoded quality scores directly to caller-supplied buffer (avoids heap allocation).
 	//! Returns number of bytes written.
+	//! The range check is branch-free so the loop vectorizes; only when it trips is the string
+	//! walked again to name the first bad character. `src` is a local because a store through
+	//! `dest` could otherwise alias the string, and GCC then reloads it and stays scalar.
 	size_t write_decoded(uint8_t *dest, int offset = 33) const {
-		size_t n = qual_.size();
+		const char *src = qual_.data();
+		const size_t n = qual_.size();
+		unsigned char bad = 0;
 		for (size_t i = 0; i < n; i++) {
-			int val = static_cast<int>(qual_[i]) - offset;
-			if (val < 0 || val > 93) {
-				throw std::runtime_error("Stored quality character out of range: " + std::string(1, qual_[i]));
-			}
+			const int val = static_cast<int>(src[i]) - offset;
+			bad |= (val < 0) | (val > 93);
 			dest[i] = static_cast<uint8_t>(val);
+		}
+		if (bad) {
+			for (size_t i = 0; i < n; i++) {
+				const int val = static_cast<int>(src[i]) - offset;
+				if (val < 0 || val > 93) {
+					throw std::runtime_error("Stored quality character out of range: " + std::string(1, src[i]));
+				}
+			}
 		}
 		return n;
 	}

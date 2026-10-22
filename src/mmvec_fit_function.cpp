@@ -248,8 +248,8 @@ unique_ptr<GlobalTableFunctionState> MmvecFitInitGlobal(ClientContext &context, 
 	gstate->x_type = data.x_feature_id_type;
 	gstate->y_type = data.y_feature_id_type;
 
-	// ReadFeatureTable drops NULL/zero/NaN cells (the sparse feature-table
-	// contract shared with community_distances and unifrac_distances) but passes
+	// ReadFeatureTable drops NULL/zero cells and refuses NaN (the sparse
+	// feature-table contract shared with community_distances and unifrac_distances) but passes
 	// negatives and infinities straight through, which the core then rejects --
 	// mmvec models counts, so a transformed table is a modeling error rather than
 	// something to fit quietly.
