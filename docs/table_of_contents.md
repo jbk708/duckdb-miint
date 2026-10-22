@@ -96,6 +96,7 @@ Two constraints come with it:
 - [Alpha and beta diversity](diversity.md) - Methods to compute and analyze alpha and beta diversity, including rarefaction, non-phylogenetic community distances, ordination (PCoA) and Procrustes alignment, sample clustering, and the two-sample Kolmogorov-Smirnov test.
 - [Community simulation](simulation.md) - Generate synthetic gradient / clustered OTU tables with known ground truth for benchmarking resemblance and ordination methods.
 - [Multi-omics integration](multiomics.md) - MMvec: learn which metabolites co-occur with which microbes from paired count tables, without the spurious associations correlation produces on compositional data.
+- [Sample classification & regression](sample_classifier.md) - Random forests over a feature table (sc, a reimplementation of QIIME 2's q2-sample-classifier): fit, predict, estimate generalization by cross-validation, and explain individual predictions with SHAP (SHapley Additive exPlanations) feature attributions, computed exactly with path-dependent TreeSHAP.
 
 ## Mass spectrometry
 

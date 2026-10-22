@@ -4,9 +4,9 @@
 
 require miint
 
-# At least 8 core libraries always present (HDF5, vsearch, mafft, and abpoa are optional)
+# At least 9 core libraries always present (HDF5, vsearch, mafft, and abpoa are optional)
 query I
-SELECT COUNT(*) >= 8 FROM miint_versions();
+SELECT COUNT(*) >= 9 FROM miint_versions();
 ----
 true
 
@@ -16,12 +16,14 @@ SELECT COUNT(*) FROM miint_versions() WHERE version = '' OR version IS NULL;
 ----
 0
 
-# All always-present library names
+# All always-present library names. sc is built into every build, WASM
+# included, so its pin is always reported: a model's provenance is the sc pin
+# that fit it.
 query I
 SELECT COUNT(*) FROM miint_versions()
-WHERE library IN ('miint', 'htslib', 'minimap2', 'kseq++', 'LBFGS++', 'WFA2-lib', 'zlib', 'rype');
+WHERE library IN ('miint', 'htslib', 'minimap2', 'kseq++', 'LBFGS++', 'WFA2-lib', 'zlib', 'rype', 'sc');
 ----
-8
+9
 
 # The mafft row appears exactly when align_mafft is registered. MAFFT is left
 # out of some builds (WASM, Windows), and a row there would report a version of
@@ -42,7 +44,7 @@ true
 # Every row matches either a core or optional library name
 query I
 SELECT COUNT(*) FROM miint_versions()
-WHERE library NOT IN ('miint', 'htslib', 'minimap2', 'kseq++', 'LBFGS++', 'WFA2-lib', 'HDF5', 'zlib', 'libdeflate', 'libcurl', 'rype', 'vsearch', 'mafft', 'abpoa', 'sylph', 'st3', 'unifrac', 'scikit-bio-binaries', 'krepp', 'krepp-openmp');
+WHERE library NOT IN ('miint', 'htslib', 'minimap2', 'kseq++', 'LBFGS++', 'WFA2-lib', 'HDF5', 'zlib', 'libdeflate', 'libcurl', 'rype', 'sc', 'vsearch', 'mafft', 'abpoa', 'sylph', 'st3', 'unifrac', 'scikit-bio-binaries', 'krepp', 'krepp-openmp');
 ----
 0
 

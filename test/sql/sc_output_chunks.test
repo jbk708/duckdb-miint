@@ -1,0 +1,102 @@
+# name: test/sql/sc_output_chunks.test
+# description: sc functions whose output spans several 2048-row chunks
+# group: [sql]
+
+require miint
+
+# Each function hands DuckDB its rows a chunk at a time, resuming from a cursor.
+# Outputs here exceed one chunk, so every resume is exercised: predict_proba's
+# 2048-row boundary falls inside a sample's classes (2048 / 3 is not whole).
+
+statement ok
+CREATE TABLE small_counts AS
+  SELECT 's' || i AS sample_id, 'f' || j AS feature_id, ((i * 7 + j * 3) % 11 + 1)::DOUBLE AS value
+  FROM range(30) t(i), range(5) u(j);
+
+statement ok
+CREATE TABLE small_labels AS SELECT 's' || i AS sample_id, 'c' || (i % 3) AS label FROM range(30) t(i);
+
+statement ok
+CREATE TABLE three_class AS
+  SELECT * FROM fit_classifier('small_counts', 'small_labels', n_estimators := 5, random_state := 1, name := 'm');
+
+statement ok
+CREATE TABLE many_samples AS
+  SELECT 'q' || i AS sample_id, 'f' || j AS feature_id, ((i * 5 + j * 7) % 13 + 1)::DOUBLE AS value
+  FROM range(2500) t(i), range(5) u(j);
+
+# Every sample once, with its own id.
+query III
+SELECT count(*), count(DISTINCT sample_id),
+       (SELECT count(*) FROM (SELECT sample_id FROM predict('many_samples', 'three_class')
+                              EXCEPT SELECT DISTINCT sample_id FROM many_samples))
+FROM predict('many_samples', 'three_class');
+----
+2500	2500	0
+
+# Every (sample, class) pair once, and each sample's probabilities sum to 1.
+query IIII
+SELECT count(*), count(DISTINCT (sample_id, class)), count(DISTINCT sample_id),
+       bool_and(abs(total - 1.0) < 1e-9)
+FROM (SELECT sample_id, class, probability, sum(probability) OVER (PARTITION BY sample_id) AS total
+      FROM predict_proba('many_samples', 'three_class'));
+----
+7500	7500	2500	true
+
+# The class with the highest probability is the predicted class, a tie going
+# to the first class in text order as predict breaks it, so the rows of a
+# sample split across chunks still belong together.
+query II
+WITH top AS (SELECT sample_id, class
+             FROM (SELECT sample_id, class,
+                          row_number() OVER (PARTITION BY sample_id ORDER BY probability DESC, class) AS rn
+                   FROM predict_proba('many_samples', 'three_class'))
+             WHERE rn = 1)
+SELECT count(*), count(*) FILTER (WHERE p.prediction <> top.class)
+FROM top JOIN predict('many_samples', 'three_class') p USING (sample_id);
+----
+2500	0
+
+# One out-of-fold row per sample, carrying that sample's own label.
+statement ok
+CREATE TABLE many_labels AS SELECT 'q' || i AS sample_id, 'c' || (i % 3) AS label FROM range(2500) t(i);
+
+query III
+SELECT count(*), count(DISTINCT c.sample_id), count(*) FILTER (WHERE c.actual IS DISTINCT FROM m.label)
+FROM cross_validate_classifier('many_samples', 'many_labels', n_folds := 2, n_estimators := 3, random_state := 1) c
+JOIN many_labels m USING (sample_id);
+----
+2500	2500	0
+
+# One row per model feature, in column order. Only g2048, the first row of the
+# second output chunk, varies, so every split is on it and it holds all the
+# importance. An importance emitted one row off, or from a chunk-local index,
+# lands on another feature. max_features := 'all' lets every node consider
+# g2048; under the default a node may draw only constant features and stay a
+# leaf, leaving no importance anywhere (scikit-learn draws on; the-miint/sc#4).
+statement ok
+CREATE TABLE wide_counts AS
+  SELECT 's' || i AS sample_id, 'g' || lpad(j::VARCHAR, 4, '0') AS feature_id,
+         (CASE WHEN j = 2048 THEN 1 + (i % 2) * 5 ELSE 1 END)::DOUBLE AS value
+  FROM range(20) t(i), range(2100) u(j);
+
+statement ok
+CREATE TABLE wide_labels AS SELECT 's' || i AS sample_id, 'c' || (i % 2) AS label FROM range(20) t(i);
+
+statement ok
+CREATE TABLE wide_model AS
+  SELECT * FROM fit_classifier('wide_counts', 'wide_labels', n_estimators := 3, random_state := 1,
+                               max_features := 'all', name := 'w');
+
+query III
+SELECT count(*), count(DISTINCT feature_id), bool_and(feature_id = 'g' || lpad(column_index::VARCHAR, 4, '0'))
+FROM model_features('wide_model');
+----
+2100	2100	true
+
+query III
+SELECT count(*), count(DISTINCT feature_id),
+       abs(sum(importance) FILTER (WHERE feature_id = 'g2048') - 1.0) < 1e-9
+FROM feature_importances('wide_model');
+----
+2100	2100	true

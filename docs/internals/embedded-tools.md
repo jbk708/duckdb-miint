@@ -189,18 +189,19 @@ Two coupled submodules implementing the UniFrac distance + Faith's PD + PERMANOV
 
 ### Rust crates via the `miint_rust_glue` umbrella
 
-Three Rust crates — rype, sylph and st3 — are statically linked into the extension. They are bundled through a thin umbrella crate at `ext/miint-rust-glue/` that produces a single `libmiint_rust_glue.a`.
+Four Rust crates — rype, sylph, sc and st3 — are statically linked into the extension. They are bundled through a thin umbrella crate at `ext/miint-rust-glue/` that produces a single `libmiint_rust_glue.a`.
 
-**Why an umbrella, not two independent staticlibs?** Each independent Rust staticlib embeds its own copy of the Rust standard library (`rust_eh_personality`, `std::panicking::EMPTY_PANIC`, ...). Linking two of them into the same binary trips duplicate-symbol errors on every supported linker. Previous workarounds (`-Wl,--allow-multiple-definition` on GNU ld, `-Wl,-ld_classic -Wl,-multiply_defined,suppress` on Apple) lived in `extension_config.cmake` until macOS 26 / Xcode 17's ld-prime stopped honoring `-multiply_defined,suppress` even via `-ld_classic`, breaking the duckdb shell, `libduckdb.dylib`, `plan_serializer`, and `unittest` link targets. The umbrella is the canonical fix per the Rust Reference "Linkage" chapter — a single staticlib emitted from one cargo invocation has one shared std and one set of symbols. Same pattern Mozilla has used in Firefox's `rul` super-crate since 2015.
+**Why an umbrella, not independent staticlibs?** Each independent Rust staticlib embeds its own copy of the Rust standard library (`rust_eh_personality`, `std::panicking::EMPTY_PANIC`, ...). Linking two of them into the same binary trips duplicate-symbol errors on every supported linker. Previous workarounds (`-Wl,--allow-multiple-definition` on GNU ld, `-Wl,-ld_classic -Wl,-multiply_defined,suppress` on Apple) lived in `extension_config.cmake` until macOS 26 / Xcode 17's ld-prime stopped honoring `-multiply_defined,suppress` even via `-ld_classic`, breaking the duckdb shell, `libduckdb.dylib`, `plan_serializer`, and `unittest` link targets. The umbrella is the canonical fix per the Rust Reference "Linkage" chapter — a single staticlib emitted from one cargo invocation has one shared std and one set of symbols. Same pattern Mozilla has used in Firefox's `rul` super-crate since 2015.
 
-- **Location:** `ext/miint-rust-glue/` (in-tree Cargo crate; `Cargo.toml` lists `rype`, `sylph` and `st3-capi` as path dependencies)
+- **Location:** `ext/miint-rust-glue/` (in-tree Cargo crate; `Cargo.toml` lists `rype`, `sylph`, sc's `sc-capi` and `st3-capi` as path dependencies)
 - **Build:** `ExternalProject_Add(miint_rust_glue_build)` drives `cargo build --release`; produces `libmiint_rust_glue.a`
 - **Cargo features:**
   - `with-sylph` — on when `MIINT_ENABLE_SYLPH=ON` (default). Off on Emscripten and Windows/MinGW (sylph leans on POSIX APIs in its sketch indexer).
   - `with-st3` — on when `MIINT_ENABLE_ST3=ON` (default), on every platform including Emscripten (st3 has no platform-specific code; its rayon pool is bypassed with `jobs = 1` under wasm).
   - `rype-fastx` — enables rype's needletail-based FASTX reader. Off on Emscripten and Windows/MinGW because needletail's `cdylib` crate type triggers linker errors (standalone-linking failures on WASM; unresolved `___chkstk_ms` on MSVC).
   - `arrow-ffi` — always on for rype and sylph; the extension consumes both via the Arrow C Data Interface for zero-copy FFI. st3-capi enables arrow's `ffi` itself.
-- **CMake exposure:** the umbrella is one `IMPORTED STATIC` target, `rype`, pointing at `libmiint_rust_glue.a`. The archive holds every crate's symbols, so linking `rype` provides sylph and st3 too; there is no `sylph` or `st3` target. The comment at the target in `CMakeLists.txt` says why a second target on the same archive is not used.
+  - sc has no Cargo feature: `sc-capi` is always linked, WASM included (see [sc subsystem](#sc-subsystem)).
+- **CMake exposure:** the umbrella is one `IMPORTED STATIC` target, `rype`, pointing at `libmiint_rust_glue.a`. The archive holds every crate's symbols, so linking `rype` provides sylph, sc and st3 too; there is no `sylph`, `sc` or `st3` target. The comment at the target in `CMakeLists.txt` says why a second target on the same archive is not used.
 - **Cross-compilation gotchas:**
   - Cargo `--target` flag selected per platform; `rustup target add` called at configure time.
   - **Emscripten:** `--target wasm32-unknown-emscripten` + `RUSTFLAGS=-C relocation-model=pic` (default wasm32 is static; DuckDB WASM side modules need PIC).
@@ -210,7 +211,7 @@ Three Rust crates — rype, sylph and st3 — are statically linked into the ext
     - *Side effect.* `RUSTC_BOOTSTRAP=1` also reaches dependency build scripts, so what it changes depends on the toolchain and on the glue's `Cargo.lock`. With 1.86.0 and the current lock, the only difference is that anyhow turns on its `error_generic_member_access` cfg. After bumping either, recheck: diff the `cargo:rustc-cfg=` lines of `cargo build -vv` for `wasm32-unknown-emscripten` with `RUSTC_BOOTSTRAP=1` against a build without it. The build without it must also drop the `-Z` flags, which are rejected otherwise, so it is the JS-exceptions build.
   - **Windows/MinGW:** `--target x86_64-pc-windows-gnu` (NOT the MSVC default) so object files are compatible with MinGW `ld.exe`.
   - **macOS cross:** explicit `x86_64-apple-darwin` / `aarch64-apple-darwin` targets.
-- **Rebuilds:** `miint_rust_glue_build` has `BUILD_ALWAYS 1`, so cargo runs on every build and its own fingerprinting decides what to recompile. An edit under `ext/rype/`, `ext/sylph/` or `ext/st3/`, or a submodule bump, is picked up by an incremental build; a no-op cargo run costs a few seconds.
+- **Rebuilds:** `miint_rust_glue_build` has `BUILD_ALWAYS 1`, so cargo runs on every build and its own fingerprinting decides what to recompile. An edit under `ext/rype/`, `ext/sylph/`, `ext/sc/` or `ext/st3/`, or a submodule bump, is picked up by an incremental build; a no-op cargo run costs a few seconds.
 
 #### rype subsystem
 
@@ -230,6 +231,21 @@ Three Rust crates — rype, sylph and st3 — are statically linked into the ext
 - **C++ wrappers:**
   - `src/include/SylphDatabase.hpp` / `src/SylphDatabase.cpp` — `SylphDatabaseHandle`, a RAII wrapper around the C FFI `SylphDatabase*` from `ext/sylph/sylph.h`. Non-copyable, non-movable; owned by the `sylph_profile` GlobalState.
   - `src/include/sylph_profile.hpp` / `src/sylph_profile.cpp` — `SylphProfileTableFunction`, the DuckDB table-function binding. The database is loaded once into GlobalState and shared read-only across worker threads; sylph treats the loaded database as immutable so no read-side mutex is required.
+
+#### sc subsystem
+
+- **Location:** `ext/sc/` (git submodule on `the-miint/sc`; version captured via `git describe` → `SC_GIT_VERSION`)
+- **Purpose:** random forest classification and regression, nested cross-validation and path-dependent TreeSHAP, exposed as `fit_classifier`, `fit_regressor`, `predict`, `predict_proba`, `cross_validate_classifier`, `cross_validate_regressor`, `shap`, `feature_importances` and `model_features`. User documentation: [`docs/sample_classifier.md`](../sample_classifier.md).
+- **Why sc:** neither DuckDB nor any library embedded here offers random forests. sc reimplements scikit-learn's `RandomForestClassifier` / `RandomForestRegressor` as q2-sample-classifier (QIIME 2) uses them, and its oracle tests check it against scikit-learn. The alternative weighed was running scikit-learn out of process, which needs a Python environment on every host and cannot run in DuckDB-Wasm; sc is linked in-process and runs in both.
+- **Build:** `sc-capi` is a path dependency of the umbrella crate and is always linked, WASM included. It has no Cargo feature and no `MIINT_ENABLE_*` option.
+- **C API:** `sc.h`, which cbindgen generates in sc-capi's `build.rs`. CMake passes `SC_HEADER_DIR` (`<build dir>/sc_include`) to the glue build, so the header is written there rather than into the submodule, and native and WASM builds of one checkout each get their own. Cargo reruns the script when the C API's sources, the crate version or `SC_HEADER_DIR` change, so the header follows the linked symbols. A fresh build directory has no `sc.h` until the glue builds, so every target compiling a file that includes it builds after `miint_rust_glue_build` (`CMakeLists.txt`, at the `SC_HEADER_DIR` include directory).
+- **Threads:** sc runs on rayon. Under Emscripten, `miint_rust_glue_init()`, called first in `LoadInternal`, builds rayon's global pool on the calling thread, which rype and sc share; rayon cannot start one there by itself.
+- **Reported as:** `sc` row in `miint_versions()`, the commit embedded.
+- **C++ wrappers:**
+  - `src/include/sc_common.hpp` / `src/sc_common.cpp` — RAII handles for sc contexts, models and the Arrow arrays sc exports; the intake and model-relation readers every sc function shares.
+  - `src/include/sc_coo_builder.hpp` / `src/sc_coo_builder.cpp` — builds the sparse `(sample, feature, value)` table sc reads, with sorted id dictionaries.
+  - `src/include/sc_rf_common.hpp` / `src/sc_rf_common.cpp` — the forest parameters and training input that fitting and cross-validation share.
+- **Licenses:** sc's own crate dependencies, and the notice for the fixture data its oracle tests use, are catalogued in `ext/sc/THIRD_PARTY_LICENSES.md`.
 
 #### st3 subsystem
 

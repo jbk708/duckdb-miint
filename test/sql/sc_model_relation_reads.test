@@ -1,0 +1,229 @@
+# name: test/sql/sc_model_relation_reads.test
+# description: data and metadata are read once; a model relation that changes between planning and execution is an error
+# group: [sql]
+
+require miint
+
+# Bind reads a model's task and feature_id_type, which type the output columns;
+# execution reads its blob. A relation can return different rows each time:
+# a view over a registry another connection is writing, or a volatile view.
+# Execution re-reads the two columns with the blob and refuses a change, rather
+# than explaining a regressor's output as a classifier's or emitting one id type
+# into a column typed for another.
+#
+# No PRAGMA enable_verification: it reruns each statement, which would advance
+# the sequences below and change which model each read sees.
+
+statement ok
+CREATE TABLE d AS
+  SELECT 's' || i AS sample_id, 'f' || j AS feature_id, ((i * 7 + j * 3) % 11 + 1)::DOUBLE AS value
+  FROM range(1, 13) t(i), range(1, 6) u(j);
+
+statement ok
+CREATE TABLE d_big AS SELECT sample_id, substr(feature_id, 2)::BIGINT AS feature_id, value FROM d;
+
+statement ok
+CREATE TABLE labels AS SELECT 's' || i AS sample_id, CASE WHEN i % 2 = 0 THEN 'a' ELSE 'b' END AS label FROM range(1, 13) t(i);
+
+statement ok
+CREATE TABLE months AS SELECT 's' || i AS sample_id, i * 1.5 AS month FROM range(1, 13) t(i);
+
+statement ok
+CREATE TABLE reg AS
+  SELECT * FROM fit_classifier('d', 'labels', n_estimators := 5, name := 'clf')
+  UNION ALL SELECT * FROM fit_regressor('d', 'months', n_estimators := 5, name := 'rgr')
+  UNION ALL SELECT * FROM fit_regressor('d_big', 'months', n_estimators := 5, name := 'rgr_big');
+
+# Each view's scalar subquery runs once per read: its first read sees the first
+# model, every later read the second.
+statement ok
+CREATE SEQUENCE s1;
+
+statement ok
+CREATE VIEW clf_then_rgr AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s1') = 1 THEN 'clf' ELSE 'rgr' END);
+
+statement error
+SELECT * FROM predict('d', 'clf_then_rgr');
+----
+predict: model relation 'clf_then_rgr' changed between planning and execution: its task was classification, now regression
+
+statement ok
+CREATE SEQUENCE s2;
+
+statement ok
+CREATE VIEW clf_then_rgr_2 AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s2') = 1 THEN 'clf' ELSE 'rgr' END);
+
+statement error
+SELECT * FROM predict_proba('d', 'clf_then_rgr_2');
+----
+predict_proba: model relation 'clf_then_rgr_2' changed between planning and execution: its task was classification, now regression
+
+statement ok
+CREATE SEQUENCE s3;
+
+statement ok
+CREATE VIEW rgr_then_clf AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s3') = 1 THEN 'rgr' ELSE 'clf' END);
+
+statement error
+SELECT * FROM shap('d', 'rgr_then_clf');
+----
+shap: model relation 'rgr_then_clf' changed between planning and execution: its task was regression, now classification
+
+# feature_importances and model_features type feature_id from the model alone.
+statement ok
+CREATE SEQUENCE s4;
+
+statement ok
+CREATE VIEW big_then_text AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s4') = 1 THEN 'rgr_big' ELSE 'rgr' END);
+
+statement error
+SELECT * FROM feature_importances('big_then_text');
+----
+feature_importances: model relation 'big_then_text' changed between planning and execution: its feature_id_type was BIGINT, now VARCHAR
+
+statement ok
+CREATE SEQUENCE s5;
+
+statement ok
+CREATE VIEW text_then_big AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s5') = 1 THEN 'rgr' ELSE 'rgr_big' END);
+
+statement error
+SELECT * FROM model_features('text_then_big');
+----
+model_features: model relation 'text_then_big' changed between planning and execution: its feature_id_type was VARCHAR, now BIGINT
+
+# A model gone by execution is the same change: bind resolved one row, so no
+# other count can be the model the output columns were typed for.
+statement ok
+CREATE SEQUENCE s6;
+
+statement ok
+CREATE VIEW clf_then_none AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('s6') = 1 THEN 'clf' ELSE 'gone' END);
+
+statement error
+SELECT * FROM predict('d', 'clf_then_none');
+----
+predict: model relation 'clf_then_none' changed between planning and execution: it selected one model, now 0
+
+# Bind reads a model relation once, for task and feature_id_type together, as
+# every read of a view re-runs it. EXPLAIN binds without executing, so the
+# sequence counts bind's reads alone: five calls, five reads.
+statement ok
+CREATE SEQUENCE bind_reads;
+
+statement ok
+CREATE VIEW counted AS
+  SELECT * FROM reg WHERE name = (SELECT CASE WHEN nextval('bind_reads') > 0 THEN 'clf' END);
+
+statement ok
+EXPLAIN SELECT * FROM predict('d', 'counted');
+
+statement ok
+EXPLAIN SELECT * FROM predict_proba('d', 'counted');
+
+statement ok
+EXPLAIN SELECT * FROM shap('d', 'counted');
+
+statement ok
+EXPLAIN SELECT * FROM feature_importances('counted');
+
+statement ok
+EXPLAIN SELECT * FROM model_features('counted');
+
+query I
+SELECT nextval('bind_reads') - 1;
+----
+5
+
+# A relation that holds still reads the same model at every step.
+query I
+SELECT count(*) FROM predict('d', 'reg', name := 'clf');
+----
+12
+
+# --- data and metadata are each read once ---
+#
+# Bind probes them with LIMIT 0, which reads no row, and execution reads them
+# once. A second read of a view could return different rows. Each view below
+# draws one sequence value per row in its WHERE clause, which every read
+# evaluates whatever columns it selects (a draw in a selected column is pruned
+# from a read that does not select it), so a call's draws count its reads: d has
+# 60 cells, the metadata 12 rows.
+
+statement ok
+CREATE SEQUENCE fit_cells;
+
+statement ok
+CREATE VIEW fit_d AS SELECT * FROM d WHERE nextval('fit_cells') > 0;
+
+statement ok
+CREATE SEQUENCE fit_rows;
+
+statement ok
+CREATE VIEW fit_months AS SELECT * FROM months WHERE nextval('fit_rows') > 0;
+
+statement ok
+CREATE TABLE once_model AS SELECT * FROM fit_regressor('fit_d', 'fit_months', n_estimators := 5, name := 'once');
+
+query II
+SELECT nextval('fit_cells') - 1, nextval('fit_rows') - 1;
+----
+60	12
+
+statement ok
+CREATE SEQUENCE cv_cells;
+
+statement ok
+CREATE VIEW cv_d AS SELECT * FROM d WHERE nextval('cv_cells') > 0;
+
+statement ok
+CREATE SEQUENCE cv_rows;
+
+statement ok
+CREATE VIEW cv_labels AS SELECT * FROM labels WHERE nextval('cv_rows') > 0;
+
+statement ok
+CREATE TABLE once_cv AS SELECT * FROM cross_validate_classifier('cv_d', 'cv_labels', n_folds := 2, n_estimators := 5);
+
+query II
+SELECT nextval('cv_cells') - 1, nextval('cv_rows') - 1;
+----
+60	12
+
+statement ok
+CREATE SEQUENCE predict_cells;
+
+statement ok
+CREATE VIEW predict_d AS SELECT * FROM d WHERE nextval('predict_cells') > 0;
+
+statement ok
+CREATE TABLE once_predict AS SELECT * FROM predict('predict_d', 'once_model');
+
+statement ok
+CREATE SEQUENCE proba_cells;
+
+statement ok
+CREATE VIEW proba_d AS SELECT * FROM d WHERE nextval('proba_cells') > 0;
+
+statement ok
+CREATE TABLE once_proba AS SELECT * FROM predict_proba('proba_d', 'reg', name := 'clf');
+
+statement ok
+CREATE SEQUENCE shap_cells;
+
+statement ok
+CREATE VIEW shap_d AS SELECT * FROM d WHERE nextval('shap_cells') > 0;
+
+statement ok
+CREATE TABLE once_shap AS SELECT * FROM shap('shap_d', 'reg', name := 'clf');
+
+query III
+SELECT nextval('predict_cells') - 1, nextval('proba_cells') - 1, nextval('shap_cells') - 1;
+----
+60	60	60

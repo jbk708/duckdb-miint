@@ -485,13 +485,20 @@ if(NOT KREPP_GIT_VERSION)
 endif()
 
 execute_process(COMMAND git describe --tags --dirty --always
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ext/sc
+    OUTPUT_VARIABLE SC_GIT_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT SC_GIT_VERSION)
+    set(SC_GIT_VERSION "unknown")
+endif()
+
+execute_process(COMMAND git describe --tags --dirty --always
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ext/st3
     OUTPUT_VARIABLE ST3_GIT_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 if(NOT ST3_GIT_VERSION)
     set(ST3_GIT_VERSION "unknown")
 endif()
 
-message(STATUS "Submodule versions: minimap2=${MINIMAP2_GIT_VERSION} WFA2=${WFA2_GIT_VERSION} rype=${RYPE_GIT_VERSION} vsearch=${VSEARCH_GIT_VERSION} mafft=${MAFFT_GIT_VERSION} abpoa=${ABPOA_GIT_VERSION} sylph=${SYLPH_GIT_VERSION} unifrac=${UNIFRAC_GIT_VERSION} skbb=${SKBB_GIT_VERSION} krepp=${KREPP_GIT_VERSION} st3=${ST3_GIT_VERSION}")
+message(STATUS "Submodule versions: minimap2=${MINIMAP2_GIT_VERSION} WFA2=${WFA2_GIT_VERSION} rype=${RYPE_GIT_VERSION} vsearch=${VSEARCH_GIT_VERSION} mafft=${MAFFT_GIT_VERSION} abpoa=${ABPOA_GIT_VERSION} sylph=${SYLPH_GIT_VERSION} unifrac=${UNIFRAC_GIT_VERSION} skbb=${SKBB_GIT_VERSION} krepp=${KREPP_GIT_VERSION} sc=${SC_GIT_VERSION} st3=${ST3_GIT_VERSION}")
 
 # Build htslib from release tarball
 # Configure with zstd support if available (htslib autodetects via pkg-config)
@@ -1100,11 +1107,11 @@ if(MIINT_ENABLE_SORTMERNA)
     add_dependencies(sortmerna sortmerna_bundle)
 endif()
 
-# rype, sylph and st3 are independent Rust crates; each emits a staticlib that
-# statically embeds its own copy of the Rust std runtime (rust_eh_personality,
-# EMPTY_PANIC, ...). Linking them as separate .a archives produces
-# duplicate-symbol errors on every supported linker (GNU ld, Apple ld-prime,
-# Mach-O classic, lld) — see the Rust Reference (Linkage chapter).
+# rype, sylph, sc and st3 are independent Rust crates; each emits a staticlib
+# that statically embeds its own copy of the Rust std runtime
+# (rust_eh_personality, EMPTY_PANIC, ...). Linking them as separate .a archives
+# produces duplicate-symbol errors on every supported linker (GNU ld, Apple
+# ld-prime, Mach-O classic, lld) — see the Rust Reference (Linkage chapter).
 #
 # Fix: an umbrella `miint_rust_glue` crate (ext/miint-rust-glue/) lists them
 # as path dependencies, cargo compiles them through a shared std, and the
@@ -1283,7 +1290,10 @@ if(WIN32 AND MINGW)
     list(APPEND GLUE_RUSTFLAGS_LIST "-C" "link-arg=-L${GLUE_MINGW_STUB_DIR}")
 endif()
 
-set(GLUE_ENV_ARGS "")
+# sc-capi's build.rs writes sc.h to SC_HEADER_DIR; without it the header lands
+# in Cargo's OUT_DIR, where no include path finds it.
+set(SC_HEADER_DIR ${CMAKE_CURRENT_BINARY_DIR}/sc_include)
+set(GLUE_ENV_ARGS "SC_HEADER_DIR=${SC_HEADER_DIR}")
 if(GLUE_RUSTFLAGS_LIST)
     string(JOIN " " GLUE_RUSTFLAGS_STR ${GLUE_RUSTFLAGS_LIST})
     list(APPEND GLUE_ENV_ARGS "RUSTFLAGS=${GLUE_RUSTFLAGS_STR}")
@@ -1295,11 +1305,7 @@ endif()
 if(EMSCRIPTEN AND MIINT_WASM_NATIVE_EH)
     list(APPEND GLUE_ENV_ARGS "RUSTC_BOOTSTRAP=1")
 endif()
-if(GLUE_ENV_ARGS)
-    set(GLUE_BUILD_ENV ${CMAKE_COMMAND} -E env ${GLUE_ENV_ARGS})
-else()
-    set(GLUE_BUILD_ENV)
-endif()
+set(GLUE_BUILD_ENV ${CMAKE_COMMAND} -E env ${GLUE_ENV_ARGS})
 
 set(GLUE_LIB_PATH ${GLUE_TARGET_DIR}/${GLUE_LIB_SUBDIR}/${GLUE_LIB_NAME})
 
@@ -1324,12 +1330,12 @@ ExternalProject_Add(
     # (Clean builds — CI's fresh ubuntu-latest runners, or `make clean` locally —
     # were always correct; this only closes the incremental-build footgun.)
     BUILD_ALWAYS 1
-    BUILD_BYPRODUCTS ${GLUE_LIB_PATH}
+    BUILD_BYPRODUCTS ${GLUE_LIB_PATH} ${SC_HEADER_DIR}/sc.h
 )
 
 # `rype` is the sole IMPORTED STATIC target for the merged archive. The
-# archive contains the rype, sylph and st3 symbols, so linking `rype` provides
-# everything — there is no separate `sylph` or `st3` link target.
+# archive contains the rype, sylph, sc and st3 symbols, so linking `rype`
+# provides everything — there is no separate `sylph`, `sc` or `st3` link target.
 #
 # Why no second target: declaring an additional IMPORTED STATIC target
 # pointing at the same archive caused libmiint_rust_glue.a to appear twice on
@@ -1520,7 +1526,13 @@ endif()
 set(RYPE_LIB_PATH ${GLUE_LIB_PATH})
 
 # adapted kseq++ include use from strobealign
-include_directories(src/include third_party/microtar ext ext/WFA2-lib ${CMAKE_CURRENT_SOURCE_DIR}/ext/rype)
+# SC_HEADER_DIR holds sc.h, which sc-capi's build.rs generates with cbindgen
+# during the rust-glue build; a fresh build directory lacks it.
+# A target compiling a file that includes it must build after
+# miint_rust_glue_build: the extension targets do through their `rype` link,
+# and `tests` through its own add_dependencies.
+include_directories(src/include third_party/microtar ext ext/WFA2-lib ${CMAKE_CURRENT_SOURCE_DIR}/ext/rype
+                    ${SC_HEADER_DIR})
 if(MIINT_ENABLE_SYLPH)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ext/sylph)
 endif()
@@ -1567,6 +1579,16 @@ if(MIINT_ENABLE_GPL_BOUNDARY)
     add_subdirectory(third_party/nanoarrow_ipc)
 endif()
 set(EXTENSION_SOURCES
+    src/sc_coo_builder.cpp
+    src/sc_rf_common.cpp
+    src/sc_fit_function.cpp
+    src/sc_common.cpp
+    src/sc_feature_importances_function.cpp
+    src/sc_predict_function.cpp
+    src/sc_model_features_function.cpp
+    src/sc_predict_proba_function.cpp
+    src/sc_shap_function.cpp
+    src/sc_cross_validate_function.cpp
     src/SequenceReader.cpp
     src/QualScore.cpp
     src/read_fastx.cpp
@@ -1981,6 +2003,7 @@ target_compile_definitions(${EXTENSION_NAME} PRIVATE RYPE_ARROW
     MINIMAP2_GIT_VERSION="${MINIMAP2_GIT_VERSION}"
     WFA2_GIT_VERSION="${WFA2_GIT_VERSION}"
     RYPE_GIT_VERSION="${RYPE_GIT_VERSION}"
+    SC_GIT_VERSION="${SC_GIT_VERSION}"
     MAFFT_GIT_VERSION="${MAFFT_GIT_VERSION}"
     ABPOA_GIT_VERSION="${ABPOA_GIT_VERSION}"
     $<$<BOOL:${MIINT_HAS_JEMALLOC}>:MIINT_USE_JEMALLOC>
@@ -2143,6 +2166,7 @@ target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE RYPE_ARROW
     MINIMAP2_GIT_VERSION="${MINIMAP2_GIT_VERSION}"
     WFA2_GIT_VERSION="${WFA2_GIT_VERSION}"
     RYPE_GIT_VERSION="${RYPE_GIT_VERSION}"
+    SC_GIT_VERSION="${SC_GIT_VERSION}"
     MAFFT_GIT_VERSION="${MAFFT_GIT_VERSION}"
     ABPOA_GIT_VERSION="${ABPOA_GIT_VERSION}"
     $<$<BOOL:${MIINT_HAS_JEMALLOC}>:MIINT_USE_JEMALLOC>
@@ -2278,6 +2302,8 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(catch2)
 set(TEST_SOURCES
+    src/sc_coo_builder.cpp
+    test/cpp/test_ScCooBuilder.cpp
     test/cpp/test_sigpipe_bootstrap.cpp
     src/SequenceReader.cpp
     test/cpp/test_SequenceReader.cpp
@@ -2498,6 +2524,9 @@ if(MIINT_ENABLE_UNIFRAC)
 endif()
 
 add_executable(tests ${TEST_SOURCES})
+# src/sc_coo_builder.cpp includes sc.h, which the rust-glue build generates.
+# Linking `rype` orders the glue first only when sylph is on, so say it here.
+add_dependencies(tests miint_rust_glue_build)
 
 target_link_libraries(tests
   Catch2::Catch2WithMain

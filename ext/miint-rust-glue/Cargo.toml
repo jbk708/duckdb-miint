@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# Umbrella crate that bundles rype, sylph and st3 into a single staticlib so
+# Umbrella crate that bundles rype, sylph, sc and st3 into a single staticlib so
 # they share one copy of the Rust standard library. Linking two independent Rust
 # staticlibs into the same binary produces duplicate-symbol errors
 # (rust_eh_personality, std::panicking::EMPTY_PANIC, ...) — this crate is
@@ -33,6 +33,15 @@ rype-fastx = ["rype/fastx"]
 # entry points from both crates (rype's classify + sylph_profile).
 rype  = { path = "../rype",  default-features = false, features = ["arrow-ffi"] }
 sylph = { path = "../sylph", default-features = false, features = ["arrow-ffi"], optional = true }
+# sc-capi is the sc_* C-API (opaque handles + Arrow C Data Interface I/O). It
+# pulls sc-arrow and sc-core transitively. Its build.rs regenerates sc.h via
+# cbindgen into $SC_HEADER_DIR, which CMakeLists.txt sets to the build
+# directory, whenever the C API's sources, the crate version or SC_HEADER_DIR
+# change, so the header the C++ side includes follows the linked symbols.
+sc-capi = { path = "../sc/crates/sc-capi" }
+# Only for miint_rust_glue_init (src/lib.rs), which seeds the global pool that
+# rype and sc share. Already in the graph through both, so no new crate.
+rayon = "1"
 # st3-capi is the C ABI crate of the st3 workspace; its Arrow C Data Interface
 # entry points are what sourcetracker() calls.
 st3   = { package = "st3-capi", path = "../st3/crates/st3-capi", optional = true }

@@ -1,0 +1,157 @@
+#include "sc_predict_function.hpp"
+
+#include "catalog_utils.hpp"
+#include "id_column_utils.hpp"
+#include "sc_common.hpp"
+#include "sc_coo_builder.hpp"
+#include "miint_log.hpp"
+
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/main/connection.hpp"
+
+#include <string>
+#include <vector>
+
+namespace duckdb {
+
+namespace {
+
+struct ScPredictData : public TableFunctionData {
+	string data_relation;
+	string model_relation;
+	//! Empty selects the whole relation, which must then be one row.
+	string model_name;
+	bool classification = false;
+	miint::ScIdTypes id_types;
+};
+
+struct ScPredictGlobalState : public GlobalTableFunctionState {
+	// std::vector, not duckdb::vector -- these are handed over from
+	// ScCooBuilder / OwnedArrowArray, which are outside duckdb's namespace.
+	std::vector<std::string> sample_ids;
+	std::vector<std::string> labels; // classification
+	std::vector<double> values;      // regression
+	std::vector<double> known_fraction;
+	idx_t emitted = 0;
+	bool loaded = false;
+};
+
+unique_ptr<FunctionData> ScPredictBind(ClientContext &context, TableFunctionBindInput &input,
+                                       vector<LogicalType> &return_types, vector<string> &names) {
+	auto data = make_uniq<ScPredictData>();
+	data->data_relation = input.inputs[0].GetValue<string>();
+	data->model_relation = input.inputs[1].GetValue<string>();
+	RejectCTERelationName(input, data->data_relation);
+	RejectCTERelationName(input, data->model_relation);
+	if (data->data_relation.empty() || data->model_relation.empty()) {
+		throw InvalidInputException("predict: data and model relation names must not be empty");
+	}
+	for (auto &kv : input.named_parameters) {
+		miint::RequireNotNull(kv.first, kv.second, "predict");
+		if (StringUtil::CIEquals(kv.first, "name")) {
+			data->model_name = kv.second.GetValue<string>();
+		}
+	}
+	// The model knows its own task; ask it rather than making the caller assert
+	// one. This is why the prediction column can be typed at all.
+	{
+		auto conn = MakeReadOnlyHelperConnection(context);
+		data->id_types = miint::ProbeIdTypes(conn, data->data_relation, "predict");
+		const auto header = miint::ReadModelHeader(conn, data->model_relation, data->model_name, "predict", true);
+		data->classification = header.task == miint::kClassification;
+		miint::RequireModelFeatureIdType(header.feature_id_type, data->id_types.feature_id, "predict",
+		                                 data->model_relation, data->model_name, data->data_relation);
+	}
+
+	names = {"sample_id", "prediction", "known_feature_fraction"};
+	// A classifier predicts one of its training labels; a regressor a number.
+	// known_feature_fraction is matched/observed for that sample -- see ScCooTable.
+	return_types = {data->id_types.sample_id, data->classification ? LogicalType::VARCHAR : LogicalType::DOUBLE,
+	                LogicalType::DOUBLE};
+	return std::move(data);
+}
+
+unique_ptr<GlobalTableFunctionState> ScPredictInitGlobal(ClientContext &, TableFunctionInitInput &) {
+	return make_uniq<ScPredictGlobalState>();
+}
+
+void ScPredictExecute(ClientContext &context, TableFunctionInput &input, DataChunk &output) {
+	auto &gstate = input.global_state->Cast<ScPredictGlobalState>();
+	const auto &bind = input.bind_data->Cast<ScPredictData>();
+
+	if (!gstate.loaded) {
+		gstate.loaded = true;
+		auto conn = MakeReadOnlyHelperConnection(context);
+
+		miint::ScContext ctx;
+		// sc predicts serially, so the context needs no pool.
+		miint::OpenScContext(0, "predict", ctx);
+		miint::ScModel model;
+		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "predict",
+		                             miint::TaskName(bind.classification), bind.id_types.feature_id, ctx.ptr, model);
+
+		auto table = miint::ScanForModel(context, conn, model, bind.data_relation, "predict",
+		                                 " and are predicted from an all-zero row");
+		gstate.sample_ids = table->SampleIds();
+		gstate.known_fraction = table->KnownFeatureFraction();
+
+		miint::OwnedArrowArray pred;
+		if (auto st = sc_predict(ctx.ptr, model.ptr, table->get(), pred.array(), pred.schema()); st != SC_OK) {
+			miint::ThrowSc("sc_predict", ctx.ptr, st);
+		}
+		// sc's output type follows the model's task, not the function the caller
+		// reached for: "u" for a classifier's labels, "g" for a regressor's
+		// numbers. Checking it here turns an Arrow format mismatch -- which
+		// would surface as "expected 'g', got 'u'" -- into advice.
+		// The bound return type came from the relation's `task` column; this is
+		// what sc produced. A disagreement means the column does not
+		// describe the blob beside it -- a hand-assembled model table.
+		const char *fmt = pred.Format();
+		const bool model_is_classifier = fmt && std::string(fmt) == "u";
+		if (model_is_classifier != bind.classification) {
+			throw InvalidInputException(
+			    "predict: model relation '%s' says task '%s', but the stored model is a %s; the task column "
+			    "and the model blob do not match",
+			    bind.model_relation, miint::TaskName(bind.classification),
+			    model_is_classifier ? "classifier" : "regressor");
+		}
+		if (bind.classification) {
+			gstate.labels = pred.ReadUtf8("sc_predict");
+		} else {
+			gstate.values = pred.ReadFloat64("sc_predict");
+		}
+
+		const size_t got = bind.classification ? gstate.labels.size() : gstate.values.size();
+		if (got != gstate.sample_ids.size()) {
+			throw InternalException("sc_predict: %llu predictions for %llu samples", (uint64_t)got,
+			                        (uint64_t)gstate.sample_ids.size());
+		}
+	}
+
+	const idx_t total = gstate.sample_ids.size();
+	const idx_t remaining = total - gstate.emitted;
+	const idx_t n = remaining < STANDARD_VECTOR_SIZE ? remaining : STANDARD_VECTOR_SIZE;
+	output.SetCardinality(n);
+	for (idx_t i = 0; i < n; i++) {
+		const auto at = gstate.emitted + i;
+		EmitIdCell(output.data[0], i, gstate.sample_ids[at], bind.id_types.sample_id);
+		if (bind.classification) {
+			output.SetValue(1, i, Value(gstate.labels[at]));
+		} else {
+			output.SetValue(1, i, Value::DOUBLE(gstate.values[at]));
+		}
+		output.SetValue(2, i, Value::DOUBLE(gstate.known_fraction[at]));
+	}
+	gstate.emitted += n;
+}
+
+} // namespace
+
+void ScPredictFunction::Register(ExtensionLoader &loader) {
+	TableFunction fn("predict", {LogicalType::VARCHAR, LogicalType::VARCHAR}, ScPredictExecute, ScPredictBind,
+	                 ScPredictInitGlobal);
+	fn.named_parameters["name"] = LogicalType::VARCHAR;
+	loader.RegisterFunction(fn);
+}
+
+} // namespace duckdb

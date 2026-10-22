@@ -111,7 +111,7 @@ OpenMP comes from `libgomp` shipped with gcc, so no separate install is needed f
 
 ### Managing dependencies
 
-**Rust toolchain (required):** The RYpe sequence classification library, the embedded sylph profiler, and SourceTracker3 (`sourcetracker`) are written in Rust. Install Rust via [rustup](https://rustup.rs/):
+**Rust toolchain (required):** The RYpe sequence classification library, the embedded sylph profiler, the sc random-forest library and SourceTracker3 (`sourcetracker`) are written in Rust. Install Rust via [rustup](https://rustup.rs/):
 ```shell
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```

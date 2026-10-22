@@ -181,7 +181,7 @@ those queries at the source relation turns one read into several.
 
 ### Audit status
 
-Only the alignment and RYpe paths have been fixed. The rest of the codebase has **not**
+Only the alignment, RYpe and sc paths have been fixed. The rest of the codebase has **not**
 been audited, and at least one shared helper is known to be exposed — record findings
 here so the remaining surface stays visible rather than being rediscovered.
 
@@ -201,6 +201,8 @@ before trusting it. `test/sql/rype_single_read.test` documents both forms.
 | `rype_classify`, `rype_log_ratio`, `rype_extract_*` | once | fixed, remedy (1) — guarded by `test/sql/rype_single_read.test` |
 | `per_sample_table_function` (`DiscoverSamples` + per-sample re-read) | once per sample | **exposed** — shared by `woltka_ogu`, `sylph_profile`, `detect_chimera_uchime`, `align_abpoa`, `consensus_abpoa`, `align_mafft`, `uchime_denovo`, `deblur`, `massql` |
 | `ena_upload_reads` | plan scan + per-sample scan | **exposed** |
+| sc: `fit_*`, `cross_validate_*`, `predict`, `predict_proba`, `shap` | counts once, streamed; `fit_*` and `cross_validate_*` also read the metadata once, materialized (one row per sample). Each after a `LIMIT 0` probe at bind | fixed, remedy (1) for the counts; guarded by `test/sql/sc_model_relation_reads.test` |
+| sc: model relation (`predict`, `predict_proba`, `shap`, `feature_importances`, `model_features`) | twice: once at bind for `feature_id_type`, plus `task` where it types the output (all but `feature_importances` and `model_features`); once at execution for the blob with those columns again | fixed by failing loud: execution compares the re-read columns with bind's and refuses a change, guarded by `test/sql/sc_model_relation_reads.test` |
 | `sourcetracker` (feature table via `ReadFeatureTable`, metadata via `ReadWideMetadata`) | once each, at execution | fixed — guarded by the volatile-view cases in `test/sql/sourcetracker.test` |
 | everything else taking a relation by name | unaudited | unknown |
 
