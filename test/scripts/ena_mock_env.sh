@@ -2,11 +2,10 @@
 # miint's ENA requests at test/scripts/ena_webin_mock.py (docs/testing.md, "Guards and
 # skipped tests").
 
-# start_ena_mock: start the mock on a free port, and export ENA_WEBIN_MOCK_URL,
-# ENA_MOCK_PID and the base URLs miint reads from the environment, so that every ENA
-# request goes to the mock:
-# - MIINT_ENA_PORTAL_URL_BASE: Portal API searches, from the read functions and from the
-#   alias check an INSERT makes first;
+# start_ena_mock: start the mock on a free port, set ENA_MOCK_PID, and export
+# ENA_WEBIN_MOCK_URL and the base URLs miint reads from the environment, which send these
+# requests to the mock (Webin submissions take their URL from the ENA secret instead):
+# - MIINT_ENA_PORTAL_URL_BASE: every Portal API request (ResolvePortalBaseFromEnv);
 # - MIINT_ENA_CHECKLIST_URL_BASE: the checklist XMLs INSERT INTO ena.samples validates
 #   attributes against;
 # - MIINT_ENA_REPORTS_URL_BASE: the Reports API, which the lifecycle functions and
@@ -30,7 +29,7 @@ start_ena_mock() {
         return 1
     fi
     rm -f "$boot"
-    export ENA_WEBIN_MOCK_URL ENA_MOCK_PID
+    export ENA_WEBIN_MOCK_URL
     export MIINT_ENA_PORTAL_URL_BASE="$ENA_WEBIN_MOCK_URL/portal/api"
     export MIINT_ENA_CHECKLIST_URL_BASE="$ENA_WEBIN_MOCK_URL/browser/api/xml"
     export MIINT_ENA_REPORTS_URL_BASE="$ENA_WEBIN_MOCK_URL/submit/report"

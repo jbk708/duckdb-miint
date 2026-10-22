@@ -39,6 +39,24 @@ FROM read_ena_sequences('ERR1074767', include_filepath => true);
 ----
 true
 
+# A list resolves in one batched search, and each run keeps its own reads.
+query II
+SELECT run_accession, count(*)
+FROM read_ena_sequences(['ERR1074767', 'ERR9999999'], verify_md5 => false)
+GROUP BY ALL ORDER BY ALL;
+----
+ERR1074767	20939
+ERR9999999	20939
+
+# A correlated call takes the in-out path, which resolves each outer row's run.
+query II
+SELECT r.run_accession, count(*)
+FROM (VALUES ('ERR1074767'), ('ERR1074767')) r(run_accession),
+     LATERAL (SELECT read_id FROM read_ena_sequences(r.run_accession)) seq
+GROUP BY ALL;
+----
+ERR1074767	41878
+
 # A file whose bytes do not match the md5 the Portal reported is refused once
 # it has been read to the end...
 statement error

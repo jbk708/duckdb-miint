@@ -12,12 +12,7 @@ require miint
 # run_tests.sh sets ENA_AVAILABLE only then. CI runs it nightly.
 require-env ENA_AVAILABLE
 
-# ---- Error handling ----
-
-statement error
-SELECT * FROM read_ena_attributes('');
-----
-read_ena_attributes: accession cannot be empty
+# Input errors, which need no request: read_ena_input_errors.test.
 
 # ---- Schema ----
 

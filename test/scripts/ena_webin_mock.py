@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tiny in-process HTTP mock of the ENA services miint calls: the Webin V2
+"""Tiny HTTP mock of the ENA services miint calls: the Webin V2
 /submit endpoint, the Portal API, the Browser API's checklists, the Reports API
 and the file servers.
 
@@ -8,8 +8,8 @@ INSERT INTO ena.{...} pipeline end-to-end without hitting wwwdev.ebi.ac.uk,
 and to read runs from data/ena/ without EBI.
 
 Behavior:
-  - Requires HTTP Basic auth with user starting with "Webin-" (any password).
-    Returns 401 otherwise.
+  - /submit and the Reports API require HTTP Basic auth with a user starting
+    with "Webin-" (any password), and return 401 otherwise.
   - On POST to /submit (or /submit/queue), inspects the JSON envelope and
     returns an XML receipt with one <PROJECT>/<SAMPLE>/... element per object,
     each carrying a deterministic accession derived from its alias (so tests
@@ -36,7 +36,7 @@ Behavior:
 
   - On GET to /portal/api/search with `result=read_run` and a
     `run_accession` query (read_ena_sequences), answers the read_run row of
-    each run that has a FASTQ under data/ena/, with fastq_ftp pointing back
+    each queried run in _READ_RUNS, with fastq_ftp pointing back
     at this mock's /fastq/ and the size and md5 computed from the file. The
     aspera and submitted-file fields are empty, so nothing reaches EBI.
     MD5_MISMATCH_RUN gets ERR1074767's file with a wrong md5.

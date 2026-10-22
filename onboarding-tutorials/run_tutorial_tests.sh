@@ -33,11 +33,12 @@ fi
 # mock (docs/testing.md, "Guards and skipped tests").
 source "$SCRIPT_DIR/../test/scripts/ena_mock_env.sh"
 if [ "${MIINT_TUTORIAL_LIVE:-0}" != "1" ]; then
+    # Set first, so an exit while the mock boots still stops it.
+    trap 'kill ${ENA_MOCK_PID:-} 2>/dev/null || true' EXIT
     if ! start_ena_mock; then
         echo "ERROR: the ENA mock did not start" >&2
         exit 1
     fi
-    trap 'kill $ENA_MOCK_PID 2>/dev/null || true' EXIT
     echo "ENA: the mock at $ENA_WEBIN_MOCK_URL (MIINT_TUTORIAL_LIVE=1 reads from ENA itself)"
 else
     unset_ena_mock_env

@@ -8,6 +8,8 @@ require httpfs
 
 require miint
 
+# Live ENA: runs only under MIINT_ENA_LIVE_TEST=1, when ENA's Portal answers;
+# run_tests.sh sets ENA_AVAILABLE only then. CI runs it nightly.
 require-env ENA_AVAILABLE
 
 # ---- Schema ----

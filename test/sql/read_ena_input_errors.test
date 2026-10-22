@@ -1,0 +1,35 @@
+# name: test/sql/read_ena_input_errors.test
+# description: Input errors the ENA read functions raise before any request, so they run without ENA or its mock
+# group: [sql]
+
+require miint
+
+statement error
+SELECT * FROM read_ena('');
+----
+read_ena: accession cannot be empty
+
+statement error
+SELECT * FROM read_ena([]);
+----
+read_ena: at least one accession must be provided
+
+statement error
+SELECT * FROM read_ena('ERR1074767', result='invalid_type');
+----
+read_ena: result must be one of: read_run, sample, study
+
+statement error
+SELECT * FROM read_ena_sequences('');
+----
+read_ena_sequences: accession cannot be empty
+
+statement error
+SELECT * FROM read_ena_sequences('ERR1074767', max_sequences => -5);
+----
+max_sequences must be >= 0
+
+statement error
+SELECT * FROM read_ena_attributes('');
+----
+read_ena_attributes: accession cannot be empty

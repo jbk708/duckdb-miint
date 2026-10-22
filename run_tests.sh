@@ -202,12 +202,10 @@ if [ "${MIINT_BLAST_LIVE_TEST:-0}" = "1" ] &&
     export BLAST_LIVE_AVAILABLE=1
 fi
 
-# Live ENA tests, opt-in: `MIINT_ENA_LIVE_TEST=1 bash run_tests.sh`. EBI's Portal API
-# and file servers fail often enough (HTTP 500s, empty answers, md5 mismatches lasting
-# days) that a run gated on them fails for reasons no change made; CI runs them nightly
-# instead. They need the real ENA, so they run under with_live_ena: without the mock's
-# URLs, which this script exports below, and with ENA_AVAILABLE, which is set nowhere
-# else. With the opt-in set, the probe still skips them when the Portal does not answer.
+# Live ENA tests, opt-in: `MIINT_ENA_LIVE_TEST=1 bash run_tests.sh` (why: docs/testing.md,
+# "Guards and skipped tests"). They run under with_live_ena: without the mock's URLs, which
+# this script exports below, and with ENA_AVAILABLE, which is set nowhere else. With the
+# opt-in set, the probe still skips them when the Portal does not answer.
 source test/scripts/ena_mock_env.sh
 unset ENA_AVAILABLE
 ENA_LIVE=0
@@ -271,13 +269,14 @@ fi
 
 # The ENA mock (test/scripts/ena_webin_mock.py): canned receipts for INSERT INTO
 # ena.{projects,samples,...} with no live credentials, and the Portal answers and files
-# for the reads in data/ena/. Every ENA request goes to it, except under with_live_ena.
+# for the runs in data/ena/. Portal, checklist and Reports requests go to it, except under
+# with_live_ena.
 ENA_MOCK_PID=""
 if [ -z "$ENA_WEBIN_MOCK_URL" ] && python3 -c "import http.server" 2>/dev/null; then
-    if start_ena_mock; then
-        # Inherit the existing trap (HTTP_SERVER_PID) and add the mock kill
-        trap "kill $HTTP_SERVER_PID $ENA_MOCK_PID 2>/dev/null || true" EXIT
-    else
+    # Inherit the existing trap (HTTP_SERVER_PID) and add the mock kill, set before the
+    # mock starts so an exit while it boots still stops it.
+    trap 'kill $HTTP_SERVER_PID $ENA_MOCK_PID 2>/dev/null || true' EXIT
+    if ! start_ena_mock; then
         echo "Warning: the ENA mock failed to start; its tests will skip, which fails the httpfs pass"
     fi
 fi
@@ -705,6 +704,11 @@ HTTPFS_ALLOWED_SKIPS='ENA_AVAILABLE|NCBI_AVAILABLE|BLAST_LIVE_AVAILABLE|MIINT_TA
 # exit the script when one fails or skips for a reason this run should have provided.
 run_httpfs_files() {
     local files="$1" log="$2" rc=0 start=$SECONDS elapsed bad_skips
+    # An empty filter would select every test, not none.
+    if [ -z "$files" ]; then
+        echo "ERROR: no test files for $log" >&2
+        exit 1
+    fi
     echo "Running the $(echo "$files" | tr ',' '\n' | wc -l) test files that need httpfs (log: $log)..."
     # on_init's LOAD fails every file when httpfs cannot load (under autoloading, `require
     # httpfs` alone passes without loading it). --require miint fails a file whose miint
@@ -742,11 +746,6 @@ run_httpfs_files "$HTTPFS_TESTS" "$PWD/build/release/httpfs_tests.log"
 # The live ENA tests, which the pass above skipped (see MIINT_ENA_LIVE_TEST above).
 if [ "$ENA_LIVE" = "1" ]; then
     ENA_LIVE_TESTS=$(grep -rl --include='*.test' '^require-env ENA_AVAILABLE' test/sql | paste -sd, -)
-    # An empty filter would select every test, not none.
-    if [ -z "$ENA_LIVE_TESTS" ]; then
-        echo "ERROR: MIINT_ENA_LIVE_TEST=1, but no test file requires ENA_AVAILABLE" >&2
-        exit 1
-    fi
     with_live_ena run_httpfs_files "$ENA_LIVE_TESTS" "$PWD/build/release/httpfs_ena_live_tests.log" || exit 1
 fi
 
