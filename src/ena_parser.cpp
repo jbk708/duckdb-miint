@@ -366,8 +366,7 @@ std::vector<std::string> ENAParser::FTPtoHTTPS(const std::string &ftp_field) {
 			path = ftp_field.substr(start, pos - start);
 		}
 		if (!path.empty()) {
-			// ENA's entries carry no scheme. One that names http or https, as a
-			// mock Portal's does, is used as given.
+			// See FTPtoHTTPS in ena_parser.hpp.
 			if (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0) {
 				urls.push_back(path);
 			} else {

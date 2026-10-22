@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Tiny in-process HTTP mock of the ENA Webin V2 /submit endpoint.
+"""Tiny in-process HTTP mock of the ENA services miint calls: the Webin V2
+/submit endpoint, the Portal API, the Browser API's checklists, the Reports API
+and the file servers.
 
 Used by SQL tests in the duckdb-miint extension that need to exercise the
-INSERT INTO ena.{...} pipeline end-to-end without hitting wwwdev.ebi.ac.uk.
+INSERT INTO ena.{...} pipeline end-to-end without hitting wwwdev.ebi.ac.uk,
+and to read runs from data/ena/ without EBI.
 
 Behavior:
   - Requires HTTP Basic auth with user starting with "Webin-" (any password).
@@ -39,9 +42,9 @@ Behavior:
     MD5_MISMATCH_RUN gets ERR1074767's file with a wrong md5.
   - On GET or HEAD to /fastq/<file>, serves that file from data/ena/.
 
-Invoked by run_tests.sh on a free port; URL is exported as ENA_WEBIN_MOCK_URL,
-MIINT_ENA_PORTAL_URL_BASE = "$ENA_WEBIN_MOCK_URL/portal/api", and
-MIINT_ENA_CHECKLIST_URL_BASE = "$ENA_WEBIN_MOCK_URL/browser/api/xml".
+Started on a free port by test/scripts/ena_mock_env.sh, for run_tests.sh and
+onboarding-tutorials/run_tutorial_tests.sh, which exports its URL as
+ENA_WEBIN_MOCK_URL and the base URLs miint reads from the environment.
 """
 
 from __future__ import annotations

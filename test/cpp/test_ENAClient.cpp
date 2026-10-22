@@ -344,9 +344,8 @@ TEST_CASE("ENAParser input validation", "[ena]") {
 		CHECK(urls[0] == "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR107/file.gz");
 	}
 
-	// ENA's own entries carry no scheme. One that already names http or https,
-	// as a mock Portal's does, is used as given: prefixing it would build
-	// "https://http://...", and forcing https would refuse a plain-http mock.
+	// Prefixing would build "https://http://...", and forcing https would
+	// refuse a plain-http mock.
 	SECTION("FTPtoHTTPS keeps an http:// or https:// entry as given") {
 		auto urls = miint::ENAParser::FTPtoHTTPS("http://127.0.0.1:8080/fastq/ERR1074767.fastq.gz;"
 		                                         "https://example.org/ERR1074767_2.fastq.gz");

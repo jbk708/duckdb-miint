@@ -18,9 +18,9 @@ on:
       - 'README.md'
       - '*.md'
   workflow_dispatch:
-  # Nightly, test-with-bowtie2 and tutorials run against the real ENA, which PR and push
-  # runs replace with a mock (run_tests.sh, MIINT_ENA_LIVE_TEST;
-  # onboarding-tutorials/run_tutorial_tests.sh, MIINT_TUTORIAL_LIVE). Nothing else runs.
+  # Nightly, test-with-bowtie2 and tutorials run against the real ENA, which every other
+  # run replaces with a mock (docs/testing.md, "Guards and skipped tests"). Nothing else
+  # runs.
   schedule:
     - cron: '23 7 * * *'
 
@@ -74,7 +74,9 @@ jobs:
 
   test-with-bowtie2:
     name: Test with Bowtie2
-    runs-on: ubuntu-latest
+    # The tutorials job runs this job's CLI, so both pin one image: a CLI built on a
+    # newer one can need a glibc the other lacks.
+    runs-on: ubuntu-24.04
     outputs:
       build-uploaded: ${{ steps.upload-build.outcome }}
     env:
@@ -195,12 +197,12 @@ jobs:
         run: bash run_tests.sh
 
   # The tutorials in a job of their own, from test-with-bowtie2's build, so that
-  # "Re-run failed jobs" reruns them alone, in a couple of minutes, without a rebuild.
+  # "Re-run failed jobs" reruns them alone, without a rebuild.
   tutorials:
     name: Tutorials
     needs: test-with-bowtie2
     if: ${{ !cancelled() && needs.test-with-bowtie2.outputs.build-uploaded == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -214,12 +216,12 @@ jobs:
         # DuckDB version the extension was built against, or it cannot load it.
         run: |
           chmod +x build/release/duckdb
-          /usr/bin/python3 -m pip install --user duckdb==$(./build/release/duckdb -csv -noheader -c "SELECT ltrim(version(), 'v');") pyarrow pandas matplotlib
+          python3 -m pip install --user duckdb==$(./build/release/duckdb -csv -noheader -c "SELECT ltrim(version(), 'v');") pyarrow pandas matplotlib
 
       - name: Run tutorial tests
         env:
           MIINT_TUTORIAL_LIVE: ${{ github.event_name == 'schedule' && '1' || '0' }}
-        run: PYTHON=/usr/bin/python3 bash onboarding-tutorials/run_tutorial_tests.sh ./build/release/duckdb
+        run: PYTHON=python3 bash onboarding-tutorials/run_tutorial_tests.sh ./build/release/duckdb
 
   #test-wasm-compatible-build:
   #  name: Test WASM-compatible build (no HDF5/Bowtie2)

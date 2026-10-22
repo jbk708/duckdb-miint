@@ -205,13 +205,15 @@ fi
 # Live ENA tests, opt-in: `MIINT_ENA_LIVE_TEST=1 bash run_tests.sh`. EBI's Portal API
 # and file servers fail often enough (HTTP 500s, empty answers, md5 mismatches lasting
 # days) that a run gated on them fails for reasons no change made; CI runs them nightly
-# instead. They need the real ENA, so they run under with_live_ena: without the mock URLs
-# this script exports below, and with ENA_AVAILABLE, which is set nowhere else. With the
-# opt-in set, the probe still skips them when the Portal does not answer.
+# instead. They need the real ENA, so they run under with_live_ena: without the mock's
+# URLs, which this script exports below, and with ENA_AVAILABLE, which is set nowhere
+# else. With the opt-in set, the probe still skips them when the Portal does not answer.
+source test/scripts/ena_mock_env.sh
+unset ENA_AVAILABLE
 ENA_LIVE=0
 with_live_ena() {
     (
-        unset MIINT_ENA_PORTAL_URL_BASE MIINT_ENA_CHECKLIST_URL_BASE MIINT_ENA_REPORTS_URL_BASE
+        unset_ena_mock_env
         export ENA_AVAILABLE=1
         "$@"
     )
@@ -267,39 +269,16 @@ if [ -n "$ENA_WEBIN_TEST_USER" ] && [ -n "$ENA_WEBIN_TEST_PASSWORD" ]; then
     fi
 fi
 
-# ENA Webin V2 mock server. Provides canned XML receipts for INSERT INTO
-# ena.{projects,samples,...} round-trip tests with no live credentials. The
-# helper python script is in test/scripts/ena_webin_mock.py.
+# The ENA mock (test/scripts/ena_webin_mock.py): canned receipts for INSERT INTO
+# ena.{projects,samples,...} with no live credentials, and the Portal answers and files
+# for the reads in data/ena/. Every ENA request goes to it, except under with_live_ena.
 ENA_MOCK_PID=""
 if [ -z "$ENA_WEBIN_MOCK_URL" ] && python3 -c "import http.server" 2>/dev/null; then
-    python3 test/scripts/ena_webin_mock.py 0 > /tmp/ena_webin_mock.boot 2>&1 &
-    ENA_MOCK_PID=$!
-    # Inherit the existing trap (HTTP_SERVER_PID) and add the mock kill
-    trap "kill $HTTP_SERVER_PID $ENA_MOCK_PID 2>/dev/null || true" EXIT
-    for i in $(seq 1 25); do
-        if [ -s /tmp/ena_webin_mock.boot ] && grep -q ENA_WEBIN_MOCK_URL /tmp/ena_webin_mock.boot; then
-            export ENA_WEBIN_MOCK_URL="$(grep ENA_WEBIN_MOCK_URL /tmp/ena_webin_mock.boot | head -n1 | cut -d= -f2-)"
-            break
-        fi
-        sleep 0.1
-    done
-    if [ -z "$ENA_WEBIN_MOCK_URL" ]; then
-        echo "Warning: ENA Webin mock failed to start; its tests will skip, which fails the httpfs pass"
-        kill $ENA_MOCK_PID 2>/dev/null || true
+    if start_ena_mock; then
+        # Inherit the existing trap (HTTP_SERVER_PID) and add the mock kill
+        trap "kill $HTTP_SERVER_PID $ENA_MOCK_PID 2>/dev/null || true" EXIT
     else
-        # Phase 8 Step 8a alias collision check: the operator sends an
-        # authenticated GET to <portal_base>/search before each INSERT.
-        # Point that base at the same mock so existing INSERT tests don't
-        # try to reach the real EBI portal.
-        export MIINT_ENA_PORTAL_URL_BASE="${ENA_WEBIN_MOCK_URL}/portal/api"
-        # Phase 8 Step 8b checklist registry: the samples operator fetches
-        # checklist XMLs to validate user attributes client-side. Point at
-        # the mock for the same offline reasoning as the portal endpoint.
-        export MIINT_ENA_CHECKLIST_URL_BASE="${ENA_WEBIN_MOCK_URL}/browser/api/xml"
-        # L5 Reports API: the lifecycle table fns and DELETE-by-alias path
-        # translate refname → accession via this base. Point at the mock so
-        # SQL tests don't reach wwwdev.ebi.ac.uk.
-        export MIINT_ENA_REPORTS_URL_BASE="${ENA_WEBIN_MOCK_URL}/submit/report"
+        echo "Warning: the ENA mock failed to start; its tests will skip, which fails the httpfs pass"
     fi
 fi
 
@@ -763,6 +742,11 @@ run_httpfs_files "$HTTPFS_TESTS" "$PWD/build/release/httpfs_tests.log"
 # The live ENA tests, which the pass above skipped (see MIINT_ENA_LIVE_TEST above).
 if [ "$ENA_LIVE" = "1" ]; then
     ENA_LIVE_TESTS=$(grep -rl --include='*.test' '^require-env ENA_AVAILABLE' test/sql | paste -sd, -)
+    # An empty filter would select every test, not none.
+    if [ -z "$ENA_LIVE_TESTS" ]; then
+        echo "ERROR: MIINT_ENA_LIVE_TEST=1, but no test file requires ENA_AVAILABLE" >&2
+        exit 1
+    fi
     with_live_ena run_httpfs_files "$ENA_LIVE_TESTS" "$PWD/build/release/httpfs_ena_live_tests.log" || exit 1
 fi
 

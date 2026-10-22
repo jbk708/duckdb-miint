@@ -16,12 +16,14 @@ require-env MIINT_ENA_PORTAL_URL_BASE
 # the file, and ERR9999999 with the same file under a wrong md5. The live tests
 # of the same function run only with MIINT_ENA_LIVE_TEST=1.
 
-# Every read arrives once, with the run's accessions from the Portal row.
+# Every read arrives once, each with the run's accessions from the Portal row:
+# a read without them would form a group of its own.
 query IIIII
-SELECT count(*), count(DISTINCT read_id), min(run_accession), min(sample_accession), min(experiment_accession)
-FROM read_ena_sequences('ERR1074767');
+SELECT run_accession, sample_accession, experiment_accession, count(*), count(DISTINCT read_id)
+FROM read_ena_sequences('ERR1074767')
+GROUP BY ALL;
 ----
-20939	20939	ERR1074767	SAMEA3610311	ERX1154891
+ERR1074767	SAMEA3610311	ERX1154891	20939	20939
 
 # The first record, as written in the file.
 query II

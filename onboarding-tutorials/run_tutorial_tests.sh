@@ -29,27 +29,18 @@ if [ ! -f "$EXT_PATH" ]; then
     EXT_PATH="$(pwd)/build/release/extension/miint/miint.duckdb_extension"
 fi
 
-# The tutorials read ERR1074767 from ENA. Unless MIINT_TUTORIAL_LIVE=1, ENA's Portal API
-# is test/scripts/ena_webin_mock.py, which serves that run from data/ena/: EBI's outages
-# would otherwise fail these tests for reasons no change made. CI runs them live nightly.
+# The tutorials read ERR1074767 from ENA, or, unless MIINT_TUTORIAL_LIVE=1, from the ENA
+# mock (docs/testing.md, "Guards and skipped tests").
+source "$SCRIPT_DIR/../test/scripts/ena_mock_env.sh"
 if [ "${MIINT_TUTORIAL_LIVE:-0}" != "1" ]; then
-    MOCK_BOOT=$(mktemp)
-    python3 "$SCRIPT_DIR/../test/scripts/ena_webin_mock.py" 0 > "$MOCK_BOOT" 2>&1 &
-    MOCK_PID=$!
-    trap 'kill $MOCK_PID 2>/dev/null || true; rm -f "$MOCK_BOOT"' EXIT
-    for _ in $(seq 1 50); do
-        grep -q '^ENA_WEBIN_MOCK_URL=' "$MOCK_BOOT" 2>/dev/null && break
-        sleep 0.1
-    done
-    MOCK_URL=$(sed -n 's/^ENA_WEBIN_MOCK_URL=//p' "$MOCK_BOOT")
-    if [ -z "$MOCK_URL" ]; then
-        echo "ERROR: the ENA mock did not start:" >&2
-        cat "$MOCK_BOOT" >&2
+    if ! start_ena_mock; then
+        echo "ERROR: the ENA mock did not start" >&2
         exit 1
     fi
-    export MIINT_ENA_PORTAL_URL_BASE="$MOCK_URL/portal/api"
-    echo "ENA: the mock at $MOCK_URL (MIINT_TUTORIAL_LIVE=1 reads from ENA itself)"
+    trap 'kill $ENA_MOCK_PID 2>/dev/null || true' EXIT
+    echo "ENA: the mock at $ENA_WEBIN_MOCK_URL (MIINT_TUTORIAL_LIVE=1 reads from ENA itself)"
 else
+    unset_ena_mock_env
     echo "ENA: live"
 fi
 
