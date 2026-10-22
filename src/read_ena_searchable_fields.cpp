@@ -85,7 +85,7 @@ void ReadENASearchableFieldsTableFunction::Execute(ClientContext &context, Table
 	if (!global.fetched) {
 		global.fetched = true;
 		std::ostringstream url;
-		url << miint::ENAParser::PORTAL_BASE << "/returnFields?result=" << bind_data.result_type << "&format=tsv";
+		url << miint::ResolvePortalBaseFromEnv() << "/returnFields?result=" << bind_data.result_type << "&format=tsv";
 		auto tsv = global.client->FetchURL(url.str());
 		auto parsed = miint::ENAParser::ParseTSV(tsv);
 

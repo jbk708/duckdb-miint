@@ -8,7 +8,6 @@
 
 #include "ena_parser.hpp"
 
-#include <cstdlib>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -207,13 +206,6 @@ std::vector<std::string> CheckAliasCollisions(const std::string &portal_base, Al
 		}
 	}
 	return hits;
-}
-
-std::string ResolvePortalBaseFromEnv() {
-	const char *override_base = std::getenv("MIINT_ENA_PORTAL_URL_BASE");
-	const std::string base = (override_base != nullptr && *override_base != '\0') ? std::string(override_base)
-	                                                                              : std::string(DEFAULT_PORTAL_BASE);
-	return TrimTrailingSlash(base);
 }
 
 } // namespace miint

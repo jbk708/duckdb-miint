@@ -62,12 +62,4 @@ std::string BuildAliasCollisionURL(const std::string &portal_base, AliasObjectKi
 std::vector<std::string> CheckAliasCollisions(const std::string &portal_base, AliasObjectKind kind,
                                               const std::vector<std::string> &aliases, const URLFetcher &fetcher);
 
-// Default portal API base. May be overridden via the MIINT_ENA_PORTAL_URL_BASE
-// env var (test fixture only — production users should not need to set it).
-constexpr const char *DEFAULT_PORTAL_BASE = "https://www.ebi.ac.uk/ena/portal/api";
-
-// Resolve the portal base used by the operator: env-var override, falling back
-// to DEFAULT_PORTAL_BASE. Trailing slashes stripped.
-std::string ResolvePortalBaseFromEnv();
-
 } // namespace miint

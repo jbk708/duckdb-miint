@@ -4,6 +4,7 @@
 #include "ena_parser.hpp"
 #include "ena_resolver_cache.hpp"
 #include "ena_run_info_extractor.hpp"
+#include "env_test_helpers.hpp"
 
 // ---- Step 1.1: Accession type detection ----
 
@@ -46,6 +47,8 @@ TEST_CASE("ENAClient accession type detection", "[ena]") {
 // ---- Step 1.2: URL construction ----
 
 TEST_CASE("ENAClient URL construction", "[ena]") {
+	// run_tests.sh exports the override for its mock; these check the default.
+	miint_test::EnvGuard no_override("MIINT_ENA_PORTAL_URL_BASE", nullptr);
 	SECTION("Study accession uses study_accession query param") {
 		auto url = miint::ENAParser::BuildSearchURL("PRJEB5291", "read_run", "run_accession,fastq_ftp");
 		CHECK(url == "https://www.ebi.ac.uk/ena/portal/api/search?"
@@ -340,6 +343,17 @@ TEST_CASE("ENAParser input validation", "[ena]") {
 		REQUIRE(urls.size() == 1);
 		CHECK(urls[0] == "https://ftp.sra.ebi.ac.uk/vol1/fastq/ERR107/file.gz");
 	}
+
+	// ENA's own entries carry no scheme. One that already names http or https,
+	// as a mock Portal's does, is used as given: prefixing it would build
+	// "https://http://...", and forcing https would refuse a plain-http mock.
+	SECTION("FTPtoHTTPS keeps an http:// or https:// entry as given") {
+		auto urls = miint::ENAParser::FTPtoHTTPS("http://127.0.0.1:8080/fastq/ERR1074767.fastq.gz;"
+		                                         "https://example.org/ERR1074767_2.fastq.gz");
+		REQUIRE(urls.size() == 2);
+		CHECK(urls[0] == "http://127.0.0.1:8080/fastq/ERR1074767.fastq.gz");
+		CHECK(urls[1] == "https://example.org/ERR1074767_2.fastq.gz");
+	}
 }
 
 // ---- FilterSubmittedByFormat ----
@@ -451,10 +465,31 @@ TEST_CASE("BuildSearchURLBatch validates every accession", "[ena]") {
 }
 
 TEST_CASE("BuildSearchURLBatch starts with portal base", "[ena]") {
+	// run_tests.sh exports the override for its mock; this checks the default.
+	miint_test::EnvGuard no_override("MIINT_ENA_PORTAL_URL_BASE", nullptr);
 	auto url = miint::ENAParser::BuildSearchURLBatch({"ERR1074767"}, miint::ENAAccessionType::RUN, "read_run",
 	                                                 "run_accession");
 	CHECK(url.rfind("https://www.ebi.ac.uk/ena/portal/api/search?", 0) == 0);
 	CHECK(url.find("&limit=0&format=tsv") != std::string::npos);
+}
+
+// The read path's searches go where the submission path's do, so one variable
+// points every Portal request at a mock.
+TEST_CASE("Search URLs use MIINT_ENA_PORTAL_URL_BASE when it is set", "[ena]") {
+	const std::string mock = "http://127.0.0.1:8080/portal/api/search?";
+	SECTION("set, with a trailing slash") {
+		miint_test::EnvGuard override_base("MIINT_ENA_PORTAL_URL_BASE", "http://127.0.0.1:8080/portal/api/");
+		auto batch = miint::ENAParser::BuildSearchURLBatch({"ERR1074767"}, miint::ENAAccessionType::RUN, "read_run",
+		                                                   "run_accession");
+		CHECK(batch.rfind(mock, 0) == 0);
+		auto single = miint::ENAParser::BuildSearchURL("ERR1074767", "read_run", "run_accession");
+		CHECK(single.rfind(mock, 0) == 0);
+	}
+	SECTION("set but empty falls back to ENA") {
+		miint_test::EnvGuard empty_base("MIINT_ENA_PORTAL_URL_BASE", "");
+		auto single = miint::ENAParser::BuildSearchURL("ERR1074767", "read_run", "run_accession");
+		CHECK(single.rfind("https://www.ebi.ac.uk/ena/portal/api/search?", 0) == 0);
+	}
 }
 
 // ---- PercentEncodeQueryValue ----
