@@ -144,9 +144,9 @@ and the sampler are SourceTracker2's; the metadata column names differ (see
 
 Bad parameter values are refused at bind: a `collapse` other than `mean` or `sum`, a `seed`
 below `-1`, a prior that is negative or not finite, an `alpha2` or `beta` of 0 (the sampler's
-weights can then be 0/0), a chain parameter below 1, a chain longer than st3 can count or
-hold (`burnin + (draws_per_restart - 1) * delay + 1` passes, or `restarts * draws_per_restart`
-draws, above 4294967295), a negative depth or thread count, a NULL for any parameter, an
+weights can then be 0/0), a chain parameter below 1, a run longer than st3 can count
+(`burnin + (draws_per_restart - 1) * delay + 1` passes per chain, or `restarts * draws_per_restart`
+draws per sink, above 4294967295), a negative depth or thread count, a NULL for any parameter, an
 empty or duplicated column name or one naming `sample_id`, or `assignments := true` together
 with `loo := true`.
 

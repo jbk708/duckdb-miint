@@ -231,9 +231,9 @@ unique_ptr<FunctionData> SourcetrackerBind(ClientContext &context, TableFunction
 	}
 	c.loo = data->loo ? 1 : 0;
 	c.contingency = data->assignments ? 1 : 0;
-	// st3 counts a chain's passes in 32 bits, which wrap without an error. It counts
-	// a sink's draws in a usize, which is 32 bits under WASM, and keeps every draw,
-	// so more draws than that could not be held on any platform.
+	// st3 counts a chain's passes in 32 bits, which wrap without an error, and a
+	// sink's draws in a usize, which is 32 bits under WASM. Both bounds are the same
+	// on every platform, so a call that binds natively also binds under WASM.
 	const uint64_t passes = uint64_t(c.burnin) + uint64_t(c.draws_per_restart - 1) * c.delay + 1;
 	if (passes > UINT32_MAX) {
 		throw BinderException("sourcetracker: burnin + (draws_per_restart - 1) * delay + 1, the passes per chain, "

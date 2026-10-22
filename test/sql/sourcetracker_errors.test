@@ -333,10 +333,10 @@ SELECT * FROM sourcetracker('synth', 'synth_meta', beta := 0.0);
 ----
 beta must be finite and > 0 (got 0.0)
 
-# st3 counts a chain's passes in 32 bits. At burnin := 1, 65537 draws 65537
-# passes apart wrap to a chain of 65538 passes holding one draw, and the
-# per-sink assignment mass is then 1.5e-5 of the sink's depth instead of the
-# depth.
+# st3 counts a chain's passes in 32 bits. At the default burnin of 100, 65537
+# draws 65537 passes apart wrap to a chain of 65637 passes holding one draw,
+# and the per-sink assignment mass is then 1.5e-5 of the sink's depth instead
+# of the depth.
 statement error
 SELECT * FROM sourcetracker('synth', 'synth_meta', draws_per_restart := 65537, delay := 65537);
 ----

@@ -321,12 +321,16 @@ TEST_CASE("CheckEnvironments: an environment that collapses to no sequences is r
 }
 
 TEST_CASE("CheckEnvironments: leave-one-out checks each fold's remaining members", "[sourcetracker]") {
+	// F's sample gives E a whole-environment check under loo, which E passes, so
+	// only the check of E's own folds can refuse it.
 	std::vector<MetadataRow> m;
 	AddMeta(m, "a", "source", "E");
 	AddMeta(m, "b", "source", "E");
 	AddMeta(m, "c", "source", "E");
+	AddMeta(m, "x", "source", "F");
 	AddMeta(m, "k", "sink", "");
-	const std::vector<CooRow> three = {{"a", "f1", 1.0}, {"b", "f2", 1.0}, {"c", "f3", 4.0}, {"k", "f1", 3.0}};
+	const std::vector<CooRow> three = {
+	    {"a", "f1", 1.0}, {"b", "f2", 1.0}, {"c", "f3", 4.0}, {"x", "f5", 10.0}, {"k", "f1", 3.0}};
 	const Dataset ds = IngestDataset(three, m);
 
 	SECTION("all three members collapse to f3's one sequence") {
