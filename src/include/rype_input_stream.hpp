@@ -32,6 +32,11 @@
 // MaxThreads() to 1, so the RypeIdMap is written and read from one thread. RYpe's
 // internal rayon parallelism happens inside classification, after the pull
 // returns.
+//
+// Filter streams (BuildRypeFilterStream) read the caller's own columns instead,
+// keep no id map, and end after a set number of rows so that one RYpe call sees
+// exactly one group. The rows a group sent are held, shared rather than copied,
+// for the caller to take once RYpe has classified them.
 
 #include "rype_id_map.hpp"
 
@@ -112,6 +117,29 @@ struct RypeInputStreamOptions {
 	idx_t batch_bytes = 0;
 };
 
+//! A run of one scanned chunk's rows that a filter stream sent to Arrow, held for
+//! the caller. The chunk is shared, not copied, so a chunk that straddles two
+//! groups appears in both, once in each.
+struct RypeHeldRows {
+	//! Every column of the scan, in the relation's own types.
+	shared_ptr<DataChunk> chunk;
+	//! Rows [from, to) of `chunk`, in scan order.
+	idx_t from;
+	idx_t to;
+	//! The Arrow id of row `from`; row i's id is first_id + (i - from).
+	idx_t first_id;
+};
+
+//! Where the scan puts the columns a RypeInputStream reads. The defaults are the
+//! (read_id, sequence[, pair_sequence]) scan BuildRypeInputStream writes.
+struct RypeSourceColumns {
+	//! Read only when there is an id map.
+	idx_t id = 0;
+	idx_t sequence = 1;
+	//! Read only when options.include_pair_column is set.
+	idx_t pair_sequence = 2;
+};
+
 class RypeInputStream {
 public:
 	//! The C-ABI handle handed to RYpe. private_data points back at this object.
@@ -134,7 +162,10 @@ public:
 	//! GlobalState teardown, whatever RYpe did.
 	ArrowArrayStream stream;
 
-	RypeInputStream(unique_ptr<StreamingQuery> result, RypeIdMap &id_map, RypeInputStreamOptions options);
+	//! A null `id_map` makes a filter stream: no identifier is read, a row's Arrow
+	//! id is its position in the scan, and rows go out in groups (BeginGroup).
+	RypeInputStream(unique_ptr<StreamingQuery> result, optional_ptr<RypeIdMap> id_map, RypeInputStreamOptions options,
+	                RypeSourceColumns source = RypeSourceColumns());
 
 	RypeInputStream(const RypeInputStream &) = delete;
 	RypeInputStream &operator=(const RypeInputStream &) = delete;
@@ -180,6 +211,24 @@ public:
 	//! batch; SampleSizing does not consume anything, so that ordering is free.
 	void SetBatchRows(idx_t rows);
 
+	//! Filter streams only: the most rows one group sends before the stream reports
+	//! end-of-stream. Deferred for the same reason as SetBatchRows; must be set
+	//! before the first BeginGroup.
+	void SetGroupRows(idx_t rows);
+
+	//! Filter streams only. Arm the stream for the next group and return true, or
+	//! return false when the scan has no rows left, beginning nothing. Call it
+	//! before every rype_*_arrow_ex call, the first one included: that call moves
+	//! the struct out of `stream` (arrow-rs's from_raw leaves an empty one behind)
+	//! and releases its copy, and this puts the callbacks back. Releasing ends the
+	//! group but keeps the scan, which carries on, mid-chunk if need be, at the
+	//! next group. The previous group's rows must have been taken.
+	bool BeginGroup();
+
+	//! Filter streams only: the rows the current group has sent to Arrow, in scan
+	//! order, moved out to the caller.
+	vector<RypeHeldRows> TakeGroup();
+
 	//! Drop the scan (streaming QueryResult and its chunk state) without
 	//! destroying the object. Called from the release callback so the scan's
 	//! resources go as soon as RYpe is done, rather than at GlobalState
@@ -208,12 +257,25 @@ private:
 	idx_t AppendSlice(ArrowAppender &appender, DataChunk &chunk, idx_t from, idx_t row_limit, bool require_progress,
 	                  idx_t &batch_bytes);
 
+	//! Point `stream` at this object's callbacks.
+	void ArmStream();
+
 	unique_ptr<StreamingQuery> result;
-	//! Cursor over the stream (v1.5 used duckdb's ChunkScanState, removed in v2.0)
-	unique_ptr<DataChunk> current_chunk;
+	//! Cursor over the stream (v1.5 used duckdb's ChunkScanState, removed in v2.0).
+	//! Shared so that a filter stream's held rows can keep the chunk.
+	shared_ptr<DataChunk> current_chunk;
 	idx_t chunk_offset = 0;
-	RypeIdMap &id_map;
+	optional_ptr<RypeIdMap> id_map;
 	RypeInputStreamOptions options;
+	RypeSourceColumns source;
+	//! The Arrow id the next row gets; equals id_map->size() when there is a map.
+	idx_t next_id = 0;
+
+	//! Filter streams: the group size, the rows the current group may still send,
+	//! and the runs it has sent.
+	idx_t group_rows = 0;
+	idx_t group_remaining = 0;
+	vector<RypeHeldRows> held;
 
 	ClientProperties client_properties;
 	vector<LogicalType> arrow_types;
@@ -244,5 +306,14 @@ private:
 //!
 //! `id_map` must outlive the stream, for the same reason and by the same means.
 unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id_map, RypeInputStreamOptions options);
+
+//! Start the single scan for a filter stream: `columns`, the relation's columns
+//! as bind saw them, in their own types, so each group's rows can be handed back
+//! whole. sequence1 must be among them, as VARCHAR or BLOB, and goes to Arrow as
+//! `sequence`; sequence2, when present, goes as `pair_sequence`. A VARCHAR is
+//! reinterpreted as BLOB in place, not cast. Of `options`, only relation_quoted,
+//! source_name, batch_rows and batch_bytes are read. Same lifetime rule as above.
+unique_ptr<RypeInputStream> BuildRypeFilterStream(Connection &conn, const vector<string> &columns,
+                                                  RypeInputStreamOptions options);
 
 } // namespace duckdb

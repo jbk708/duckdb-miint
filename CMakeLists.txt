@@ -2808,3 +2808,13 @@ if(MIINT_HAS_JEMALLOC)
   target_compile_definitions(tests PRIVATE MIINT_USE_JEMALLOC)
 endif()
 target_compile_definitions(tests PRIVATE HAVE_KALLOC)
+
+# C++ tests that need a running DuckDB: they open an in-process database and
+# drive miint code against it. `tests` above links no DuckDB, so these get a
+# binary of their own, linked the way DuckDB links its unittest runner, and only
+# where DuckDB builds that runner (not in the WASM builds, for one).
+if(BUILD_UNITTESTS)
+  add_executable(tests_duckdb test/cpp/test_RypeInputStream.cpp)
+  target_link_libraries(tests_duckdb Catch2::Catch2WithMain duckdb_static)
+  link_extension_libraries(tests_duckdb "")
+endif()

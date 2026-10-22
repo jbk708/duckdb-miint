@@ -697,6 +697,7 @@ fi
 
 make test
 ./build/release/extension/miint/tests
+./build/release/extension/miint/tests_duckdb
 
 # read_fastx_fd_release.test must run under a low RLIMIT_NOFILE: it asserts that one scan
 # over many paths holds descriptors proportional to thread count, not to path count, and

@@ -92,6 +92,8 @@ Core algorithms and internal utilities are tested using the Catch2 framework. C+
 ./build/release/extension/miint/tests "ParseCigar - Basic operations"
 ```
 
+`tests` links no DuckDB. A C++ test that needs a running database, one that opens an in-process `DuckDB` and drives miint code against it, goes in the second runner instead, `./build/release/extension/miint/tests_duckdb`, which links DuckDB and miint the way `unittest` does. List its file under `tests_duckdb` in `CMakeLists.txt`, not in `TEST_SOURCES`. It is built only where DuckDB builds `unittest`, so not in the WASM builds. `run_tests.sh` runs both.
+
 **Code organization for testing:**
 
 1. **`miint` namespace** - Pure C++ code (algorithms, parsers, utilities)

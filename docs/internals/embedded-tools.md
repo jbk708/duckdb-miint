@@ -244,7 +244,7 @@ Two Rust crates — rype and sylph — are statically linked into the extension.
 | HDF5 | `find_package(HDF5 REQUIRED COMPONENTS CXX)` | conditional | required when `MIINT_ENABLE_HDF5=ON`; links `hdf5-static`, `hdf5_hl-static`, `hdf5_cpp-static`, `hdf5_hl_cpp-static`. For `CLANG_TIDY` builds HDF5 is optional (tidy still runs without BIOM coverage). |
 | RocksDB | `find_package(RocksDB CONFIG REQUIRED)` | conditional | required when `MIINT_ENABLE_SORTMERNA=ON`; vcpkg port gated via `"platform": "!emscripten"`. Linked against `RocksDB::rocksdb` (static archive). |
 | libcurl | `find_package(CURL CONFIG QUIET)`, falling back to the system `FindCURL` module | conditional | required when `MIINT_ENABLE_CURL=ON`; powers the streaming HTTPS-PUT / FTP / FTPS transport in `ena_upload_reads`. Reported as the `libcurl` row in `miint_versions()`. |
-| Catch2 | `FetchContent` @ v3.4.0 | yes (test) | used only for the `tests` C++ executable |
+| Catch2 | `FetchContent` @ v3.4.0 | yes (test) | used only for the `tests` and `tests_duckdb` C++ executables |
 
 `VCPKG_TOOLCHAIN_PATH` must be set before CMake configure.
 

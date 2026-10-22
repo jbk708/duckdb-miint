@@ -1,14 +1,17 @@
 #include "rype_input_stream.hpp"
 
 #include "duckdb/common/arrow/arrow_converter.hpp"
+#include "duckdb/common/optional_idx.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 
 namespace duckdb {
 
 namespace {
 
-// Column order of both the source scan and the Arrow batch. The two agree by
-// construction so AppendSlice can reference source vectors positionally.
+// Column order of the Arrow batch, and of `transformed`, which feeds it. Where
+// the columns sit in the source scan is `source` (RypeSourceColumns).
 constexpr idx_t COL_ID = 0;
 constexpr idx_t COL_SEQUENCE = 1;
 constexpr idx_t COL_PAIR_SEQUENCE = 2;
@@ -39,9 +42,9 @@ idx_t GetRypeArrowBatchBytes(ClientContext &context) {
 // Construction
 // ============================================================================
 
-RypeInputStream::RypeInputStream(unique_ptr<StreamingQuery> result_p, RypeIdMap &id_map_p,
-                                 RypeInputStreamOptions options_p)
-    : result(std::move(result_p)), id_map(id_map_p), options(std::move(options_p)) {
+RypeInputStream::RypeInputStream(unique_ptr<StreamingQuery> result_p, optional_ptr<RypeIdMap> id_map_p,
+                                 RypeInputStreamOptions options_p, RypeSourceColumns source_p)
+    : result(std::move(result_p)), id_map(id_map_p), options(std::move(options_p)), source(source_p) {
 	D_ASSERT(result);
 	appender_capacity =
 	    options.batch_bytes > 0 ? MinValue<idx_t>(options.batch_rows, STANDARD_VECTOR_SIZE) : options.batch_rows;
@@ -62,6 +65,10 @@ RypeInputStream::RypeInputStream(unique_ptr<StreamingQuery> result_p, RypeIdMap 
 	extension_types = ArrowTypeExtensionData::GetExtensionTypes(*client_properties.client_context, arrow_types);
 	transformed.Initialize(*client_properties.client_context, arrow_types);
 
+	ArmStream();
+}
+
+void RypeInputStream::ArmStream() {
 	stream.private_data = this;
 	stream.get_schema = StreamGetSchema;
 	stream.get_next = StreamGetNext;
@@ -91,6 +98,54 @@ unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id
 		                            query_result->GetError());
 	}
 	return make_uniq<RypeInputStream>(std::move(query_result), id_map, std::move(options));
+}
+
+unique_ptr<RypeInputStream> BuildRypeFilterStream(Connection &conn, const vector<string> &columns,
+                                                  RypeInputStreamOptions options) {
+	// The caller's columns as they are, so a group's rows go back out in their own
+	// types. Unlike BuildRypeInputStream, the sequences are not cast to BLOB in
+	// SQL: AppendSlice reinterprets a VARCHAR in place, which copies nothing.
+	optional_idx sequence1;
+	optional_idx sequence2;
+	std::string select_cols;
+	for (idx_t i = 0; i < columns.size(); i++) {
+		if (StringUtil::CIEquals(columns[i], "sequence1")) {
+			sequence1 = i;
+		} else if (StringUtil::CIEquals(columns[i], "sequence2")) {
+			sequence2 = i;
+		}
+		select_cols += (i == 0 ? "" : ", ") + SQLIdentifier::ToString(columns[i]);
+	}
+	if (!sequence1.IsValid()) {
+		throw InvalidInputException("'%s' has no sequence1 column", options.source_name);
+	}
+	RypeSourceColumns source;
+	source.sequence = sequence1.GetIndex();
+	options.has_sequence2 = sequence2.IsValid();
+	options.include_pair_column = options.has_sequence2;
+	if (options.has_sequence2) {
+		source.pair_sequence = sequence2.GetIndex();
+	}
+
+	auto query_result = SubmitStream(conn, "SELECT " + select_cols + " FROM " + options.relation_quoted);
+	if (query_result->HasError()) {
+		throw InvalidInputException("Failed to read sequences from '%s': %s", options.source_name,
+		                            query_result->GetError());
+	}
+	// Reinterpreting is sound only for the string physical type; anything else
+	// would hand RYpe a pointer that is not one.
+	const auto &types = query_result->GetTypes();
+	for (const auto &position : {sequence1, sequence2}) {
+		if (!position.IsValid()) {
+			continue;
+		}
+		const auto &type = types[position.GetIndex()];
+		if (type.id() != LogicalTypeId::VARCHAR && type.id() != LogicalTypeId::BLOB) {
+			throw InvalidInputException("%s in '%s' must be VARCHAR or BLOB, not %s", columns[position.GetIndex()],
+			                            options.source_name, type.ToString());
+		}
+	}
+	return make_uniq<RypeInputStream>(std::move(query_result), nullptr, std::move(options), source);
 }
 
 // ============================================================================
@@ -140,7 +195,10 @@ void RypeInputStream::StreamRelease(ArrowArrayStream *stream) {
 	// private_data is the only route back to the object. Nulling release on the
 	// copy is what stops a second call.
 	auto *self = reinterpret_cast<RypeInputStream *>(stream->private_data);
-	if (self) {
+	// A filter stream's release ends the group, not the scan: the next group
+	// carries on from where this one stopped, and the rows it sent stay held for
+	// TakeGroup.
+	if (self && self->id_map) {
 		self->ReleaseScan();
 	}
 }
@@ -154,6 +212,7 @@ void RypeInputStream::ReleaseScan() {
 	// !result guard in FetchBatch means nothing reads transformed afterwards.
 	transformed.Reset();
 	current_chunk.reset();
+	held.clear();
 	result.reset();
 }
 
@@ -195,6 +254,35 @@ void RypeInputStream::SetBatchRows(idx_t rows) {
 	appender_capacity = options.batch_bytes > 0 ? MinValue<idx_t>(rows, STANDARD_VECTOR_SIZE) : rows;
 }
 
+void RypeInputStream::SetGroupRows(idx_t rows) {
+	D_ASSERT(!id_map);
+	D_ASSERT(rows > 0);
+	group_rows = rows;
+}
+
+bool RypeInputStream::BeginGroup() {
+	// Without a group size every group would be empty, and a caller looping until
+	// BeginGroup returns false would never stop.
+	if (id_map || group_rows == 0) {
+		throw InternalException("RypeInputStream::BeginGroup needs a filter stream whose group size is set");
+	}
+	D_ASSERT(held.empty());
+	if (!result || !EnsureChunk()) {
+		ReleaseScan();
+		return false;
+	}
+	group_remaining = group_rows;
+	ArmStream();
+	return true;
+}
+
+vector<RypeHeldRows> RypeInputStream::TakeGroup() {
+	D_ASSERT(!id_map);
+	vector<RypeHeldRows> taken;
+	std::swap(taken, held);
+	return taken;
+}
+
 RypeInputStream::Sizing RypeInputStream::SampleSizing(size_t fallback_read_length) {
 	Sizing sizing {fallback_read_length, false, false};
 	if (!result || !EnsureChunk()) {
@@ -209,7 +297,7 @@ RypeInputStream::Sizing RypeInputStream::SampleSizing(size_t fallback_read_lengt
 	const idx_t from = chunk_offset;
 
 	UnifiedVectorFormat sequence_format;
-	chunk.data[COL_SEQUENCE].ToUnifiedFormat(sequence_format);
+	chunk.data[source.sequence].ToUnifiedFormat(sequence_format);
 	auto sequence_data = UnifiedVectorFormat::GetData<string_t>(sequence_format);
 
 	idx_t total_bytes = 0;
@@ -234,7 +322,7 @@ RypeInputStream::Sizing RypeInputStream::SampleSizing(size_t fallback_read_lengt
 	// explicit.
 	if (options.include_pair_column && options.has_sequence2) {
 		UnifiedVectorFormat pair_format;
-		chunk.data[COL_PAIR_SEQUENCE].ToUnifiedFormat(pair_format);
+		chunk.data[source.pair_sequence].ToUnifiedFormat(pair_format);
 		for (idx_t i = from; i < chunk_size; i++) {
 			if (pair_format.validity.RowIsValid(pair_format.sel->get_index(i))) {
 				sizing.is_paired = true;
@@ -259,6 +347,13 @@ void RypeInputStream::FetchBatch(ArrowArray *out) {
 		result->GetErrorObject().Throw();
 	}
 
+	// A filter stream's group ends after group_rows rows, wherever that falls in a
+	// chunk, and the end-of-stream comes before the scan is touched again.
+	const idx_t batch_rows = id_map ? options.batch_rows : MinValue<idx_t>(options.batch_rows, group_remaining);
+	if (batch_rows == 0) {
+		return;
+	}
+
 	ArrowAppender appender(arrow_types, appender_capacity, client_properties, extension_types);
 	idx_t appended = 0;
 	idx_t batch_bytes = 0;
@@ -267,14 +362,24 @@ void RypeInputStream::FetchBatch(ArrowArray *out) {
 	// consumed chunk first, then pull further chunks until the batch is full or
 	// the scan is drained. "Full" is a row count and, when configured, a byte
 	// ceiling — a source chunk can be left partly consumed by either.
-	while (appended < options.batch_rows) {
+	while (appended < batch_rows) {
 		if (!EnsureChunk()) {
 			break;
 		}
 		auto &chunk = *current_chunk;
 		const idx_t from = chunk_offset;
-		const idx_t row_limit = MinValue<idx_t>(chunk.size(), from + (options.batch_rows - appended));
+		const idx_t row_limit = MinValue<idx_t>(chunk.size(), from + (batch_rows - appended));
+		const idx_t first_id = next_id;
 		const idx_t to = AppendSlice(appender, chunk, from, row_limit, appended == 0, batch_bytes);
+		if (!id_map && to > from) {
+			// One run per chunk per group: a batch that carries on where the last
+			// one stopped in the same chunk extends its run.
+			if (!held.empty() && held.back().chunk == current_chunk && held.back().to == from) {
+				held.back().to = to;
+			} else {
+				held.push_back(RypeHeldRows {current_chunk, from, to, first_id});
+			}
+		}
 		chunk_offset += to - from;
 		appended += to - from;
 		if (to < row_limit) {
@@ -284,6 +389,9 @@ void RypeInputStream::FetchBatch(ArrowArray *out) {
 		}
 	}
 
+	if (!id_map) {
+		group_remaining -= appended;
+	}
 	if (appended > 0) {
 		// Batches under a byte ceiling all hold a similar number of rows, so the
 		// one just built is the best available hint for the next.
@@ -296,13 +404,11 @@ idx_t RypeInputStream::AppendSlice(ArrowAppender &appender, DataChunk &chunk, id
                                    bool require_progress, idx_t &batch_bytes) {
 	const idx_t chunk_size = chunk.size();
 
-	UnifiedVectorFormat id_format;
-	chunk.data[COL_ID].ToUnifiedFormat(id_format);
 	UnifiedVectorFormat sequence_format;
-	chunk.data[COL_SEQUENCE].ToUnifiedFormat(sequence_format);
+	chunk.data[source.sequence].ToUnifiedFormat(sequence_format);
 	UnifiedVectorFormat pair_format;
 	if (options.include_pair_column) {
-		chunk.data[COL_PAIR_SEQUENCE].ToUnifiedFormat(pair_format);
+		chunk.data[source.pair_sequence].ToUnifiedFormat(pair_format);
 	}
 
 	// Decide how much of [from, row_limit) fits under the byte ceiling before
@@ -338,8 +444,14 @@ idx_t RypeInputStream::AppendSlice(ArrowAppender &appender, DataChunk &chunk, id
 
 	// The surrogate for logical row i is base + (i - from): AppendRange appends in
 	// logical row order, so this stays in lockstep with the id map.
-	const idx_t base = id_map.size();
-	id_map.AppendRange(id_format, from, to);
+	const idx_t base = next_id;
+	if (id_map) {
+		D_ASSERT(base == id_map->size());
+		UnifiedVectorFormat id_format;
+		chunk.data[source.id].ToUnifiedFormat(id_format);
+		id_map->AppendRange(id_format, from, to);
+	}
+	next_id += to - from;
 
 	// Reject a NULL sequence at the boundary miint owns. RYpe rejects it too, but
 	// only by position within an internal record batch the caller cannot see
@@ -349,11 +461,17 @@ idx_t RypeInputStream::AppendSlice(ArrowAppender &appender, DataChunk &chunk, id
 	for (idx_t i = from; i < to; i++) {
 		if (!sequence_format.validity.RowIsValid(sequence_format.sel->get_index(i))) {
 			const idx_t surrogate = base + (i - from);
+			if (!id_map) {
+				throw InvalidInputException(
+				    "sequence1 is NULL in '%s' at row %llu. RYpe cannot classify a NULL sequence "
+				    "— filter these rows out (WHERE sequence1 IS NOT NULL) or supply a value.",
+				    options.source_name, static_cast<unsigned long long>(surrogate));
+			}
 			throw InvalidInputException(
 			    "sequence1 is NULL in '%s' at row %llu (%s = %s). RYpe cannot classify a NULL sequence — filter "
 			    "these rows out (WHERE sequence1 IS NOT NULL) or supply a value.",
 			    options.source_name, static_cast<unsigned long long>(surrogate), options.id_column_name,
-			    id_map.ToString(surrogate));
+			    id_map->ToString(surrogate));
 		}
 	}
 
@@ -361,14 +479,16 @@ idx_t RypeInputStream::AppendSlice(ArrowAppender &appender, DataChunk &chunk, id
 	// so nothing is copied here — ArrowAppender copies straight from the scan's
 	// buffers into the Arrow batch. transformed is deliberately not Reset(): every
 	// index in [from, to) of the id vector is written below, and the sequence
-	// columns are re-referenced each call.
+	// columns are re-referenced each call. Reinterpret, not Reference: a filter
+	// stream's sequence may be VARCHAR, whose physical type BLOB shares, and
+	// BuildRypeFilterStream allowed nothing else.
 	auto ids = FlatVector::GetDataMutable<int64_t>(transformed.data[COL_ID]);
 	for (idx_t i = from; i < to; i++) {
 		ids[i] = static_cast<int64_t>(base + (i - from));
 	}
-	transformed.data[COL_SEQUENCE].Reference(chunk.data[COL_SEQUENCE]);
+	transformed.data[COL_SEQUENCE].Reinterpret(chunk.data[source.sequence]);
 	if (options.include_pair_column) {
-		transformed.data[COL_PAIR_SEQUENCE].Reference(chunk.data[COL_PAIR_SEQUENCE]);
+		transformed.data[COL_PAIR_SEQUENCE].Reinterpret(chunk.data[source.pair_sequence]);
 	}
 	transformed.SetChildCardinality(chunk_size);
 
