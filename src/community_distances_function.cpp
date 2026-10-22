@@ -91,8 +91,8 @@ unique_ptr<GlobalTableFunctionState> CommunityDistInitGlobal(ClientContext &cont
 	auto gstate = make_uniq<CommunityDistGlobalState>();
 	gstate->sample_id_type = data.sample_id_type;
 
-	// ReadFeatureTable drops NULL/zero/NaN cells (the sparse feature-table
-	// contract shared with unifrac_distances). A sample whose every value is 0
+	// ReadFeatureTable drops NULL/zero cells and refuses NaN (the sparse
+	// feature-table contract shared with unifrac_distances). A sample whose every value is 0
 	// therefore contributes no rows and is absent from the dictionary below — it
 	// is silently dropped, exactly as unifrac_distances drops it, because the
 	// sparse COO cannot distinguish an all-zero sample from an absent one. (The
