@@ -203,6 +203,7 @@ before trusting it. `test/sql/rype_single_read.test` documents both forms.
 | `ena_upload_reads` | plan scan + per-sample scan | **exposed** |
 | sc: `fit_*`, `cross_validate_*`, `predict`, `predict_proba`, `shap` | counts once, streamed; `fit_*` and `cross_validate_*` also read the metadata once, materialized (one row per sample). Each after a `LIMIT 0` probe at bind | fixed, remedy (1) for the counts; guarded by `test/sql/sc_model_relation_reads.test` |
 | sc: model relation (`predict`, `predict_proba`, `shap`, `feature_importances`, `model_features`) | twice: once at bind for `feature_id_type`, plus `task` where it types the output (all but `feature_importances` and `model_features`); once at execution for the blob with those columns again | fixed by failing loud: execution compares the re-read columns with bind's and refuses a change, guarded by `test/sql/sc_model_relation_reads.test` |
+| `sourcetracker` (feature table via `ReadFeatureTable`, metadata via `ReadWideMetadata`) | once each, at execution | fixed — guarded by the volatile-view cases in `test/sql/sourcetracker.test` |
 | everything else taking a relation by name | unaudited | unknown |
 
 The per-sample family is the highest-value remaining target precisely because the

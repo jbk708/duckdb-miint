@@ -29,11 +29,18 @@ namespace miint {
 class CheckedSeqStreamIn : public klibpp::SeqStreamIn::base_type {
 public:
 	explicit CheckedSeqStreamIn(const std::string &path)
-	    : klibpp::SeqStreamIn::base_type(OpenOrThrow(path), gzread, gzclose) {
+	    : klibpp::SeqStreamIn::base_type(OpenOrThrow(path), gzread, gzclose), path_(path) {
 	}
+
+	// zlib's account of how the input ended, empty if it ended cleanly. A gzip file that is
+	// cut short does not make gzread fail: it returns what it could inflate and then 0, as at
+	// a real end of file, and only gzerror says the data stopped early.
+	std::string EndOfInputError() const;
 
 private:
 	static gzFile OpenOrThrow(const std::string &path);
+
+	std::string path_;
 };
 
 class SequenceReader {
@@ -82,10 +89,35 @@ private:
 	using StreamVar = std::variant<std::unique_ptr<SeqStreamIn>>;
 #endif
 
-	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n);
+	// Where the record parser is in one stream.
+	struct StreamState {
+		uint64_t records_read = 0;
+		// The next header's '>' or '@' when the previous record's sequence lines ended by
+		// consuming it, otherwise 0.
+		char pending_header = 0;
+		// Nothing parsed yet. Text before the first header is skipped for FASTA, which can open
+		// with ';' comments, and is an error for FASTQ.
+		bool at_start = true;
+	};
+
+	enum class ParseResult { RECORD, END, MALFORMED };
+
+	// Parse one record. On MALFORMED, `problem` says what is wrong with it.
+	template <class Stream>
+	static ParseResult parse_record(Stream &stream, klibpp::KSeq &rec, StreamState &state, std::string &problem);
+
+	// Read up to `n` records. Throws, naming `source` and the record, when the stream fails
+	// rather than ends or a record is malformed.
+	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n, const std::string &source, StreamState &state);
 
 	StreamVar sequence1_reader_;
 	std::optional<StreamVar> sequence2_reader_;
+
+	// What each stream is called in errors: its path where there is one.
+	std::string source1_ = "sequence1";
+	std::string source2_ = "sequence2";
+	StreamState state1_;
+	StreamState state2_;
 
 	bool paired_;
 	bool first_read_; // Track if we need to return buffered data

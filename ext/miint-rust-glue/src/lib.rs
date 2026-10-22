@@ -1,7 +1,7 @@
-// Umbrella staticlib for rype + sylph + sc. Cargo treats the upstream crates
-// as rlib dependencies, rustc emits one staticlib that links them through a
-// single Rust std, and their `#[no_mangle] extern "C"` symbols survive into the
-// archive's export table. `extern crate ... as _` forces the linkage without
+// Umbrella staticlib for rype + sylph + sc + st3. Cargo treats the upstream
+// crates as rlib dependencies, rustc emits one staticlib that links them through
+// a single Rust std, and their `#[no_mangle] extern "C"` symbols survive into
+// the archive's export table. `extern crate ... as _` forces the linkage without
 // exposing names. The only code of its own is miint_rust_glue_init below.
 
 extern crate rype as _;
@@ -10,6 +10,9 @@ extern crate rype as _;
 extern crate sylph as _;
 
 extern crate sc_capi as _;
+
+#[cfg(feature = "with-st3")]
+extern crate st3 as _;
 
 /// Seed rayon's global thread pool for a build that cannot spawn threads.
 ///

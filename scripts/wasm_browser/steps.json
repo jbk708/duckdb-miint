@@ -144,5 +144,18 @@
     "name": "fit_threads_1_md5",
     "sql": "SELECT md5(model_blob) FROM m1",
     "expect": "0d0191d3fcb38c7639a95ecfb0fa500b"
+  },
+  {
+    "name": "setup_sourcetracker_counts",
+    "sql": "CREATE TABLE st_counts AS SELECT * FROM (VALUES ('soil1','f1',120),('soil1','f2',100),('soil1','f3',5),('soil2','f1',110),('soil2','f2',130),('soil2','f3',4),('gut1','f1',3),('gut1','f2',2),('gut1','f3',130),('gut1','f4',110),('sink_a','f1',90),('sink_a','f2',80),('sink_a','f3',10),('sink_b','f1',20),('sink_b','f3',60),('sink_b','f4',70)) AS t(sample_id, feature_id, value)"
+  },
+  {
+    "name": "setup_sourcetracker_samples",
+    "sql": "CREATE TABLE st_samples AS SELECT * FROM (VALUES ('soil1','source','soil'),('soil2','source','soil'),('gut1','source','gut'),('sink_a','sink',NULL),('sink_b','sink',NULL)) AS t(sample_id, source_sink, env)"
+  },
+  {
+    "name": "sourcetracker",
+    "sql": "SELECT count(*) || ' rows, md5=' || md5(string_agg(sink_id || ':' || source || ':' || proportion::VARCHAR || ':' || proportion_std::VARCHAR || ':' || map_entries(assignments)::VARCHAR, ';' ORDER BY sink_id, source)) FROM sourcetracker('st_counts', 'st_samples', assignments := true, seed := 42, source_rarefaction_depth := 0, sink_rarefaction_depth := 0)",
+    "expect": "6 rows, md5=1a6a4cf3ea0a75f0073785d9c17265cd"
   }
 ]

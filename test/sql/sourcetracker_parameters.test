@@ -1,0 +1,268 @@
+# name: test/sql/sourcetracker_parameters.test
+# description: every sourcetracker() parameter reaches st3 with its meaning, not only its name
+# group: [sql]
+
+require miint
+
+require-env ST3_AVAILABLE
+
+# ---------------------------------------------------------------------------
+# The parity tests in sourcetracker.test hold most parameters at one value, so
+# a parameter that was dropped, swapped with another, or mapped onto the wrong
+# st3 field would still pass them. Each block here asserts an identity that
+# holds only if the parameter means what docs/source_tracking.md says, plus a
+# control showing the parameter does move the answer, so the identity cannot
+# hold vacuously. The comments name what each block catches.
+#
+# Everything runs on st3's tiny_test fixture with rarefaction off unless the
+# block is about rarefaction, and with a fixed seed: each sink's sampler draws
+# from a stream seeded by (seed, sink position), so runs that differ only in
+# the parameter under test are comparable draw for draw.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE tiny_wide AS SELECT * FROM read_csv('ext/st3/fixtures/tiny_test/table.tsv', delim='\t', header=true);
+
+statement ok
+CREATE TABLE tiny AS UNPIVOT tiny_wide ON COLUMNS(* EXCLUDE (feature_id)) INTO NAME sample_id VALUE value;
+
+statement ok
+CREATE TABLE tiny_meta AS SELECT * FROM read_csv('ext/st3/fixtures/tiny_test/metadata.tsv', delim='\t', header=true);
+
+# ---------------------------------------------------------------------------
+# burnin, delay, draws_per_restart. A chain records its first draw after
+# `burnin` passes over the sink's sequences and one every `delay` passes after
+# that, and recording a draw consumes no randomness. So one chain keeping two
+# draws with burnin 20 and delay 5 records at passes 21 and 26, which are
+# exactly the single draws of chains with burnin 20 and burnin 25: its mean is
+# their average and its per-draw sd (ddof 0) is half their difference.
+# Catches: delay dropped (second draw at pass 22); burnin and delay swapped
+# (draws at 6 and 26); draws_per_restart dropped or taken as restarts (a
+# second chain starts over instead of continuing).
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE burn20 AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', seed := 42,
+    restarts := 1, draws_per_restart := 1, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+CREATE TABLE burn25 AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', seed := 42,
+    restarts := 1, draws_per_restart := 1, burnin := 25, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+CREATE TABLE two_draws AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', seed := 42,
+    restarts := 1, draws_per_restart := 2, burnin := 20, delay := 5,
+    source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+# Control: moving the burn-in moves the draw.
+query I
+SELECT max(abs(a.proportion - b.proportion)) > 0.01 FROM burn20 a JOIN burn25 b USING (sink_id, source);
+----
+true
+
+query III
+SELECT count(*),
+       count(*) FILTER (WHERE abs(t.proportion - (a.proportion + b.proportion) / 2) > 1e-12),
+       count(*) FILTER (WHERE abs(t.proportion_std - abs(a.proportion - b.proportion) / 2) > 1e-12)
+FROM two_draws t JOIN burn20 a USING (sink_id, source) JOIN burn25 b USING (sink_id, source);
+----
+20	0	0
+
+# A single retained draw has no spread.
+query I
+SELECT max(proportion_std) FROM burn20;
+----
+0.0
+
+# The same chain with a different delay but one draw: delay only spaces draws,
+# so it changes nothing here.
+statement ok
+CREATE TABLE burn20_delay5 AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', seed := 42,
+    restarts := 1, draws_per_restart := 1, burnin := 20, delay := 5,
+    source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+query I
+SELECT (SELECT count(*) FROM (SELECT * FROM burn20 EXCEPT ALL SELECT * FROM burn20_delay5))
+     + (SELECT count(*) FROM (SELECT * FROM burn20_delay5 EXCEPT ALL SELECT * FROM burn20));
+----
+0
+
+# ---------------------------------------------------------------------------
+# restarts. A sink's chains run one after another on its stream, so the first
+# chain of a two-restart run is the one-restart run. With one draw per chain,
+# the run's per-draw sd is then exactly |mean - first chain's draw|.
+# Catches: restarts dropped (one chain, sd 0: the control below).
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE two_restarts AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', seed := 42,
+    restarts := 2, draws_per_restart := 1, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+query II
+SELECT count(*) FILTER (WHERE abs(r.proportion_std - abs(r.proportion - a.proportion)) > 1e-12),
+       max(r.proportion_std) > 0.01
+FROM two_restarts r JOIN burn20 a USING (sink_id, source);
+----
+0	true
+
+# ---------------------------------------------------------------------------
+# collapse and alpha1. 'mean' collapse is the per-feature mean of an
+# environment's source samples, floored; 'sum' is the sum. alpha1 is the
+# pseudocount added to every feature of a collapsed environment. When every
+# environment is two identical copies of one sample, the mean is exactly half
+# the sum, and (c/2 + a) / (T/2 + n·a) = (c + 2a) / (T + n·2a): a 'mean' run
+# with alpha1 := a is a 'sum' run with alpha1 := 2a, bit for bit (halving is
+# exact in floating point). The tiny_test sum and mean oracles differ by less
+# than twice the parity tolerance, so the parity tests alone cannot catch the
+# two modes trading places.
+# Catches: collapse ignored or inverted; alpha1 ignored or delivered to another
+# prior.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE twin_meta AS
+SELECT sample_id, source_sink, env FROM tiny_meta WHERE source_sink = 'sink'
+UNION ALL
+SELECT sample_id || copy, 'source', env FROM tiny_meta, (VALUES ('_a'), ('_b')) c(copy)
+WHERE sample_id IN ('s4', 's7', 's8');
+
+statement ok
+CREATE TABLE twin AS
+SELECT t.sample_id, t.feature_id, t.value FROM tiny t JOIN tiny_meta m USING (sample_id) WHERE m.source_sink = 'sink'
+UNION ALL
+SELECT t.sample_id || copy, t.feature_id, t.value FROM tiny t, (VALUES ('_a'), ('_b')) c(copy)
+WHERE t.sample_id IN ('s4', 's7', 's8');
+
+statement ok
+CREATE TABLE mean_a1 AS SELECT * FROM sourcetracker('twin', 'twin_meta', collapse := 'mean', alpha1 := 1.0,
+    seed := 42, restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+CREATE TABLE sum_a2 AS SELECT * FROM sourcetracker('twin', 'twin_meta', collapse := 'sum', alpha1 := 2.0,
+    seed := 42, restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+query I
+SELECT (SELECT count(*) FROM (SELECT * FROM mean_a1 EXCEPT ALL SELECT * FROM sum_a2))
+     + (SELECT count(*) FROM (SELECT * FROM sum_a2 EXCEPT ALL SELECT * FROM mean_a1));
+----
+0
+
+# Controls: with the other half of the pair held fixed, each parameter moves
+# the answer.
+statement ok
+CREATE TABLE sum_a1 AS SELECT * FROM sourcetracker('twin', 'twin_meta', collapse := 'sum', alpha1 := 1.0,
+    seed := 42, restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+CREATE TABLE mean_a2 AS SELECT * FROM sourcetracker('twin', 'twin_meta', collapse := 'mean', alpha1 := 2.0,
+    seed := 42, restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+query II
+SELECT (SELECT count(*) FROM (SELECT * FROM mean_a1 EXCEPT ALL SELECT * FROM sum_a1)) > 0,
+       (SELECT count(*) FROM (SELECT * FROM mean_a1 EXCEPT ALL SELECT * FROM mean_a2)) > 0;
+----
+true	true
+
+# ---------------------------------------------------------------------------
+# alpha2 and beta. Both act on every sequence's weight (alpha2 on Unknown's
+# feature distribution, beta on every environment's count), and no identity
+# separates them, so this block only shows that each reaches the sampler: it
+# catches either being dropped, not the two trading places. That swap is
+# caught by the parity tests in sourcetracker.test, which run at the defaults
+# (alpha2 0.1, beta 10). alpha1 cannot trade places with either unnoticed:
+# the identity above fails.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE base AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', seed := 42,
+    restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+CREATE TABLE alpha2_moved AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', alpha2 := 0.5, seed := 42,
+    restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+statement ok
+CREATE TABLE beta_moved AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', beta := 1.0, seed := 42,
+    restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+
+query II
+SELECT (SELECT count(*) FROM (SELECT * FROM base EXCEPT ALL SELECT * FROM alpha2_moved)) > 0,
+       (SELECT count(*) FROM (SELECT * FROM base EXCEPT ALL SELECT * FROM beta_moved)) > 0;
+----
+true	true
+
+# ---------------------------------------------------------------------------
+# source_rarefaction_depth and sink_rarefaction_depth. Every one of a sink's
+# sequences is assigned somewhere in every draw, so a sink's assignment maps
+# sum to its depth as the sampler saw it: exactly the sink depth when sinks
+# are rarefied, the sink's full depth (1900 to 2020 here) when only the
+# collapsed sources are.
+# Catches: either depth dropped, or the two swapped.
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE tiny_depth AS SELECT sample_id, sum(value) AS depth FROM tiny GROUP BY sample_id;
+
+statement ok
+CREATE TABLE sinks_rarefied AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', assignments := true, seed := 42,
+    restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 1000);
+
+statement ok
+CREATE TABLE sources_rarefied AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', assignments := true, seed := 42,
+    restarts := 2, burnin := 20, source_rarefaction_depth := 1000, sink_rarefaction_depth := 0);
+
+query I
+SELECT count(*) FROM (
+  SELECT sink_id, sum(list_sum(map_values(assignments))) AS mass FROM sinks_rarefied GROUP BY sink_id
+) WHERE abs(mass - 1000) > 1e-6;
+----
+0
+
+query I
+SELECT count(*) FROM (
+  SELECT sink_id, sum(list_sum(map_values(assignments))) AS mass FROM sources_rarefied GROUP BY sink_id
+) m JOIN tiny_depth d ON d.sample_id = m.sink_id WHERE abs(m.mass - d.depth) > 1e-6;
+----
+0
+
+# Control: rarefying only the sources still changes the answer (base is the
+# same call with both depths 0).
+query I
+SELECT (SELECT count(*) FROM (SELECT sink_id, source, proportion FROM sources_rarefied
+                              EXCEPT ALL SELECT sink_id, source, proportion FROM base)) > 0;
+----
+true
+
+# ---------------------------------------------------------------------------
+# with_replacement. Without replacement, subsampling a sink to its own depth
+# keeps every sequence, so the table, and with it the answer, is unchanged;
+# rarefaction draws from its own stream, so the sampler's draws are unchanged
+# too. With replacement, the same depth is a multinomial redraw, which changes
+# the table. s0 is the shallowest sink, at exactly 1900 sequences.
+# Catches: with_replacement dropped (the first query), or inverted (the
+# second).
+# ---------------------------------------------------------------------------
+
+statement ok
+CREATE TABLE at_s0_depth AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', seed := 42,
+    restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 1900);
+
+statement ok
+CREATE TABLE at_s0_depth_wr AS SELECT * FROM sourcetracker('tiny', 'tiny_meta', with_replacement := true, seed := 42,
+    restarts := 2, burnin := 20, source_rarefaction_depth := 0, sink_rarefaction_depth := 1900);
+
+query I
+SELECT (SELECT count(*) FROM (SELECT * FROM at_s0_depth_wr WHERE sink_id = 's0'
+                              EXCEPT ALL SELECT * FROM base WHERE sink_id = 's0')) > 0;
+----
+true
+
+query II
+SELECT (SELECT count(*) FROM (SELECT * FROM at_s0_depth WHERE sink_id = 's0'
+                              EXCEPT ALL SELECT * FROM base WHERE sink_id = 's0'))
+     + (SELECT count(*) FROM (SELECT * FROM base WHERE sink_id = 's0'
+                              EXCEPT ALL SELECT * FROM at_s0_depth WHERE sink_id = 's0')),
+       (SELECT count(*) FROM (SELECT * FROM at_s0_depth WHERE sink_id = 's1'
+                              EXCEPT ALL SELECT * FROM base WHERE sink_id = 's1')) > 0;
+----
+0	true

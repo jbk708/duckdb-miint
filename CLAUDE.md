@@ -144,7 +144,7 @@ SQL tests use `require-env VAR_NAME` (after `require miint`) to skip gracefully 
 
 `run_tests.sh` is the authoritative source for what gets detected and exported. It covers these kinds of guards:
 - **Runtime binaries** detected via `command -v` (e.g., `ASPERA_AVAILABLE`, `MASSQL_PYTHON_AVAILABLE`, `GPL_BOUNDARY_AVAILABLE` for the FastTree process-isolation host)
-- **Compile-time features** detected by querying the built extension (e.g., `HDF5_AVAILABLE`, `VSEARCH_AVAILABLE`, `MAFFT_AVAILABLE` — each checks for a registered function or library entry)
+- **Compile-time features** detected by querying the built extension (e.g., `HDF5_AVAILABLE`, `VSEARCH_AVAILABLE`, `MAFFT_AVAILABLE`, `ST3_AVAILABLE` — each checks for a registered function or library entry)
 - **Live network services**, exported when a probe gets an answer (e.g., `ENA_AVAILABLE`, `NCBI_AVAILABLE`, `MIINT_TAXDUMP_REMOTE`). `BLAST_LIVE_AVAILABLE` is also opt-in (`MIINT_BLAST_LIVE_TEST=1`), because NCBI's queue can outlast the run.
 - **Downloaded / served test data** (e.g., `MIINT_HTTPS_TEST_URL`, `MASSQL_TEST_DATA`, `MASSQL_GNPS_DATA`, `MZXML_REAL_DATA`)
 - **An oracle pinned to a submodule commit** (`SORTMERNA_REAL_ORACLE`) — exported only when the `ext/sortmerna` commit recorded with the committed oracle matches the submodule's HEAD; regenerate with `MIINT_SORTMERNA_REAL_DATA=1`. Every other committed golden fails its parity test when stale instead of skipping (`docs/testing.md`, "Guards and skipped tests").

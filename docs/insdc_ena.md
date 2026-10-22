@@ -252,14 +252,18 @@ FROM read_ena_sequences('ERR1074767', include_filepath => true) LIMIT 5;
   so does a single-run scan whose run fails mid-stream, rather than return its
   partial rows. A lateral call skips a failed run with a warning, even when
   every run fails. On
-  a mid-stream failure (connection dropped after some rows have been emitted),
+  a mid-stream failure (a connection dropped after some rows have been emitted,
+  or a malformed record or damaged gzip data found after the run has opened),
   the run is NOT retried — re-reading from scratch would emit the same reads
   again with duplicate `sequence_index` values downstream. Instead, the run is
   recorded as skipped, a loud warning reports the run accession and the
   number of reads emitted before the failure, and the scan continues with
   other runs. If you see such a warning, re-run the query (the metadata
   lookup is cached) or use a smaller per-run selection to recover the
-  truncated data.
+  truncated data. A malformed record or damaged data in the file itself
+  fails the same way on every re-run. Damage the reader meets while the run
+  opens, such as a malformed first record, is an open failure instead: it is
+  retried once, and the retry fails the same way.
 - **md5 verification** (see `verify_md5` above, on by default): verification
   runs only after a file is read to its true end, so a mismatch between ENA's
   reported `fastq_md5` and the downloaded bytes means exactly one thing: the

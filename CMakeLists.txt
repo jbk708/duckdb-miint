@@ -143,6 +143,7 @@ option(MIINT_ENABLE_MAFFT "Build with MAFFT multiple sequence alignment support"
 option(MIINT_ENABLE_ABPOA "Build with abPOA partial-order alignment support" ON)
 option(MIINT_ENABLE_SORTMERNA "Build with SortMeRNA rRNA alignment support" ON)
 option(MIINT_ENABLE_SYLPH "Build with sylph FracMinHash relative-abundance profiling" ON)
+option(MIINT_ENABLE_ST3 "Build with SourceTracker3 (st3) microbial source attribution" ON)
 option(MIINT_ENABLE_GPL_BOUNDARY "Build with gpl-boundary subsystem (process pipes + Arrow IPC over POSIX shm)" ON)
 option(MIINT_ENABLE_UNIFRAC "Build with UniFrac (PCoA / PERMANOVA / Faith PD) support" ON)
 option(MIINT_ENABLE_KREPP "Build with krepp phylogenetic placement support" ON)
@@ -490,7 +491,14 @@ if(NOT SC_GIT_VERSION)
     set(SC_GIT_VERSION "unknown")
 endif()
 
-message(STATUS "Submodule versions: minimap2=${MINIMAP2_GIT_VERSION} WFA2=${WFA2_GIT_VERSION} rype=${RYPE_GIT_VERSION} vsearch=${VSEARCH_GIT_VERSION} mafft=${MAFFT_GIT_VERSION} abpoa=${ABPOA_GIT_VERSION} sylph=${SYLPH_GIT_VERSION} unifrac=${UNIFRAC_GIT_VERSION} skbb=${SKBB_GIT_VERSION} krepp=${KREPP_GIT_VERSION} sc=${SC_GIT_VERSION}")
+execute_process(COMMAND git describe --tags --dirty --always
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/ext/st3
+    OUTPUT_VARIABLE ST3_GIT_VERSION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT ST3_GIT_VERSION)
+    set(ST3_GIT_VERSION "unknown")
+endif()
+
+message(STATUS "Submodule versions: minimap2=${MINIMAP2_GIT_VERSION} WFA2=${WFA2_GIT_VERSION} rype=${RYPE_GIT_VERSION} vsearch=${VSEARCH_GIT_VERSION} mafft=${MAFFT_GIT_VERSION} abpoa=${ABPOA_GIT_VERSION} sylph=${SYLPH_GIT_VERSION} unifrac=${UNIFRAC_GIT_VERSION} skbb=${SKBB_GIT_VERSION} krepp=${KREPP_GIT_VERSION} sc=${SC_GIT_VERSION} st3=${ST3_GIT_VERSION}")
 
 # Build htslib from release tarball
 # Configure with zstd support if available (htslib autodetects via pkg-config)
@@ -1099,16 +1107,16 @@ if(MIINT_ENABLE_SORTMERNA)
     add_dependencies(sortmerna sortmerna_bundle)
 endif()
 
-# rype, sylph and sc are independent Rust crates; each would emit a staticlib
+# rype, sylph, sc and st3 are independent Rust crates; each emits a staticlib
 # that statically embeds its own copy of the Rust std runtime
 # (rust_eh_personality, EMPTY_PANIC, ...). Linking them as separate .a archives
 # produces duplicate-symbol errors on every supported linker (GNU ld, Apple
 # ld-prime, Mach-O classic, lld) — see the Rust Reference (Linkage chapter).
 #
-# Fix: an umbrella `miint_rust_glue` crate (ext/miint-rust-glue/) lists all
-# three as path dependencies, cargo compiles them through a shared std, and the
+# Fix: an umbrella `miint_rust_glue` crate (ext/miint-rust-glue/) lists them
+# as path dependencies, cargo compiles them through a shared std, and the
 # resulting libmiint_rust_glue.a contains a single deduplicated copy of std
-# plus the #[no_mangle] C ABI surface of each crate. This is the canonical
+# plus the #[no_mangle] C ABI surface from every crate. This is the canonical
 # pattern (Mozilla's "rul" super-crate for Firefox/Gecko).
 find_program(CARGO cargo REQUIRED)
 message(STATUS "Found cargo: ${CARGO}")
@@ -1223,13 +1231,16 @@ endif()
 
 # Feature selection: rype's fastx (needletail) is off on WASM and Windows
 # (matches the original rype_build wiring). sylph is off on WASM/Windows
-# (matches MIINT_ENABLE_SYLPH gating).
+# (matches MIINT_ENABLE_SYLPH gating). st3 follows MIINT_ENABLE_ST3 everywhere.
 set(GLUE_FEATURES "")
 if(NOT EMSCRIPTEN AND NOT WIN32)
     list(APPEND GLUE_FEATURES "rype-fastx")
 endif()
 if(MIINT_ENABLE_SYLPH)
     list(APPEND GLUE_FEATURES "with-sylph")
+endif()
+if(MIINT_ENABLE_ST3)
+    list(APPEND GLUE_FEATURES "with-st3")
 endif()
 string(REPLACE ";" "," GLUE_FEATURES_CSV "${GLUE_FEATURES}")
 if(GLUE_FEATURES_CSV)
@@ -1245,9 +1256,9 @@ set(GLUE_RUSTFLAGS_LIST "")
 
 if(EMSCRIPTEN)
     # PIC for WASM side modules. The umbrella itself is a staticlib (no link
-    # step), but rype's [lib] declares crate-type = ["cdylib", "rlib"] and
+    # step), but rype's and st3-capi's [lib] declare a cdylib crate type, and
     # cargo unconditionally builds the cdylib for the wasm32-unknown-emscripten
-    # path-dep. -sSIDE_MODULE=2 tells wasm-ld that rype.wasm is a side module
+    # path-deps. -sSIDE_MODULE=2 tells wasm-ld that rype.wasm is a side module
     # rather than a standalone wasm — so no `main` symbol is required. We
     # never actually link rype.wasm into anything; only libmiint_rust_glue.a
     # goes into the extension. This just unblocks the cargo build.
@@ -1268,8 +1279,8 @@ endif()
 if(WIN32 AND MINGW)
     # rtools42's MinGW64 doesn't ship libgcc_eh.a (modern GCC folded EH into
     # libgcc), but rustc's windows-gnu linker spec still passes -lgcc_eh. Same
-    # situation as the WASM case above — cargo builds rype's cdylib
-    # (rype.dll) even though we never link it. Stub an empty archive in a -L
+    # situation as the WASM case above — cargo builds rype's and st3-capi's
+    # cdylibs even though we never link them. Stub an empty archive in a -L
     # search path so the cdylib link step finds something and proceeds.
     set(GLUE_MINGW_STUB_DIR ${CMAKE_CURRENT_BINARY_DIR}/mingw_libgcc_eh_stub)
     file(MAKE_DIRECTORY ${GLUE_MINGW_STUB_DIR})
@@ -1312,8 +1323,8 @@ ExternalProject_Add(
     BUILD_IN_SOURCE 0
     # Run the cargo build on EVERY build, deferring change detection to cargo's own
     # fingerprinting. ExternalProject does not track SOURCE_DIR (or path-dependency,
-    # e.g. ext/rype / ext/sylph) file contents, so without this an incremental build
-    # after a submodule bump or a local rype/sylph edit would silently relink the
+    # e.g. ext/rype / ext/sylph / ext/st3) file contents, so without this an incremental
+    # build after a submodule bump or a local crate edit would silently relink the
     # STALE libmiint_rust_glue.a — the dev gets a binary that doesn't match their
     # source and has no way to notice. Cargo's no-op when nothing changed is ~1-3s.
     # (Clean builds — CI's fresh ubuntu-latest runners, or `make clean` locally —
@@ -1323,8 +1334,8 @@ ExternalProject_Add(
 )
 
 # `rype` is the sole IMPORTED STATIC target for the merged archive. The
-# archive contains the rype, sylph and sc symbols, so linking `rype` provides
-# all three; there is no separate `sylph` or `sc` link target.
+# archive contains the rype, sylph, sc and st3 symbols, so linking `rype`
+# provides everything — there is no separate `sylph`, `sc` or `st3` link target.
 #
 # Why no second target: declaring an additional IMPORTED STATIC target
 # pointing at the same archive caused libmiint_rust_glue.a to appear twice on
@@ -1524,6 +1535,9 @@ include_directories(src/include third_party/microtar ext ext/WFA2-lib ${CMAKE_CU
                     ${SC_HEADER_DIR})
 if(MIINT_ENABLE_SYLPH)
     include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ext/sylph)
+endif()
+if(MIINT_ENABLE_ST3)
+    include_directories(${CMAKE_CURRENT_SOURCE_DIR}/ext/st3/crates/st3-capi/include)
 endif()
 if(MIINT_ENABLE_MAFFT)
     include_directories(ext/mafft/core)
@@ -1898,6 +1912,9 @@ endif()
 if(MIINT_ENABLE_SYLPH)
     list(APPEND EXTENSION_SOURCES src/SylphDatabase.cpp src/sylph_profile.cpp src/sylph_index_create.cpp)
 endif()
+if(MIINT_ENABLE_ST3)
+    list(APPEND EXTENSION_SOURCES src/sourcetracker_dataset.cpp src/sourcetracker_function.cpp)
+endif()
 if(MIINT_ENABLE_CURL)
     list(APPEND EXTENSION_SOURCES src/curl_send.cpp)
 endif()
@@ -2020,6 +2037,10 @@ endif()
 if(MIINT_ENABLE_SYLPH)
     target_compile_definitions(${EXTENSION_NAME} PRIVATE MIINT_HAS_SYLPH
         SYLPH_GIT_VERSION="${SYLPH_GIT_VERSION}")
+endif()
+if(MIINT_ENABLE_ST3)
+    target_compile_definitions(${EXTENSION_NAME} PRIVATE MIINT_HAS_ST3
+        ST3_GIT_VERSION="${ST3_GIT_VERSION}")
 endif()
 if(MIINT_ENABLE_CURL)
     target_compile_definitions(${EXTENSION_NAME} PRIVATE MIINT_HAS_CURL)
@@ -2181,6 +2202,10 @@ endif()
 if(MIINT_ENABLE_SYLPH)
     target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE MIINT_HAS_SYLPH
         SYLPH_GIT_VERSION="${SYLPH_GIT_VERSION}")
+endif()
+if(MIINT_ENABLE_ST3)
+    target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE MIINT_HAS_ST3
+        ST3_GIT_VERSION="${ST3_GIT_VERSION}")
 endif()
 if(MIINT_ENABLE_CURL)
     target_compile_definitions(${LOADABLE_EXTENSION_NAME} PRIVATE MIINT_HAS_CURL)
@@ -2454,6 +2479,14 @@ if(MIINT_ENABLE_SYLPH)
         src/SylphDatabase.cpp
         test/cpp/test_SylphDatabase.cpp)
 endif()
+if(MIINT_ENABLE_ST3)
+    # The dataset layer is DuckDB-free by design (see sourcetracker_dataset.hpp),
+    # so it is unit-tested here; the SQL layer is covered by the SQL tests.
+    list(APPEND TEST_SOURCES
+        src/sourcetracker_dataset.cpp
+        test/cpp/test_St3.cpp
+        test/cpp/test_SourcetrackerDataset.cpp)
+endif()
 if(MIINT_ENABLE_CURL)
     list(APPEND TEST_SOURCES src/curl_send.cpp test/cpp/test_curl_send.cpp)
 endif()
@@ -2536,11 +2569,19 @@ if(MIINT_ENABLE_KREPP)
         target_link_libraries(tests miint_openmp)
     endif()
 endif()
-if(MIINT_ENABLE_SYLPH)
-    # Link rype (the umbrella archive), which transitively provides sylph
-    # symbols — see comment near the rype IMPORTED target declaration.
+if(MIINT_ENABLE_SYLPH OR MIINT_ENABLE_ST3)
+    # Link rype (the umbrella archive), which transitively provides the sylph
+    # and st3 symbols — see comment near the rype IMPORTED target declaration.
+    # Under Emscripten this works because the archive uses the C++ side's
+    # exception model (MIINT_WASM_NATIVE_EH): JavaScript-ABI unwinding symbols
+    # cannot link into a -fwasm-exceptions main module.
     target_link_libraries(tests rype)
+endif()
+if(MIINT_ENABLE_SYLPH)
     target_compile_definitions(tests PRIVATE MIINT_HAS_SYLPH)
+endif()
+if(MIINT_ENABLE_ST3)
+    target_compile_definitions(tests PRIVATE MIINT_HAS_ST3)
 endif()
 if(MIINT_ENABLE_GPL_BOUNDARY)
     target_sources(tests PRIVATE $<TARGET_OBJECTS:miint_nanoarrow_ipc>)

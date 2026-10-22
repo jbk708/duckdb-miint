@@ -1,0 +1,51 @@
+# name: test/sql/cte_relation_name_guard_sourcetracker.test
+# description: CTE relation-name guard for functions built with st3 (MIINT_HAS_ST3)
+# group: [sql]
+
+#
+# The st3 (MIINT_HAS_ST3) half of test/sql/cte_relation_name_guard.test, split out only
+# because these functions are not registered without it. See that file for
+# why a CTE passed by name must be rejected.
+#
+# Covers: sourcetracker
+#
+
+require miint
+
+require-env ST3_AVAILABLE
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM sourcetracker('c', 'nope');
+----
+sourcetracker: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM sourcetracker('nope', 'c');
+----
+sourcetracker: 'c' is a common table expression
+
+# Failure mode 2 from the main file, the one that answers wrongly: a CTE
+# shadowing a real table of the same name. Without the guard this reads TABLE
+# tiny, all five sinks, and returns a full answer for data the query did not
+# name.
+
+statement ok
+CREATE TABLE tiny_wide AS SELECT * FROM read_csv('ext/st3/fixtures/tiny_test/table.tsv', delim='\t', header=true);
+
+statement ok
+CREATE TABLE tiny AS UNPIVOT tiny_wide ON COLUMNS(* EXCLUDE (feature_id)) INTO NAME sample_id VALUE value;
+
+statement ok
+CREATE TABLE tiny_meta AS SELECT * FROM read_csv('ext/st3/fixtures/tiny_test/metadata.tsv', delim='\t', header=true);
+
+statement error
+WITH tiny AS (SELECT * FROM tiny WHERE sample_id <> 's0')
+SELECT * FROM sourcetracker('tiny', 'tiny_meta', source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+----
+sourcetracker: 'tiny' is a common table expression
+
+statement error
+WITH tiny_meta AS (SELECT * FROM tiny_meta WHERE sample_id <> 's0')
+SELECT * FROM sourcetracker('tiny', 'tiny_meta', source_rarefaction_depth := 0, sink_rarefaction_depth := 0);
+----
+sourcetracker: 'tiny_meta' is a common table expression

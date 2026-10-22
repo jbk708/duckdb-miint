@@ -168,8 +168,8 @@ SELECT * FROM mmvec_fit('ok_x', 'y_negative');
 ----
 mmvec models counts
 
-# An infinity survives the reader (only NULL and NaN are dropped as
-# "not stored"), so the core is what rejects it.
+# An infinity survives the reader (NULL is dropped as "not stored" and NaN
+# refused, but infinities pass), so the core is what rejects it.
 statement ok
 CREATE TABLE x_inf AS
 SELECT * FROM (VALUES ('s1','xa',1.0),('s1','xb',CAST('inf' AS DOUBLE)),('s2','xa',3.0),('s2','xb',4.0))
