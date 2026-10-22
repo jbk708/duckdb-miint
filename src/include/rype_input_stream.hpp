@@ -50,6 +50,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/query_result.hpp"
 
+#include <atomic>
 #include <string>
 
 namespace duckdb {
@@ -245,6 +246,12 @@ public:
 	//! teardown. Idempotent.
 	void ReleaseScan();
 
+	//! Make every later get_next fail, so a RYpe call reading the stream on
+	//! another thread stops at its next batch. Safe to call from any thread.
+	void Abort() {
+		aborted = true;
+	}
+
 private:
 	static int StreamGetSchema(ArrowArrayStream *stream, ArrowSchema *out);
 	static int StreamGetNext(ArrowArrayStream *stream, ArrowArray *out);
@@ -304,6 +311,8 @@ private:
 	idx_t appender_capacity;
 
 	ErrorData last_error;
+	//! Set by Abort, from any thread.
+	std::atomic<bool> aborted {false};
 };
 
 //! Start the single scan of the caller's relation and wrap it in a stream.

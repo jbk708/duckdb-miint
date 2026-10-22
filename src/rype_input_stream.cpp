@@ -336,6 +336,9 @@ RypeInputStream::Sizing RypeInputStream::SampleSizing(size_t fallback_read_lengt
 
 void RypeInputStream::FetchBatch(ArrowArray *out) {
 	out->release = nullptr;
+	if (aborted) {
+		throw InterruptException();
+	}
 
 	// The released-stream guard in StreamGetNext already covers a well-behaved
 	// consumer; this keeps a pull after ReleaseScan a clean end-of-stream rather

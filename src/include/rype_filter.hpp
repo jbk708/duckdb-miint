@@ -25,6 +25,7 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 
 #include <memory>
 #include <string>
@@ -48,40 +49,36 @@ public:
 		idx_t read_id_column = DConstants::INVALID_INDEX;
 	};
 
-	struct GlobalState : public GlobalTableFunctionState {
-		RypeIndex *index = nullptr;
-		//! The connection the scan runs on. The stream's streaming result points
-		//! into its context, so it outlives input_stream.
-		unique_ptr<Connection> input_connection;
-		unique_ptr<RypeInputStream> input_stream;
-		double threshold = 0.1;
-		idx_t group_rows = 0;
-		//! Set when minimap2 runs, which is when the reads are short. One aligner, as
-		//! there is one thread.
-		std::shared_ptr<miint::SharedMinimap2Index> minimap2_index;
-		unique_ptr<miint::Minimap2Aligner> aligner;
+	//! What DuckDB's threads and the background jobs share; see rype_filter.cpp.
+	struct Schedule;
 
-		//! The group being emitted: its runs, the next run to emit, the Arrow id of
-		//! its first row, and which of its rows RYpe matched (by id - group_first_id).
-		vector<RypeHeldRows> runs;
-		idx_t next_run = 0;
-		idx_t group_first_id = 0;
-		vector<bool> matched;
-		//! The Arrow id the next group starts at: the rows sent so far.
-		idx_t next_first_id = 0;
-		bool done = false;
+	struct GlobalState : public GlobalTableFunctionState {
+		//! The jobs hold references of their own.
+		shared_ptr<Schedule> schedule;
+		//! Runs the jobs on DuckDB's async pool. Null when that pool has no threads:
+		//! the jobs then run on the DuckDB thread that finds them due.
+		unique_ptr<TaskExecutor> executor;
+		idx_t max_threads = 1;
 
 		idx_t MaxThreads() const override {
-			return 1;
+			return max_threads;
 		}
 
-		~GlobalState();
+		~GlobalState() override;
+	};
+
+	struct LocalState : public LocalTableFunctionState {
+		//! Set when minimap2 runs; attached to the index once it has loaded.
+		unique_ptr<miint::Minimap2Aligner> aligner;
+		bool attached = false;
 	};
 
 	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,
 	                                     vector<LogicalType> &return_types, vector<Identifier> &names);
 
 	static unique_ptr<GlobalTableFunctionState> InitGlobal(ClientContext &context, TableFunctionInitInput &input);
+	static unique_ptr<LocalTableFunctionState> InitLocal(ExecutionContext &context, TableFunctionInitInput &input,
+	                                                     GlobalTableFunctionState *global_state);
 
 	static void Execute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output);
 

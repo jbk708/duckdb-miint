@@ -2815,7 +2815,10 @@ target_compile_definitions(tests PRIVATE HAVE_KALLOC)
 # binary of their own, linked the way DuckDB links its unittest runner, and only
 # where DuckDB builds that runner (not in the WASM builds, for one).
 if(BUILD_UNITTESTS)
-  add_executable(tests_duckdb test/cpp/test_RypeInputStream.cpp)
+  add_executable(
+    tests_duckdb
+    test/cpp/test_RypeInputStream.cpp test/cpp/test_RypeFilterParallel.cpp
+    test/cpp/test_RypeFilterSchedule.cpp)
   target_link_libraries(tests_duckdb Catch2::Catch2WithMain duckdb_static)
   link_extension_libraries(tests_duckdb "")
 endif()
