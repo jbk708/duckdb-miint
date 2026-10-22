@@ -10,7 +10,7 @@
 using namespace duckdb::miint::gpl_boundary;
 
 // =============================================================================
-// Cycle 1.1 — Find gpl-boundary on PATH
+// Find gpl-boundary on PATH
 // =============================================================================
 //
 // Contract: returns the absolute path when the named binary is found on PATH,
@@ -21,7 +21,8 @@ using namespace duckdb::miint::gpl_boundary;
 // What we DO assert in both branches: the path-discovery function does not
 // throw, does not deadlock, and returns a sensible value. That is enough to
 // prove the fork+pipe+exec plumbing is right; correctness against a real
-// gpl-boundary daemon is exercised in Phase 4 with require-env GPL_BOUNDARY_AVAILABLE.
+// gpl-boundary daemon is exercised by the SQL tests guarded by
+// require-env GPL_BOUNDARY_AVAILABLE.
 
 TEST_CASE("FindGplBoundary returns absolute path when on PATH", "[gpl-boundary][process]") {
 	const std::string result = FindGplBoundary();
@@ -70,7 +71,7 @@ TEST_CASE("FindExecutableInPath returns empty for a missing binary", "[gpl-bound
 }
 
 // =============================================================================
-// Cycle 1.1b — Cache-dir lookup + lookup priority for FindGplBoundary
+// Cache-dir lookup + lookup priority for FindGplBoundary
 // =============================================================================
 //
 // `install_gpl_boundary()` deposits binaries into miint's cache dir
@@ -200,7 +201,7 @@ TEST_CASE("FindGplBoundary falls back to PATH when cache empty", "[gpl-boundary]
 }
 
 // =============================================================================
-// Cycle 1.2 — Spawn child + bidirectional pipes
+// Spawn child + bidirectional pipes
 // =============================================================================
 //
 // We need a long-lived NDJSON daemon, but the spawn primitive itself is
@@ -325,7 +326,7 @@ TEST_CASE("ChildProcess fails clearly when the binary does not exist", "[gpl-bou
 }
 
 // =============================================================================
-// Cycle 1.2b — ReapAndDescribe: signal-decoded termination diagnostics
+// ReapAndDescribe: signal-decoded termination diagnostics
 // =============================================================================
 //
 // Session::Submit's EPIPE/EOF paths use ReapAndDescribe to turn a bare "Broken
@@ -373,7 +374,7 @@ TEST_CASE("ReapAndDescribe is idempotent and leaves Wait consistent", "[gpl-boun
 }
 
 // =============================================================================
-// Cycle 1.2 — gpl-boundary --version (skip if absent)
+// gpl-boundary --version (skip if absent)
 // =============================================================================
 
 TEST_CASE("ChildProcess can spawn gpl-boundary --version", "[gpl-boundary][process][!mayfail]") {
@@ -392,7 +393,7 @@ TEST_CASE("ChildProcess can spawn gpl-boundary --version", "[gpl-boundary][proce
 }
 
 // =============================================================================
-// Cycle 1.3 — Line-delimited JSON I/O
+// Line-delimited JSON I/O
 // =============================================================================
 //
 // gpl-boundary's protocol is NDJSON: one JSON object per line on stdin/stdout.
