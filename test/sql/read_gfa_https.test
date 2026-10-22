@@ -2,8 +2,8 @@
 # description: Test read_gfa from HTTP URL
 # group: [sql]
 
-# NOTE: Skipped in CI because httpfs is disabled at build time.
-# Active coverage is in test/shell/read_https.sh (uses LOAD httpfs at runtime).
+# `make test` skips this file because httpfs is not linked into unittest;
+# run_tests.sh runs it in its httpfs pass.
 
 require miint
 
@@ -13,6 +13,6 @@ require-env MIINT_HTTPS_TEST_URL
 
 # GFA via HTTP
 query I
-SELECT COUNT(*) FROM read_gfa(getenv('MIINT_HTTPS_TEST_URL') || '/gfa/spec_example.gfa');
+SELECT COUNT(*) FROM read_gfa('${MIINT_HTTPS_TEST_URL}/gfa/spec_example.gfa');
 ----
 10

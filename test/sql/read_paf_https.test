@@ -2,8 +2,8 @@
 # description: Test read_paf from HTTP URL
 # group: [sql]
 
-# NOTE: Skipped in CI because httpfs is disabled at build time.
-# Active coverage is in test/shell/read_https.sh (uses LOAD httpfs at runtime).
+# `make test` skips this file because httpfs is not linked into unittest;
+# run_tests.sh runs it in its httpfs pass.
 
 require miint
 
@@ -13,12 +13,12 @@ require-env MIINT_HTTPS_TEST_URL
 
 # PAF via HTTP
 query I
-SELECT COUNT(*) FROM read_paf(getenv('MIINT_HTTPS_TEST_URL') || '/paf/k12_minimap2.paf');
+SELECT COUNT(*) FROM read_paf('${MIINT_HTTPS_TEST_URL}/paf/k12_minimap2.paf');
 ----
 7
 
 # Gzipped PAF via HTTP
 query I
-SELECT COUNT(*) FROM read_paf(getenv('MIINT_HTTPS_TEST_URL') || '/paf/k12_minimap2.paf.gz');
+SELECT COUNT(*) FROM read_paf('${MIINT_HTTPS_TEST_URL}/paf/k12_minimap2.paf.gz');
 ----
 7
