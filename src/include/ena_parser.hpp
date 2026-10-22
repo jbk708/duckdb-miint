@@ -60,8 +60,8 @@ public:
 
 	// Helpers
 	// The download URLs in a ';'-separated *_ftp field: an HTTPS URL for each of
-	// ENA's entries, which carry no scheme or ftp://, and an entry that names
-	// http:// or https:// (a mock Portal's) as given.
+	// ENA's entries, which carry no scheme or start with ftp://, and an entry
+	// that names http:// or https:// (a mock Portal's) as given.
 	static std::vector<std::string> FTPtoHTTPS(const std::string &ftp_field);
 	static std::string DefaultFields(const std::string &result_type);
 

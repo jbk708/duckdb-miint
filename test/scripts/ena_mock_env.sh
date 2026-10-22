@@ -26,6 +26,7 @@ start_ena_mock() {
         cat "$boot" >&2
         rm -f "$boot"
         kill "$ENA_MOCK_PID" 2>/dev/null || true
+        ENA_MOCK_PID=""
         return 1
     fi
     rm -f "$boot"

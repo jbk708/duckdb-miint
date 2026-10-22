@@ -39,7 +39,7 @@ FROM read_ena_sequences('ERR1074767', include_filepath => true);
 ----
 true
 
-# A list resolves in one batched search, and each run keeps its own reads.
+# Each run in a list is read, under its own accession.
 query II
 SELECT run_accession, count(*)
 FROM read_ena_sequences(['ERR1074767', 'ERR9999999'], verify_md5 => false)
@@ -48,7 +48,7 @@ GROUP BY ALL ORDER BY ALL;
 ERR1074767	20939
 ERR9999999	20939
 
-# A correlated call takes the in-out path, which resolves each outer row's run.
+# A correlated call takes the in-out path, and reads the run once per outer row.
 query II
 SELECT r.run_accession, count(*)
 FROM (VALUES ('ERR1074767'), ('ERR1074767')) r(run_accession),
