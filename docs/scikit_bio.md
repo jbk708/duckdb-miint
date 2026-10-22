@@ -48,7 +48,7 @@ Find a working skb-arrow, or install the release MIINT is tested with (skb-arrow
 
 ## How a call runs
 
-- **One skb-arrow per query.** A query calling `skb_mantel` or `skb_ancombc` starts its own skb-arrow and stops it when the query ends. Starting takes 0.5–1 s (Python and scikit-bio importing); `skb_mantel` then compiles its numba kernel, about 0.3 s more. `EXPLAIN` starts nothing.
+- **One skb-arrow per query.** A query calling a scikit-bio method starts its own skb-arrow and stops it when the query ends. Starting takes 0.5–1 s (Python and scikit-bio importing); `skb_mantel` then compiles its numba kernel, about 0.3 s more. `EXPLAIN` starts nothing.
 - **Data travels as temporary files** in a private directory, created for the query and removed after it:
   - On Linux, the directory goes in `/dev/shm`, which is memory, so nothing touches disk. It needs room for the inputs and outputs.
   - On macOS, it goes in `$TMPDIR`.

@@ -416,7 +416,7 @@ SELECT timestamp, message FROM miint_warnings();
 
 Some capabilities are provided by an external, GPL-licensed helper binary (`gpl-boundary`, which embeds FastTree and bowtie2) that miint keeps at arm's length to stay BSD-clean. These two functions let you probe for and install it at runtime.
 
-The scikit-bio methods (`skb_mantel`, `skb_ancombc`) run in a different helper, skb-arrow, with its own pair: [`install_skb_arrow()` and `skb_arrow_available()`](scikit_bio.md#installing).
+The [scikit-bio methods](scikit_bio.md) run in a different helper, skb-arrow, with its own pair: [`install_skb_arrow()` and `skb_arrow_available()`](scikit_bio.md#installing).
 
 ### `phylogeny_fasttree_available()`
 

@@ -481,7 +481,7 @@ TEST_CASE("WriteLine appends newline and flushes immediately", "[gpl-boundary][p
 }
 
 // =============================================================================
-// Cycle 1.4 — Hosts that live beside other hosts and clean up after themselves
+// Hosts that live beside other hosts and clean up after themselves
 // =============================================================================
 //
 // skb-arrow's host shuts down on stdin EOF, notices a dead caller by its
@@ -675,7 +675,7 @@ TEST_CASE("By default a child dies with the thread that spawned it", "[gpl-bound
 #endif
 
 // =============================================================================
-// Cycle 1.5 — LineReader for a caller that polls between reads
+// LineReader for a caller that polls between reads
 // =============================================================================
 //
 // skb-arrow calls can run for minutes. The caller polls the host's stdout so

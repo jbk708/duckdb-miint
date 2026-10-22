@@ -88,5 +88,5 @@ FROM (SELECT install_skb_arrow(f) AS r FROM (VALUES (NULL::BOOLEAN)) t(f));
 ----
 true	true
 
-# force := true reinstalls over the network, so it is checked by hand
-# (localdocs/skb-arrow/PLAN.md, Phase 3), not here.
+# force := true reinstalls over the network, so it is not run here; the C++
+# tests cover it with a fake uv.
