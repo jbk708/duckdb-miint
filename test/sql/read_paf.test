@@ -1,0 +1,420 @@
+# name: test/sql/read_paf.test
+# description: read_paf reads PAF into miint's 1-based half-open intervals and fails loudly on malformed records
+# group: [sql]
+
+require miint
+
+# The fixture's reads were cut from k12_100000_120000 at the coordinates in their names
+# (data/paf/README.md), so every expected interval below is derived from how a read was
+# built, not copied from minimap2's output. PAF writes intervals 0-based half-open on the
+# target and the query alike; miint's are 1-based half-open, so [s, e) in a name must come
+# back as s + 1, e + 1 on either sequence (docs/reading.md, "Coordinate conventions").
+
+# --- Errors ---
+
+statement error
+SELECT * FROM read_paf('data/paf/does_not_exist.paf');
+----
+File not found: data/paf/does_not_exist.paf
+
+statement error
+SELECT * FROM read_paf(42);
+----
+read_paf: first argument must be VARCHAR or VARCHAR[]
+
+statement error
+SELECT * FROM read_paf('-');
+----
+read_paf: stdin is not supported
+
+statement error
+SELECT * FROM read_paf([]::VARCHAR[]);
+----
+read_paf: at least one file path must be provided
+
+# Malformed records are written here so each defect sits beside its assertion. Every
+# message names the function, the file and the line, then the defect.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60'),
+    (E'short\t100\t0\t100')
+) t(line)) TO '__TEST_DIR__/short_record.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT * FROM read_paf('__TEST_DIR__/short_record.paf');
+----
+short_record.paf: line 2: expected at least 12 tab-separated fields, found 4
+
+# A blank line is not skipped: in a PAF it can only mean a damaged file.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60'),
+    (''),
+    (E'ok2\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60')
+) t(line)) TO '__TEST_DIR__/blank_line.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT * FROM read_paf('__TEST_DIR__/blank_line.paf');
+----
+blank_line.paf: line 2: empty line
+
+statement error
+SELECT read_id FROM read_paf('__TEST_DIR__/blank_line.paf') WHERE read_id = 'ok';
+----
+blank_line.paf: line 2: empty line
+
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:i:abc')
+) t(line)) TO '__TEST_DIR__/bad_tag.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT * FROM read_paf('__TEST_DIR__/bad_tag.paf');
+----
+bad_tag.paf: line 1: 'NM:i:abc'
+
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:i:0\tNM:i:1')
+) t(line)) TO '__TEST_DIR__/duplicate_tag.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT * FROM read_paf('__TEST_DIR__/duplicate_tag.paf');
+----
+duplicate_tag.paf: line 1: tag 'NM' appears more than once
+
+# minimap2's tags are typed columns. A value whose type letter is not the one minimap2
+# writes, or that does not fit its column, is an error, not a NULL or a value in the map,
+# whichever columns the query reads.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:f:1.5')
+) t(line)) TO '__TEST_DIR__/mistyped_tag.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT read_id FROM read_paf('__TEST_DIR__/mistyped_tag.paf');
+----
+mistyped_tag.paf: line 1: tag 'NM' has type 'f'; read_paf reads it into tag_nm as type 'i'
+
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:i:99999999999999999999')
+) t(line)) TO '__TEST_DIR__/tag_overflow.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT read_id FROM read_paf('__TEST_DIR__/tag_overflow.paf');
+----
+tag_overflow.paf: line 1: tag 'NM' value '99999999999999999999' does not fit tag_nm, a 64-bit integer
+
+# A writer other than minimap2 may write one of those tags untyped. Its value is read as the
+# column's type, and must be valid for it.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:five')
+) t(line)) TO '__TEST_DIR__/untyped_bad.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT read_id FROM read_paf('__TEST_DIR__/untyped_bad.paf');
+----
+untyped_bad.paf: line 1: 'NM:five' has a value that is not valid for type 'i', the type of tag_nm
+
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:5\tde:0.25\tzz:i:7\ttp:A:S')
+) t(line)) TO '__TEST_DIR__/untyped_ok.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query IRTT
+SELECT tag_nm, tag_de, tag_tp, tags FROM read_paf('__TEST_DIR__/untyped_ok.paf');
+----
+5	0.25	S	{zz=7}
+
+# Every typed tag at once, each with its own value, so a key or a type letter wrong in
+# read_paf's list of minimap2 tags moves a value into the map or fails the line. NMx and dev
+# share a typed key's first two characters and are not typed tags, so they stay in the map.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\ttp:A:S\tcm:i:1\ts1:i:2\ts2:i:3\tNM:i:4\tMD:Z:50A49\tAS:i:5\tms:i:6\tnn:i:7\tts:A:+\tcg:Z:100M\tcs:Z::100\tdv:f:0.25\tde:f:0.5\trl:i:8\tzd:i:10\tzz:i:9\tNMx:i:1\tdev:f:0.1')
+) t(line)) TO '__TEST_DIR__/every_tag.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query TIIIITIIITTTRRIIT
+SELECT tag_tp, tag_cm, tag_s1, tag_s2, tag_nm, tag_md, tag_as, tag_ms, tag_nn, tag_ts, tag_cg, tag_cs,
+       tag_dv, tag_de, tag_rl, tag_zd, tags
+FROM read_paf('__TEST_DIR__/every_tag.paf');
+----
+S	1	2	3	4	50A49	5	6	7	+	100M	:100	0.25	0.5	8	10	{zz=9, NMx=1, dev=0.1}
+
+# The SAM grammar allows an integer a sign and leading zeros. A float may also be a signed
+# nan, inf or infinity in any case, as htslib reads one, and one too large for a DOUBLE is an
+# infinity, as htslib's strtod gives. Each must read as its number.
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'a\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:i:+7\tcm:i:007\tde:f:nan'),
+    (E'b\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tNM:i:-0\tde:f:-NaN'),
+    (E'c\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tde:f:+inf'),
+    (E'd\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tde:f:-Infinity'),
+    (E'e\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tde:f:.5'),
+    (E'f\t100\t0\t100\t+\tref\t1000\t0\t100\t100\t100\t60\tde:f:1e400')
+) t(line)) TO '__TEST_DIR__/number_forms.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query TIITT
+SELECT read_id, tag_nm, tag_cm, isnan(tag_de),
+       CASE WHEN isnan(tag_de) THEN 'nan' WHEN isinf(tag_de) THEN sign(tag_de)::VARCHAR ELSE tag_de::VARCHAR END
+FROM read_paf('__TEST_DIR__/number_forms.paf') ORDER BY read_id;
+----
+a	7	7	true	nan
+b	0	NULL	true	nan
+c	NULL	NULL	false	1
+d	NULL	NULL	false	-1
+e	NULL	NULL	false	0.5
+f	NULL	NULL	false	1
+
+statement ok
+COPY (SELECT * FROM (VALUES
+    (E'ok\t100\t0\t101\t+\tref\t1000\t0\t100\t100\t100\t60')
+) t(line)) TO '__TEST_DIR__/query_past_end.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT * FROM read_paf('__TEST_DIR__/query_past_end.paf');
+----
+query_past_end.paf: line 1: query interval [0, 101) is not within the query length 100
+
+# --- Schema ---
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_paf('data/paf/k12_minimap2.paf'));
+----
+read_id	VARCHAR
+query_length	BIGINT
+query_start	BIGINT
+query_stop	BIGINT
+strand	VARCHAR
+reference	VARCHAR
+reference_length	BIGINT
+position	BIGINT
+stop_position	BIGINT
+residue_matches	BIGINT
+block_length	BIGINT
+mapq	UTINYINT
+tag_tp	VARCHAR
+tag_cm	BIGINT
+tag_s1	BIGINT
+tag_s2	BIGINT
+tag_nm	BIGINT
+tag_md	VARCHAR
+tag_as	BIGINT
+tag_ms	BIGINT
+tag_nn	BIGINT
+tag_ts	VARCHAR
+tag_cg	VARCHAR
+tag_cs	VARCHAR
+tag_dv	DOUBLE
+tag_de	DOUBLE
+tag_rl	BIGINT
+tag_zd	BIGINT
+tags	MAP(VARCHAR, VARCHAR)
+
+query TTTTTTT
+SELECT DISTINCT typeof(read_id), typeof(position), typeof(mapq), typeof(tag_tp), typeof(tag_nm), typeof(tag_de),
+       typeof(tags)
+FROM read_paf('data/paf/k12_minimap2.paf');
+----
+VARCHAR	BIGINT	UTINYINT	VARCHAR	BIGINT	DOUBLE	MAP(VARCHAR, VARCHAR)
+
+# --- Target intervals: 1-based half-open, derived from each read's name ---
+
+# Every mapped read must land exactly where it was cut from. The CASE keeps the name
+# parsing off the unmapped read, whose name carries no coordinates (a WHERE conjunct would
+# not; see docs/internals/duckdb-engine-notes.md, "Validation in a table macro").
+query I
+SELECT count(*) FROM (
+    SELECT *,
+           CASE WHEN reference <> '*' THEN split_part(read_id, '_', 2)::BIGINT END AS cut_start,
+           CASE WHEN reference <> '*' THEN split_part(read_id, '_', 3)::BIGINT END AS cut_stop
+    FROM read_paf('data/paf/k12_minimap2.paf'))
+WHERE reference <> '*'
+  AND (position <> cut_start + 1
+       OR stop_position <> cut_stop + 1
+       OR reference <> 'k12_100000_120000'
+       OR reference_length <> 20000);
+----
+0
+
+query I
+SELECT count(*) FROM read_paf('data/paf/k12_minimap2.paf') WHERE reference <> '*';
+----
+6
+
+# --- Query intervals: on the read as sequenced ---
+
+# Exact chunks align end to end in either orientation. The forward overhang read aligns
+# over its first 4000 bases; the reverse one is 1500 bases of foreign sequence followed by
+# the reverse-complemented slice, so its aligned block is [1501, 4501). Mirroring that onto
+# the reverse strand would give [1, 3001), which is the foreign sequence.
+query TIIIT
+SELECT read_id, query_length, query_start, query_stop, strand
+FROM read_paf('data/paf/k12_minimap2.paf') WHERE reference <> '*' ORDER BY read_id;
+----
+fwd_1000_3000	2000	1	2001	+
+fwd_5000_9000	4000	1	4001	+
+ovhfwd_16000_20000	5500	1	4001	+
+ovhrev_17000_20000	4500	1501	4501	-
+rev_10000_13000	3000	1	3001	-
+rev_14000_18000	4000	1	4001	-
+
+# --- Unmapped records match read_alignments: reference '*', positions 0 ---
+
+# An unmapped record has no interval on either sequence, so both report 0, as an unplaced
+# unmapped SAM record's position does.
+
+query TIIITTIIIIII
+SELECT read_id, query_length, query_start, query_stop, strand, reference, reference_length,
+       position, stop_position, residue_matches, block_length, mapq
+FROM read_paf('data/paf/k12_minimap2.paf') WHERE read_id = 'unmapped';
+----
+unmapped	3000	0	0	*	*	0	0	0	0	0	0
+
+# --- Tags: minimap2's as typed columns, any other in the map ---
+
+# Every value below is the one on the record's line, typed: the fixture writes
+# NM:i:0 ms:i:3000 AS:i:3000 nn:i:0 tp:A:P cm:i:288 s1:i:2982 s2:i:0 de:f:0 rl:i:0 cg:Z:3000M.
+# A tag the line does not carry is NULL, and nothing is left for the map.
+query TIIIITIIITTTRRIIT
+SELECT tag_tp, tag_cm, tag_s1, tag_s2, tag_nm, tag_md, tag_as, tag_ms, tag_nn, tag_ts, tag_cg, tag_cs,
+       tag_dv, tag_de, tag_rl, tag_zd, tags
+FROM read_paf('data/paf/k12_minimap2.paf') WHERE read_id = 'rev_10000_13000';
+----
+P	288	2982	0	0	NULL	3000	3000	0	NULL	3000M	NULL	NULL	0.0	0	NULL	{}
+
+query IIT
+SELECT tag_rl, tag_nm, tags FROM read_paf('data/paf/k12_minimap2.paf') WHERE read_id = 'unmapped';
+----
+0	NULL	{}
+
+# myloasm writes untyped key:value tags; read_paf keeps them and leaves the rest of
+# myloasm's conventions to its own reader.
+query IIII
+SELECT count(*), count(tags['shared_mini']), count(tags['diff_snp']), count(tags['shared_snp'])
+FROM read_paf('data/myloasm/ecoli_sim/3-mapping/map_to_unitigs.paf.gz');
+----
+1085	1085	1085	1085
+
+# --- Agreement with the embedded aligner on the target and the read ---
+
+# The same reads aligned by align_minimap2 report SAM-derived coordinates. The reference
+# interval must match read_paf's, and the read interval from cigar_query_intervals must
+# match read_paf's query interval, which is what lets PAF and SAM intervals for one read be
+# pooled. cigar_query_intervals reports 0-based intervals (docs/reading.md, "Exceptions"),
+# so its values take + 1 here.
+statement ok
+CREATE TEMP TABLE paf_reads AS SELECT * FROM read_fastx('data/paf/k12_reads.fa.gz');
+
+statement ok
+CREATE TEMP TABLE paf_ref AS SELECT * FROM read_fastx('data/paf/k12_ref.fa.gz');
+
+statement ok
+CREATE TEMP TABLE sam AS
+SELECT read_id, reference, position, stop_position,
+       list_min([iv.start FOR iv IN cigar_query_intervals(cigar, flags)]) + 1 AS query_start,
+       list_max([iv.stop FOR iv IN cigar_query_intervals(cigar, flags)]) + 1 AS query_stop
+FROM align_minimap2('paf_reads', subject_table := 'paf_ref', preset := 'map-hifi', max_secondary := 0)
+WHERE NOT alignment_is_unmapped(flags);
+
+query I
+SELECT count(*) FROM sam;
+----
+6
+
+query I
+SELECT count(*)
+FROM sam JOIN read_paf('data/paf/k12_minimap2.paf') p USING (read_id)
+WHERE sam.reference = p.reference AND sam.position = p.position AND sam.stop_position = p.stop_position
+  AND sam.query_start = p.query_start AND sam.query_stop = p.query_stop;
+----
+6
+
+# Both intervals cut their bases with substr as they are, no + 1 on either: each read's aligned
+# block is an exact copy of the reference slice it aligns to, reverse complemented on '-'. A
+# 0-based interval fails every read. A start that alone were 0-based fails ovhrev_17000_20000,
+# the one block that does not start at its read's first base (substr at 0 takes one base
+# fewer, which hides the shift at the read's start).
+query I
+SELECT count(*)
+FROM read_paf('data/paf/k12_minimap2.paf') p
+JOIN paf_reads r USING (read_id), paf_ref ref
+WHERE p.reference <> '*'
+  AND substr(r.sequence1, p.query_start, p.query_stop - p.query_start) =
+      CASE WHEN p.strand = '+' THEN substr(ref.sequence1, p.position, p.stop_position - p.position)
+           ELSE sequence_dna_reverse_complement(substr(ref.sequence1, p.position, p.stop_position - p.position))
+      END;
+----
+6
+
+# --- Inputs ---
+
+# The scan has a row estimate that grows with the file, not DuckDB's default of one row (why:
+# EstimateFileScanCardinality in src/include/table_function_common.hpp).
+query II
+EXPLAIN SELECT * FROM read_paf('data/paf/k12_minimap2.paf');
+----
+physical_plan	<!REGEX>:.*~1 row.*
+
+# gzip is read transparently and changes nothing.
+query I
+SELECT count(*) FROM (
+    SELECT * FROM read_paf('data/paf/k12_minimap2.paf')
+    EXCEPT
+    SELECT * FROM read_paf('data/paf/k12_minimap2.paf.gz'));
+----
+0
+
+query I
+SELECT count(*) FROM read_paf('data/paf/k12_minimap2.paf.gz');
+----
+7
+
+query TI
+SELECT replace(filepath, '\', '/'), count(*)
+FROM read_paf('data/paf/k12_minimap2.paf*', include_filepath := true)
+GROUP BY ALL ORDER BY 1;
+----
+data/paf/k12_minimap2.paf	7
+data/paf/k12_minimap2.paf.gz	7
+
+query I
+SELECT count(*) FROM read_paf(['data/paf/k12_minimap2.paf', 'data/paf/k12_minimap2.paf.gz']);
+----
+14
+
+# An empty PAF is what an aligner writes when nothing aligned, so it is zero rows, not an
+# error.
+statement ok
+COPY (SELECT 'unused' AS line WHERE false) TO '__TEST_DIR__/empty.paf'
+(FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query I
+SELECT count(*) FROM read_paf('__TEST_DIR__/empty.paf');
+----
+0
+
+# More rows than one output vector holds (2048), with a defect past the first vector so
+# the reported line number is checked where a per-chunk counter would reset.
+statement ok
+COPY (SELECT printf(E'r%d\t100\t0\t100\t+\tref\t10000\t%d\t%d\t100\t100\t60\tNM:i:%d', i, i, i + 100, i % 7)
+      FROM range(3000) t(i) ORDER BY i)
+TO '__TEST_DIR__/many.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query IIII
+SELECT count(*), sum(position), sum(stop_position - position), sum(tag_nm)
+FROM read_paf('__TEST_DIR__/many.paf');
+----
+3000	4501500	300000	8994
+
+statement ok
+COPY (SELECT CASE WHEN i = 2499 THEN 'damaged' ELSE printf(E'r%d\t100\t0\t100\t+\tref\t10000\t%d\t%d\t100\t100\t60', i, i, i + 100) END
+      FROM range(3000) t(i) ORDER BY i)
+TO '__TEST_DIR__/many_damaged.paf' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT count(*) FROM read_paf('__TEST_DIR__/many_damaged.paf');
+----
+many_damaged.paf: line 2500: expected at least 12 tab-separated fields, found 1

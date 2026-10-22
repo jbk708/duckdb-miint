@@ -38,6 +38,11 @@ SELECT COUNT(*), COUNT(sequence1), COUNT(sequence2) FROM read_fastx(
 ----
 2	2	2
 
+# allow_empty reads an empty remote file as no records
+query I
+SELECT COUNT(*) FROM read_fastx('${MIINT_HTTPS_TEST_URL}/fastq/empty.fq', allow_empty := true);
+----
+0
 
 # A malformed record over HTTP fails naming the file and the record, as it does locally.
 statement error

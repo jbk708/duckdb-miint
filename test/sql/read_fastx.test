@@ -214,6 +214,39 @@ SELECT * FROM read_fastx('data/fastq/empty.fq');
 ----
 Invalid Error: Empty file
 
+# allow_empty reads an empty file as no records, for tools that write a file whether or not
+# they have records for it. Other files in the same scan are read as usual.
+query I
+SELECT count(*) FROM read_fastx('data/fastq/empty.fq', allow_empty := true);
+----
+0
+
+query I
+SELECT count(*) FROM read_fastx(['data/fastq/empty.fq', 'data/fastq/small_a.fq', 'data/fastq/empty.fq'], allow_empty := true);
+----
+2
+
+query I
+SELECT count(*) FROM read_fastx('data/fastq/empty.fq', sequence2 := 'data/fastq/empty.fq', allow_empty := true);
+----
+0
+
+statement error
+SELECT * FROM read_fastx('data/fastq/empty.fq', allow_empty := false);
+----
+Invalid Error: Empty file
+
+# One empty mate is a broken pair, not an empty one, so it is still an error.
+statement error
+SELECT * FROM read_fastx('data/fastq/empty.fq', sequence2 := 'data/fastq/small_a_r2.fq', allow_empty := true);
+----
+Empty file: data/fastq/empty.fq
+
+statement error
+SELECT * FROM read_fastx('data/fastq/small_a_r1.fq', sequence2 := 'data/fastq/empty.fq', allow_empty := true);
+----
+Empty file: data/fastq/empty.fq
+
 # Error: mismatched array lengths
 statement error
 SELECT * FROM read_fastx(['data/fastq/small_a.fq', 'data/fastq/small_b.fq'], 
@@ -238,3 +271,32 @@ statement error
 SELECT * FROM read_fastx('data/fastq/test_r1.fa', sequence2='data/fastq/test_r2.fq');
 ----
 Invalid Error: Cannot mix FASTA and FASTQ formats
+
+# --- Row estimate ---
+
+# The planner's row estimate is the input's size over 50 bytes, with gzip counted at four
+# times its size, so a join probes read_fastx instead of hashing a multi-GB file into memory
+# (why: EstimateFileScanCardinality in src/include/table_function_common.hpp).
+# data/minimap2/subject.fasta is 4641666 bytes: 4641666 / 50 = 92833.
+query II
+EXPLAIN SELECT * FROM read_fastx('data/minimap2/subject.fasta');
+----
+physical_plan	<REGEX>:.*~92,833 rows.*
+
+# e.coli-K12.fasta.gz is 1424962 bytes: 1424962 * 4 / 50 = 113996.
+query II
+EXPLAIN SELECT * FROM read_fastx('data/sylph/tiny_refs/e.coli-K12.fasta.gz');
+----
+physical_plan	<REGEX>:.*~113,996 rows.*
+
+# Every file counts, mates included: (75584 + 75624) / 50 = 3024.
+query II
+EXPLAIN SELECT * FROM read_fastx('data/merge/ltp_50_R1.fq', sequence2 := 'data/merge/ltp_50_R2.fq');
+----
+physical_plan	<REGEX>:.*~3,024 rows.*
+
+# A remote file's size is not read while planning, so it gets a large constant.
+query II
+EXPLAIN SELECT * FROM read_fastx('https://example.invalid/reads.fq');
+----
+physical_plan	<REGEX>:.*~10,000,000 rows.*

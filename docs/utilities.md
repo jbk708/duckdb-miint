@@ -314,6 +314,8 @@ Only the first `^` on `anchor5` and the last `$` on `anchor3` are recognized as 
 
 Returns `NULL` if either anchor cannot be located within its error budget, or if the interior length falls outside `[min_len, max_len]`.
 
+`start` / `stop` are 0-based, an [exception](reading.md#exceptions) to miint's 1-based intervals: the interior is `substr(seq, start + 1, stop - start)`.
+
 **Examples:**
 ```sql
 -- UMI extraction: pull out the 18-bp UMI between fixed flanking primers
