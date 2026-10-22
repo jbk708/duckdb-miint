@@ -92,6 +92,12 @@ static inline bool is_ascii_space(unsigned char c) {
 static constexpr char SEP_SPACE = 0;
 static constexpr char SEP_LINE = 2;
 
+// The first byte of a FASTA header line, of a FASTQ header line, and of the FASTQ line between
+// the sequence and the quality.
+static constexpr char FASTA_HEADER = '>';
+static constexpr char FASTQ_HEADER = '@';
+static constexpr char FASTQ_SEPARATOR = '+';
+
 // Parse one record over kseq++'s buffered getc/getuntil. A FASTA record is read as kseq++'s own
 // parser reads it, wrapped sequence lines included. A record whose header starts with '@' is
 // FASTQ and is exactly four lines: header, one sequence line, '+', and one quality line as long
@@ -109,10 +115,10 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 			// Skip to the first header: old FASTA files can open with ';' comments. FASTQ has no
 			// such preamble, so text before a first '@' is a record that has lost its '@'.
 			bool skipped_text = false;
-			while ((c = stream.getc()) && c != '>' && c != '@') {
+			while ((c = stream.getc()) && c != FASTA_HEADER && c != FASTQ_HEADER) {
 				skipped_text |= !is_ascii_space(c);
 			}
-			if (c == '@' && skipped_text) {
+			if (c == FASTQ_HEADER && skipped_text) {
 				problem = "text before the first record; FASTQ files must start with a '@' header line";
 				return ParseResult::MALFORMED;
 			}
@@ -123,7 +129,7 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 			while (true) {
 				while ((c = stream.getc()) && (c == '\n' || c == '\r')) {
 				}
-				if (!c || c == '>' || c == '@') {
+				if (!c || c == FASTA_HEADER || c == FASTQ_HEADER) {
 					break;
 				}
 				std::string line(1, c);
@@ -140,7 +146,7 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 			return ParseResult::END;
 		}
 	}
-	const bool fastq = c == '@';
+	const bool fastq = c == FASTQ_HEADER;
 	auto record = [&]() {
 		return "record '" + rec.name + "' (record " + std::to_string(state.records_read + 1) + "): ";
 	};
@@ -156,7 +162,7 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 		stream.getuntil(SEP_LINE, rec.comment, nullptr);
 	}
 	size_t sequence_lines = 0;
-	while ((c = stream.getc()) && c != '>' && c != '@' && c != '+') {
+	while ((c = stream.getc()) && c != FASTA_HEADER && c != FASTQ_HEADER && c != FASTQ_SEPARATOR) {
 		if (c == '\n' || c == '\r') {
 			continue; // skip empty lines, LF or CRLF
 		}
@@ -164,10 +170,10 @@ SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp:
 		stream.getuntil(SEP_LINE, rec.seq, nullptr, true); // the rest of the line
 		sequence_lines++;
 	}
-	if (c == '>' || c == '@') {
+	if (c == FASTA_HEADER || c == FASTQ_HEADER) {
 		state.pending_header = c; // the next record's header character is already read
 	}
-	if (c != '+') {
+	if (c != FASTQ_SEPARATOR) {
 		if (fastq) {
 			if (!c && !stream.eof()) {
 				problem = record() + "unexpected NUL byte before the record's '+' line";

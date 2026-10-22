@@ -246,6 +246,7 @@ When two similar code paths solve the same problem differently, factor out the s
 
 - **Existing primitives first.** PR-level check 1 owns the procedure. A hand-rolled reverse complement, interval merge, COO builder, id codec or format writer beside an existing one is the finding, in tests as in `src/`.
 - **A copy-pasted sibling is parameterized**, not maintained twice. Same for near-duplicate blocks in one file and an error message or constant repeated across sites.
+- **A literal with format meaning is named when it recurs.** A record's marker byte or a field separator compared at several sites becomes a named constant, so each comparison says what it tests; error messages and comments keep the literal.
 - **Never compute through spec-invalid input.** A result is not computed by building input the format's specification forbids and passing it to a parser that accepts it, such as concatenating CIGAR strings so clipping operations land in the interior. Correctness would rest on the parser's laxity. Combine the components the parser already computes; if nothing exposes them, add an accessor.
 - **Underusing a tool is reinventing it** [soft]: check whether DuckDB or the embedded tool already does the expensive part (parallelism, list inputs, a documented pivot) before building around it.
 - **Don't rename columns or parameters in transit**, and don't change a wrapped tool's semantics without saying so.
