@@ -1,16 +1,33 @@
 #include "rype_filter.hpp"
 #include "catalog_utils.hpp"
+#include "id_column_utils.hpp"
 #include "miint_log.hpp"
 #include "miint_named_parameter.hpp"
 #include "rype_common.hpp"
 
 #include "duckdb/common/arrow/arrow_wrapper.hpp"
+#include "duckdb/common/file_system.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/function_set.hpp"
 #include "duckdb/main/database.hpp"
 
 namespace duckdb {
 
 namespace {
+
+//! A mean sequence1 length at or above this, sampled from the head of the scan,
+//! is long reads, which minimap2's short-read preset is not for: rype_filter then
+//! runs RYpe alone and never opens the minimap2 index.
+constexpr size_t LONG_READ_MEAN_LENGTH = 300;
+
+//! minimap2 as align_minimap2 runs it by default (the sr preset, five secondary
+//! alignments), less what only shapes SAM rows. =/X CIGAR operations are written
+//! after an alignment is scored, so they cannot change whether a read maps.
+miint::Minimap2Config FilterMinimap2Config() {
+	miint::Minimap2Config config;
+	config.eqx = false;
+	return config;
+}
 
 //! Read the session-scoped `miint_rype_filter_group_rows` setting: rows per
 //! group, or 0 to size groups from the memory budget.
@@ -58,16 +75,56 @@ idx_t AutoGroupRows(ClientContext &context, const RypeIndex *index, const RypeIn
 	return MaxValue<idx_t>(1, MinValue<idx_t>(static_cast<idx_t>(rows), config.batch_size));
 }
 
-//! Slice the rows of `run` that RYpe did not match into `output`. False when it
-//! has none, leaving `output` untouched.
-bool EmitRun(const RypeFilterTableFunction::GlobalState &gstate, const RypeHeldRows &run, DataChunk &output) {
+//! Slice the rows of `run` that neither stage removes into `output`: RYpe did not
+//! match them and, when minimap2 runs, it maps neither mate. False when it has
+//! none, leaving `output` untouched.
+bool EmitRun(RypeFilterTableFunction::GlobalState &gstate, const RypeFilterTableFunction::Data &bind_data,
+             const RypeHeldRows &run, DataChunk &output) {
 	D_ASSERT(run.to - run.from <= STANDARD_VECTOR_SIZE);
+	auto &chunk = *run.chunk;
+	// minimap2 reads the sequences where the chunk holds them, and names each read
+	// by its read_id as align_minimap2 does; no name when there is none.
+	UnifiedVectorFormat sequence1;
+	UnifiedVectorFormat sequence2;
+	std::vector<std::string> names;
+	std::vector<bool> name_is_null;
+	if (gstate.aligner) {
+		chunk.data[bind_data.sequence1_column].ToUnifiedFormat(sequence1);
+		if (bind_data.sequence2_column != DConstants::INVALID_INDEX) {
+			chunk.data[bind_data.sequence2_column].ToUnifiedFormat(sequence2);
+		}
+		if (bind_data.read_id_column != DConstants::INVALID_INDEX) {
+			ExtractIdColumnAsStrings(chunk, bind_data.read_id_column, bind_data.column_types[bind_data.read_id_column],
+			                         names, name_is_null);
+		}
+	}
+	const auto maps = [&](idx_t i) {
+		const auto s1_idx = sequence1.sel->get_index(i);
+		// The stream refused a NULL sequence1 before RYpe saw the row.
+		D_ASSERT(sequence1.validity.RowIsValid(s1_idx));
+		const auto s1 = UnifiedVectorFormat::GetData<string_t>(sequence1)[s1_idx];
+		std::string_view mate;
+		if (bind_data.sequence2_column != DConstants::INVALID_INDEX) {
+			const auto s2_idx = sequence2.sel->get_index(i);
+			if (sequence2.validity.RowIsValid(s2_idx)) {
+				const auto s2 = UnifiedVectorFormat::GetData<string_t>(sequence2)[s2_idx];
+				mate = std::string_view(s2.GetData(), s2.GetSize());
+			}
+		}
+		const char *name = names.empty() || name_is_null[i] ? nullptr : names[i].c_str();
+		return gstate.aligner->any_mapped(std::string_view(s1.GetData(), s1.GetSize()), mate, name);
+	};
+
 	SelectionVector sel(run.to - run.from);
 	idx_t count = 0;
 	for (idx_t i = run.from; i < run.to; i++) {
-		if (!gstate.matched[run.first_id + (i - run.from) - gstate.group_first_id]) {
-			sel.set_index(count++, i);
+		if (gstate.matched[run.first_id + (i - run.from) - gstate.group_first_id]) {
+			continue;
 		}
+		if (gstate.aligner && maps(i)) {
+			continue;
+		}
+		sel.set_index(count++, i);
 	}
 	if (count == 0) {
 		return false;
@@ -187,6 +244,9 @@ unique_ptr<FunctionData> RypeFilterTableFunction::Bind(ClientContext &context, T
 	data->relation = input.inputs[0].ToString();
 	RejectCTERelationName(input, data->relation);
 	data->index_path = input.inputs[1].ToString();
+	if (input.inputs.size() > 2) {
+		data->minimap2_index_path = input.inputs[2].ToString();
+	}
 
 	auto threshold_param = input.named_parameters.find("threshold");
 	if (threshold_param != input.named_parameters.end() && !threshold_param->second.IsNull()) {
@@ -196,25 +256,36 @@ unique_ptr<FunctionData> RypeFilterTableFunction::Bind(ClientContext &context, T
 		}
 	}
 
-	// The index path is left to rype_index_load in InitGlobal, as rype_classify
-	// leaves it: it reports a missing or damaged index better than a check here.
+	// The index paths are left to the loaders in InitGlobal, as rype_classify
+	// leaves its own: they report a missing or damaged index better than a check
+	// here, and a minimap2 index is not opened at all for long reads.
 	auto columns = GetTableColumns(context, data->relation);
-	bool has_sequence1 = false;
 	for (idx_t i = 0; i < columns.names.size(); i++) {
 		const auto &name = columns.names[i];
+		if (StringUtil::CIEquals(name, "read_id")) {
+			data->read_id_column = i;
+			continue;
+		}
 		const bool is_sequence1 = StringUtil::CIEquals(name, "sequence1");
 		if (!is_sequence1 && !StringUtil::CIEquals(name, "sequence2")) {
 			continue;
 		}
-		has_sequence1 |= is_sequence1;
+		(is_sequence1 ? data->sequence1_column : data->sequence2_column) = i;
 		const auto type = columns.types[i].id();
 		if (type != LogicalTypeId::VARCHAR && type != LogicalTypeId::BLOB) {
 			throw BinderException("Column '%s' in '%s' must be VARCHAR or BLOB, not %s", name, data->relation,
 			                      columns.types[i].ToString());
 		}
 	}
-	if (!has_sequence1) {
+	if (data->sequence1_column == DConstants::INVALID_INDEX) {
 		throw BinderException("Table '%s' missing required column 'sequence1'", data->relation);
+	}
+	// minimap2 is given the read_id as its name; RYpe alone never reads it.
+	if (!data->minimap2_index_path.empty() && data->read_id_column != DConstants::INVALID_INDEX &&
+	    !IsAllowedIdType(columns.types[data->read_id_column])) {
+		throw BinderException("Column '%s' in '%s' must be %s to name its reads to minimap2, not %s",
+		                      columns.names[data->read_id_column], data->relation, AllowedIdTypeList(),
+		                      columns.types[data->read_id_column].ToString());
 	}
 
 	for (idx_t i = 0; i < columns.names.size(); i++) {
@@ -236,12 +307,8 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 	gstate->threshold = bind_data.threshold;
 	const idx_t group_rows_setting = GetRypeFilterGroupRows(context);
 
-	gstate->index = rype_index_load(bind_data.index_path.c_str());
-	if (!gstate->index) {
-		const char *err = rype_get_last_error();
-		throw IOException("Failed to load RYpe index '%s': %s", bind_data.index_path, err ? err : "unknown error");
-	}
-
+	// The scan opens first: whether minimap2 runs is read from its head, and a
+	// minimap2 index rype_filter cannot use is refused before the RYpe index loads.
 	auto &db = DatabaseInstance::GetDatabase(context);
 	gstate->input_connection = make_uniq<Connection>(db);
 	InheritTempObjects(context, *gstate->input_connection);
@@ -273,18 +340,54 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 		                            bind_data.relation);
 	}
 
+	// From the head of the stream's own scan, which SampleSizing does not consume:
+	// the relation is read once (#229).
+	const auto &minimap2_path = bind_data.minimap2_index_path;
+	RypeInputStream::Sizing sizing {};
+	if (group_rows_setting == 0 || !minimap2_path.empty()) {
+		sizing = gstate->input_stream->SampleSizing();
+	}
+	// An empty relation has nothing to map, and no length to tell short reads by.
+	const bool use_minimap2 =
+	    !minimap2_path.empty() && sizing.sampled && sizing.avg_read_length < LONG_READ_MEAN_LENGTH;
+	idx_t minimap2_index_bytes = 0;
+	if (use_minimap2) {
+		bool multi_part = false;
+		try {
+			multi_part = miint::Minimap2Aligner::IsMultiPartIndex(minimap2_path);
+			minimap2_index_bytes =
+			    FileSystem::GetFileSystem(context).OpenFile(minimap2_path, FileFlags::FILE_FLAGS_READ)->GetFileSize();
+		} catch (const std::exception &e) {
+			throw IOException("Failed to load minimap2 index '%s': %s", minimap2_path, e.what());
+		}
+		// Each part would be loaded and mapped against in turn, and the reads held
+		// meanwhile: the whole relation, or a second read of it.
+		if (multi_part) {
+			throw InvalidInputException(
+			    "rype_filter: '%s' is a multi-part minimap2 index, and rype_filter maps against a whole index at "
+			    "once. Rebuild it as one part: save_minimap2_index always builds one, and minimap2 -d does when -I "
+			    "is larger than the reference.",
+			    minimap2_path);
+		}
+	}
+
+	gstate->index = rype_index_load(bind_data.index_path.c_str());
+	if (!gstate->index) {
+		const char *err = rype_get_last_error();
+		throw IOException("Failed to load RYpe index '%s': %s", bind_data.index_path, err ? err : "unknown error");
+	}
+
 	if (group_rows_setting > 0) {
 		gstate->group_rows = group_rows_setting;
 	} else {
-		// From the head of the stream's own scan, which SampleSizing does not
-		// consume: the relation is read once (#229).
-		const auto sizing = gstate->input_stream->SampleSizing();
-		// The read-ahead buffer is drawn from the same memory. 0 means detection
-		// failed, which leaves RYpe to size against its own estimate.
+		// The read-ahead buffer is drawn from the same memory, and so is the
+		// minimap2 index, which loads after this reading is taken. 0 means
+		// detection failed, which leaves RYpe to size against its own estimate.
 		size_t budget = ResolveRypeMemoryBudget(context, 0);
 		if (budget > 0) {
 			const size_t floor = MinValue<size_t>(budget, RYPE_MIN_MEMORY_BUDGET);
-			budget = MaxValue<size_t>(budget > read_ahead_bytes ? budget - read_ahead_bytes : 0, floor);
+			const size_t reserved = read_ahead_bytes + minimap2_index_bytes;
+			budget = MaxValue<size_t>(budget > reserved ? budget - reserved : 0, floor);
 			if (budget <= RYPE_MIN_MEMORY_BUDGET) {
 				miint::EmitWarning(context,
 				                   "rype_filter: only %s of memory is free for classification, so groups are small and "
@@ -294,6 +397,17 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 			}
 		}
 		gstate->group_rows = AutoGroupRows(context, gstate->index, sizing, budget);
+	}
+
+	if (use_minimap2) {
+		const auto config = FilterMinimap2Config();
+		try {
+			gstate->minimap2_index = std::make_shared<miint::SharedMinimap2Index>(minimap2_path, config);
+		} catch (const std::exception &e) {
+			throw IOException("Failed to load minimap2 index '%s': %s", minimap2_path, e.what());
+		}
+		gstate->aligner = make_uniq<miint::Minimap2Aligner>(config);
+		gstate->aligner->attach_shared_index(gstate->minimap2_index);
 	}
 	gstate->input_stream->SetGroupRows(gstate->group_rows);
 	gstate->input_stream->SetBatchRows(gstate->group_rows);
@@ -305,10 +419,11 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 // ============================================================================
 void RypeFilterTableFunction::Execute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &gstate = data_p.global_state->Cast<GlobalState>();
+	auto &bind_data = data_p.bind_data->Cast<Data>();
 	// No mutex: MaxThreads() is 1.
 	while (!gstate.done) {
 		if (gstate.next_run < gstate.runs.size()) {
-			if (EmitRun(gstate, gstate.runs[gstate.next_run++], output)) {
+			if (EmitRun(gstate, bind_data, gstate.runs[gstate.next_run++], output)) {
 				return;
 			}
 			continue;
@@ -324,16 +439,19 @@ void RypeFilterTableFunction::Execute(ClientContext &context, TableFunctionInput
 }
 
 // ============================================================================
-// GetFunction / Register
+// Register
 // ============================================================================
-TableFunction RypeFilterTableFunction::GetFunction() {
-	TableFunction tf("rype_filter", {LogicalType::VARCHAR, LogicalType::VARCHAR}, Execute, Bind, InitGlobal);
-	AddNamedParameter(tf, "threshold", LogicalType::DOUBLE);
-	return tf;
-}
-
 void RypeFilterTableFunction::Register(ExtensionLoader &loader) {
-	loader.RegisterFunction(GetFunction());
+	TableFunctionSet set("rype_filter");
+	// rype_filter(relation, rype_index) -> RYpe alone;
+	// rype_filter(relation, rype_index, minimap2_index) -> RYpe, then minimap2 for short reads.
+	for (const auto &args : {vector<LogicalType> {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                         vector<LogicalType> {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR}}) {
+		TableFunction tf("rype_filter", args, Execute, Bind, InitGlobal);
+		AddNamedParameter(tf, "threshold", LogicalType::DOUBLE);
+		set.AddFunction(tf);
+	}
+	loader.RegisterFunction(set);
 }
 
 } // namespace duckdb
