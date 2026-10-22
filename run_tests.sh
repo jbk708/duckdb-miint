@@ -202,13 +202,21 @@ if [ "${MIINT_BLAST_LIVE_TEST:-0}" = "1" ] &&
     export BLAST_LIVE_AVAILABLE=1
 fi
 
-# ENA network reachability. Probes the Portal API with a cheap HEAD-ish call
-# so tests that need live ENA access can skip gracefully in offline CI.
-# Timeout is tight (3s) to avoid slowing down the common case.
-if curl -sSf --max-time 3 -o /dev/null \
-        "https://www.ebi.ac.uk/ena/portal/api/search?result=read_run&query=run_accession%3D%22ERR1074767%22&fields=run_accession&limit=1&format=tsv" \
-        2>/dev/null; then
-    export ENA_AVAILABLE=1
+# Live ENA tests, opt-in: `MIINT_ENA_LIVE_TEST=1 bash run_tests.sh`. EBI's Portal API
+# and file servers fail often enough (HTTP 500s, empty answers, md5 mismatches lasting
+# days) that a run gated on them fails for reasons no change made; CI runs them nightly
+# instead. They need the real Portal, so they run in a pass of their own after the httpfs
+# pass, without the mock Portal URL this script exports below; ENA_AVAILABLE is set only
+# there. With the opt-in set, the probe still skips them when the Portal does not answer.
+ENA_LIVE=0
+if [ "${MIINT_ENA_LIVE_TEST:-0}" = "1" ]; then
+    if curl -sSf --max-time 10 -o /dev/null \
+            "https://www.ebi.ac.uk/ena/portal/api/search?result=read_run&query=run_accession%3D%22ERR1074767%22&fields=run_accession&limit=1&format=tsv" \
+            2>/dev/null; then
+        ENA_LIVE=1
+    else
+        echo "Warning: MIINT_ENA_LIVE_TEST=1, but ENA's Portal API did not answer; the live ENA tests will skip"
+    fi
 fi
 
 # NCBI network reachability, for the live read_ncbi* tests: they use both E-utilities and
@@ -696,49 +704,63 @@ if ! HOME="$HTTPFS_TEST_HOME" ./build/release/duckdb -unsigned -c "INSTALL httpf
     echo "ERROR: could not install httpfs and this build's miint into $HTTPFS_TEST_HOME; the tests that need httpfs cannot run" >&2
     exit 1
 fi
-HTTPFS_LOG="$PWD/build/release/httpfs_tests.log"
 # A stalled remote transfer would otherwise hang the run instead of failing it.
 HTTPFS_TIMEOUT_SECONDS="${MIINT_HTTPFS_TIMEOUT_SECONDS:-1800}"
 TIMEOUT_CMD=$(command -v timeout || command -v gtimeout || true)
 if [ -z "$TIMEOUT_CMD" ]; then
     echo "WARNING: no timeout or gtimeout command, so a stalled transfer hangs this run instead of failing it" >&2
 fi
-echo "Running the $(echo "$HTTPFS_TESTS" | tr ',' '\n' | wc -l) test files that need httpfs (log: $HTTPFS_LOG)..."
-HTTPFS_RC=0
-HTTPFS_START=$SECONDS
-# on_init's LOAD fails every file when httpfs cannot load (under autoloading, `require
-# httpfs` alone passes without loading it). --require miint fails a file whose miint
-# cannot load, where it would otherwise be skipped; -w NoTests fails the run when any file
-# in the list matches no test.
-HOME="$HTTPFS_TEST_HOME" DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' \
-    ${TIMEOUT_CMD:+"$TIMEOUT_CMD" --kill-after=60 "$HTTPFS_TIMEOUT_SECONDS"} \
-    ./build/release/test/unittest --require miint -w NoTests "$HTTPFS_TESTS" \
-    > "$HTTPFS_LOG" 2>&1 || HTTPFS_RC=$?
-HTTPFS_ELAPSED=$((SECONDS - HTTPFS_START))
-if [ "$HTTPFS_RC" -ne 0 ]; then
-    # In full: CI keeps the console output, not the log file.
-    cat "$HTTPFS_LOG"
-    # timeout exits 124, or 137 when it has to kill; 137 is also any other SIGKILL, such as
-    # the out-of-memory killer's, so only a run that lasted the limit counts as timed out.
-    if { [ "$HTTPFS_RC" -eq 124 ] || [ "$HTTPFS_RC" -eq 137 ]; } &&
-        [ "$HTTPFS_ELAPSED" -ge "$HTTPFS_TIMEOUT_SECONDS" ]; then
-        echo "ERROR: tests that need httpfs did not finish within ${HTTPFS_TIMEOUT_SECONDS}s" >&2
-    else
-        echo "ERROR: tests that need httpfs failed (exit $HTTPFS_RC after ${HTTPFS_ELAPSED}s)" >&2
-    fi
-    exit 1
-fi
-tail -n 20 "$HTTPFS_LOG"
 # Which skips are allowed: docs/testing.md, "Guards and skipped tests". A skip does not
 # change unittest's exit status, so a disallowed one, such as a skip for the mock server's
 # URL that this script exports, is caught here.
 HTTPFS_ALLOWED_SKIPS='ENA_AVAILABLE|NCBI_AVAILABLE|BLAST_LIVE_AVAILABLE|MIINT_TAXDUMP_REMOTE|ENA_WEBIN_TEST_(USER|PASSWORD|AVAILABLE)|ASPERA_AVAILABLE|HDF5_AVAILABLE'
-HTTPFS_BAD_SKIPS=$(sed -n '/^Skipped tests for the following reasons:/,$p' "$HTTPFS_LOG" | tail -n +2 |
-    grep -vE "^(require-env ($HTTPFS_ALLOWED_SKIPS): [0-9]+)?$" || true)
-if [ -n "$HTTPFS_BAD_SKIPS" ]; then
-    echo "ERROR: the httpfs pass skipped files for reasons this run should have provided:" >&2
-    echo "$HTTPFS_BAD_SKIPS" >&2
-    exit 1
+
+# run_httpfs_files <comma-separated files> <log>: run them as the httpfs pass does, and
+# exit the script when one fails or skips for a reason this run should have provided.
+run_httpfs_files() {
+    local files="$1" log="$2" rc=0 start=$SECONDS elapsed bad_skips
+    echo "Running the $(echo "$files" | tr ',' '\n' | wc -l) test files that need httpfs (log: $log)..."
+    # on_init's LOAD fails every file when httpfs cannot load (under autoloading, `require
+    # httpfs` alone passes without loading it). --require miint fails a file whose miint
+    # cannot load, where it would otherwise be skipped; -w NoTests fails the run when any
+    # file in the list matches no test.
+    HOME="$HTTPFS_TEST_HOME" DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' \
+        ${TIMEOUT_CMD:+"$TIMEOUT_CMD" --kill-after=60 "$HTTPFS_TIMEOUT_SECONDS"} \
+        ./build/release/test/unittest --require miint -w NoTests "$files" \
+        > "$log" 2>&1 || rc=$?
+    elapsed=$((SECONDS - start))
+    if [ "$rc" -ne 0 ]; then
+        # In full: CI keeps the console output, not the log file.
+        cat "$log"
+        # timeout exits 124, or 137 when it has to kill; 137 is also any other SIGKILL, such
+        # as the out-of-memory killer's, so only a run that lasted the limit counts as timed out.
+        if { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } && [ "$elapsed" -ge "$HTTPFS_TIMEOUT_SECONDS" ]; then
+            echo "ERROR: tests that need httpfs did not finish within ${HTTPFS_TIMEOUT_SECONDS}s" >&2
+        else
+            echo "ERROR: tests that need httpfs failed (exit $rc after ${elapsed}s)" >&2
+        fi
+        exit 1
+    fi
+    tail -n 20 "$log"
+    bad_skips=$(sed -n '/^Skipped tests for the following reasons:/,$p' "$log" | tail -n +2 |
+        grep -vE "^(require-env ($HTTPFS_ALLOWED_SKIPS): [0-9]+)?$" || true)
+    if [ -n "$bad_skips" ]; then
+        echo "ERROR: the httpfs pass skipped files for reasons this run should have provided:" >&2
+        echo "$bad_skips" >&2
+        exit 1
+    fi
+}
+
+run_httpfs_files "$HTTPFS_TESTS" "$PWD/build/release/httpfs_tests.log"
+
+# The live ENA tests, which the pass above skipped (see MIINT_ENA_LIVE_TEST above).
+if [ "$ENA_LIVE" = "1" ]; then
+    ENA_LIVE_TESTS=$(grep -rl --include='*.test' '^require-env ENA_AVAILABLE' test/sql | paste -sd, -)
+    (
+        unset MIINT_ENA_PORTAL_URL_BASE
+        export ENA_AVAILABLE=1
+        run_httpfs_files "$ENA_LIVE_TESTS" "$PWD/build/release/httpfs_ena_live_tests.log"
+    ) || exit 1
 fi
 
 # Run shell script tests. A script that loads httpfs runs with the httpfs pass's HOME

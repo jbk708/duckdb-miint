@@ -31,6 +31,14 @@ Behavior:
         sample-insert tests use, all marked optional) so older mock tests
         keep round-tripping without rewriting their attribute MAPs.
 
+  - On GET to /portal/api/search with `result=read_run` and a
+    `run_accession` query (read_ena_sequences), answers the read_run row of
+    each run that has a FASTQ under data/ena/, with fastq_ftp pointing back
+    at this mock's /fastq/ and the size and md5 computed from the file. The
+    aspera and submitted-file fields are empty, so nothing reaches EBI.
+    MD5_MISMATCH_RUN gets ERR1074767's file with a wrong md5.
+  - On GET or HEAD to /fastq/<file>, serves that file from data/ena/.
+
 Invoked by run_tests.sh on a free port; URL is exported as ENA_WEBIN_MOCK_URL,
 MIINT_ENA_PORTAL_URL_BASE = "$ENA_WEBIN_MOCK_URL/portal/api", and
 MIINT_ENA_CHECKLIST_URL_BASE = "$ENA_WEBIN_MOCK_URL/browser/api/xml".
@@ -45,6 +53,7 @@ import os
 import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 # A stand-in for the line the Portal API returned in place of rows in an HTTP
 # 200 (captured 2026-10-14 with the query's JSON after "Query: "; no trailing
@@ -52,6 +61,22 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 _PORTAL_INCOMPLETE_LINE = "ERROR occurred. Not all results may have been written.Query: {}"
 # Queries that have already failed once ("INCOMPLETE_ONCE_" aliases).
 _FAILED_ONCE_QUERIES: set[str] = set()
+
+# FASTQ files the read_run search can answer for, served at /fastq/<name>.
+_ENA_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "ena"
+# ENA's read_run metadata for each run with a file there (captured 2026-10-22).
+_READ_RUNS = {
+    "ERR1074767": {
+        "sample_accession": "SAMEA3610311",
+        "experiment_accession": "ERX1154891",
+        "study_accession": "PRJEB11419",
+        "library_layout": "SINGLE",
+        "fastq_file": "ERR1074767.fastq.gz",
+    },
+}
+# A run whose reported md5 does not match its file.
+MD5_MISMATCH_RUN = "ERR9999999"
+_READ_RUNS[MD5_MISMATCH_RUN] = dict(_READ_RUNS["ERR1074767"], fastq_md5="0" * 32)
 
 _CHECKLIST_TST000001 = """<?xml version="1.0" encoding="UTF-8"?>
 <CHECKLIST_SET>
@@ -360,7 +385,32 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return user_pw.startswith("Webin-") and ":" in user_pw
 
+    def _send_fastq(self, head_only: bool):
+        name = self.path[len("/fastq/") :]
+        path = _ENA_DATA_DIR / name
+        if "/" in name or not path.is_file():
+            self.send_response(404)
+            self.end_headers()
+            return
+        payload = path.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/gzip")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        if not head_only:
+            self.wfile.write(payload)
+
+    def do_HEAD(self):
+        if self.path.startswith("/fastq/"):
+            self._send_fastq(head_only=True)
+            return
+        self.send_response(404)
+        self.end_headers()
+
     def do_GET(self):
+        if self.path.startswith("/fastq/"):
+            self._send_fastq(head_only=False)
+            return
         # Checklist XML (Phase 8 Step 8b). Anonymous GET — public reference
         # data on the real EBI browser API.
         if self.path.startswith("/browser/api/xml/"):
@@ -442,6 +492,8 @@ class Handler(BaseHTTPRequestHandler):
         query = unquote(qs.get("query", [""])[0])
         if not fields or not query:
             return None
+        if qs.get("result", [""])[0] == "read_run" and query.startswith("run_accession"):
+            return self._handle_read_run_search(fields, query)
         # Accept both "<field> IN (\"a\",\"b\")" and the single
         # "<field> = \"a\"" forms. Extract bare aliases.
         aliases: list[str] = []
@@ -474,6 +526,33 @@ class Handler(BaseHTTPRequestHandler):
             if always or query not in _FAILED_ONCE_QUERIES:
                 _FAILED_ONCE_QUERIES.add(query)
                 return fields + "\n" + _PORTAL_INCOMPLETE_LINE
+        return "\n".join(lines) + "\n"
+
+    def _handle_read_run_search(self, fields: str, query: str) -> str:
+        """The read_run rows for the queried runs that have a file, with the
+        requested fields in the requested order. A field this mock does not
+        know is answered empty, as ENA does for a field a run lacks."""
+        requested = re.findall(r'"([^"]+)"', query)
+        host, port = self.server.server_address[:2]
+        names = fields.split(",")
+        lines = ["\t".join(names)]
+        for run in requested:
+            meta = _READ_RUNS.get(run)
+            if meta is None:
+                continue
+            fastq = _ENA_DATA_DIR / meta["fastq_file"]
+            payload = fastq.read_bytes()
+            row = {
+                "run_accession": run,
+                "sample_accession": meta["sample_accession"],
+                "experiment_accession": meta["experiment_accession"],
+                "study_accession": meta["study_accession"],
+                "library_layout": meta["library_layout"],
+                "fastq_ftp": f"http://{host}:{port}/fastq/{meta['fastq_file']}",
+                "fastq_bytes": str(len(payload)),
+                "fastq_md5": meta.get("fastq_md5", hashlib.md5(payload).hexdigest()),
+            }
+            lines.append("\t".join(row.get(name, "") for name in names))
         return "\n".join(lines) + "\n"
 
     def _handle_reports_lookup(self, path: str) -> str | None:
