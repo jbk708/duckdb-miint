@@ -8,6 +8,8 @@ require httpfs
 
 require miint
 
+# Live ENA: runs only under MIINT_ENA_LIVE_TEST=1, when ENA's Portal answers;
+# run_tests.sh sets ENA_AVAILABLE only then. CI runs it nightly.
 require-env ENA_AVAILABLE
 
 # ---- Schema ----
@@ -42,16 +44,4 @@ SELECT COUNT(*) > 0 FROM ena_searchable_fields('read_run');
 ----
 true
 
-# ---- Invalid result_type: empty ----
-
-statement error
-SELECT * FROM ena_searchable_fields('');
-----
-result_type cannot be empty
-
-# ---- Invalid result_type: URL injection attempt rejected at bind ----
-
-statement error
-SELECT * FROM ena_searchable_fields('sample&query=evil');
-----
-result_type contains invalid characters
+# Input errors, which need no request: read_ena_input_errors.test.

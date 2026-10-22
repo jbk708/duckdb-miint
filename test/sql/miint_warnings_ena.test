@@ -6,7 +6,8 @@ require httpfs
 
 require miint
 
-# Requires the ENA Portal API; run_tests.sh probes and exports this.
+# Live ENA: runs only under MIINT_ENA_LIVE_TEST=1, when ENA's Portal answers;
+# run_tests.sh sets ENA_AVAILABLE only then. CI runs it nightly.
 require-env ENA_AVAILABLE
 
 # A non-existent accession → record_skip() fires EmitWarning with the accession

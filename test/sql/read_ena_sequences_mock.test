@@ -1,0 +1,71 @@
+# name: test/sql/read_ena_sequences_mock.test
+# description: read_ena_sequences against a mock Portal API: the search, the download and the md5 check, without EBI
+# group: [sql]
+
+require httpfs
+
+require miint
+
+require-env ENA_WEBIN_MOCK_URL
+
+require-env MIINT_ENA_PORTAL_URL_BASE
+
+# run_tests.sh points the Portal API at test/scripts/ena_webin_mock.py. It
+# answers ERR1074767 with ENA's metadata for that run and a fastq_ftp naming
+# data/ena/ERR1074767.fastq.gz on the mock, whose size and md5 it computes from
+# the file, and ERR9999999 with the same file under a wrong md5. The live tests
+# of the same function run only with MIINT_ENA_LIVE_TEST=1.
+
+# Every read arrives once, each with the run's accessions from the Portal row:
+# a read without them would form a group of its own.
+query IIIII
+SELECT run_accession, sample_accession, experiment_accession, count(*), count(DISTINCT read_id)
+FROM read_ena_sequences('ERR1074767')
+GROUP BY ALL;
+----
+ERR1074767	SAMEA3610311	ERX1154891	20939	20939
+
+# The first record, as written in the file.
+query II
+SELECT read_id, sequence1[1:20]
+FROM read_ena_sequences('ERR1074767', max_sequences => 1);
+----
+ERR1074767.1	AACGTAGGTCACAAGCGTTG
+
+# The file came from the mock: the URL the Portal row named.
+query I
+SELECT DISTINCT filepath LIKE '${ENA_WEBIN_MOCK_URL}/fastq/ERR1074767.fastq.gz'
+FROM read_ena_sequences('ERR1074767', include_filepath => true);
+----
+true
+
+# Each run in a list is read, under its own accession.
+query II
+SELECT run_accession, count(*)
+FROM read_ena_sequences(['ERR1074767', 'ERR9999999'], verify_md5 => false)
+GROUP BY ALL ORDER BY ALL;
+----
+ERR1074767	20939
+ERR9999999	20939
+
+# A correlated call takes the in-out path, and reads the run once per outer row.
+query II
+SELECT r.run_accession, count(*)
+FROM (VALUES ('ERR1074767'), ('ERR1074767')) r(run_accession),
+     LATERAL (SELECT read_id FROM read_ena_sequences(r.run_accession)) seq
+GROUP BY ALL;
+----
+ERR1074767	41878
+
+# A file whose bytes do not match the md5 the Portal reported is refused once
+# it has been read to the end...
+statement error
+SELECT count(*) FROM read_ena_sequences('ERR9999999');
+----
+md5 mismatch
+
+# ...and only the md5 check refuses it: unchecked, the same file reads in full.
+query I
+SELECT count(*) FROM read_ena_sequences('ERR9999999', verify_md5 => false);
+----
+20939

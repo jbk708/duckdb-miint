@@ -9,8 +9,8 @@ require httpfs
 
 require miint
 
-# Skip when ENA Portal API is not reachable (offline CI, blocked network).
-# run_tests.sh probes and exports this; unset → skip the whole file.
+# Live ENA: runs only under MIINT_ENA_LIVE_TEST=1, when ENA's Portal answers;
+# run_tests.sh sets ENA_AVAILABLE only then. CI runs it nightly.
 require-env ENA_AVAILABLE
 
 # ---- Basic lateral ----

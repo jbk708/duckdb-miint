@@ -18,6 +18,11 @@ on:
       - 'README.md'
       - '*.md'
   workflow_dispatch:
+  # Nightly, test-with-bowtie2 and tutorials run against the real ENA, which every other
+  # run replaces with a mock (docs/testing.md, "Guards and skipped tests"). Nothing else
+  # runs.
+  schedule:
+    - cron: '23 7 * * *'
 
 # Opt JavaScript actions into Node.js 24 ahead of the June 2026 forced cutover.
 # Silences "Node.js 20 actions are deprecated" runner warnings without
@@ -32,6 +37,7 @@ concurrency:
 jobs:
   duckdb-stable-build:
     name: Build extension binaries
+    if: github.event_name != 'schedule'
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
     with:
       duckdb_version: v1.5.5
@@ -68,7 +74,11 @@ jobs:
 
   test-with-bowtie2:
     name: Test with Bowtie2
-    runs-on: ubuntu-latest
+    # The tutorials job runs this job's CLI, so both pin one image: a CLI built on a
+    # newer one can need a glibc the other lacks.
+    runs-on: ubuntu-24.04
+    outputs:
+      build-uploaded: ${{ steps.upload-build.outcome }}
     env:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       VCPKG_TARGET_TRIPLET: 'x64-linux'
@@ -165,27 +175,53 @@ jobs:
           VCPKG_BINARY_SOURCES="clear;files,${{ github.workspace }}/vcpkg_bincache,readwrite" \
             make release
 
+      # For the tutorials job. Uploaded before the test suite runs, so the tutorials run
+      # even when it fails.
+      - name: Upload the CLI and extension
+        id: upload-build
+        uses: actions/upload-artifact@v4
+        with:
+          name: tutorial-build
+          path: |
+            build/release/duckdb
+            build/release/extension/miint/miint.duckdb_extension
+          if-no-files-found: error
+          retention-days: 3
+          # A re-run of this job uploads again under the same name.
+          overwrite: true
+
       - name: Run all tests
         shell: bash -el {0}
+        env:
+          MIINT_ENA_LIVE_TEST: ${{ github.event_name == 'schedule' && '1' || '0' }}
         run: bash run_tests.sh
 
+  # The tutorials in a job of their own, from test-with-bowtie2's build, so that
+  # "Re-run failed jobs" reruns them alone, without a rebuild.
+  tutorials:
+    name: Tutorials
+    needs: test-with-bowtie2
+    if: ${{ !cancelled() && needs.test-with-bowtie2.outputs.build-uploaded == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tutorial-build
+          path: build/release
+
       - name: Install tutorial test dependencies
-        shell: bash -el {0}
-        # Pin BOTH install and runtime to `/usr/bin/python3` (system Python
-        # 3.12). Under `shell: bash -el {0}`, conda-incubator/setup-miniconda
-        # auto-activates a "test" env whose python3 has no pip module
-        # ("No module named pip"), so `python3 -m pip` fails. Meanwhile bare
-        # `pip` resolves to system pip (Python 3.12) and falls back to user
-        # site-packages ("Defaulting to user installation"), but the next
-        # step's `python3` would resolve to conda's and miss those installs.
-        # Using the absolute path `/usr/bin/python3` for both steps sidesteps
-        # the conda env entirely for this Python concern while leaving
-        # bowtie2 (a conda-installed binary) untouched on PATH.
-        run: /usr/bin/python3 -m pip install --user duckdb==$(./build/release/duckdb -csv -noheader -c "SELECT ltrim(version(), 'v');") pyarrow pandas matplotlib
+        # The artifact drops the executable bit. The Python client must be the
+        # DuckDB version the extension was built against, or it cannot load it.
+        run: |
+          chmod +x build/release/duckdb
+          python3 -m pip install --user duckdb==$(./build/release/duckdb -csv -noheader -c "SELECT ltrim(version(), 'v');") pyarrow pandas matplotlib
 
       - name: Run tutorial tests
-        shell: bash -el {0}
-        run: PYTHON=/usr/bin/python3 bash onboarding-tutorials/run_tutorial_tests.sh ./build/release/duckdb
+        env:
+          MIINT_TUTORIAL_LIVE: ${{ github.event_name == 'schedule' && '1' || '0' }}
+        run: PYTHON=python3 bash onboarding-tutorials/run_tutorial_tests.sh ./build/release/duckdb
 
   #test-wasm-compatible-build:
   #  name: Test WASM-compatible build (no HDF5/Bowtie2)
@@ -338,6 +374,7 @@ jobs:
 
   code-quality-check:
     name: Code Quality Check
+    if: github.event_name != 'schedule'
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5-variegata
     with:
       duckdb_version: v1.5.5
@@ -347,6 +384,7 @@ jobs:
 
   version-consistency:
     name: DuckDB version consistency
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     # The target DuckDB version is spelled out in the two duckdb_version inputs
     # above, the Dockerfile ARG, the publish cron's default, the Python CLI's pip
