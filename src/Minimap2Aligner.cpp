@@ -434,6 +434,7 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 
 	int n_regs = 0;
 	mm_reg1_t *regs = map_single(sequence, read_id.c_str(), n_regs);
+	const RegionsGuard free_regs {&regs, &n_regs, 1};
 
 	int secondary_count = 0;
 
@@ -469,8 +470,6 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 		);
 	}
 
-	free_regions(regs, n_regs);
-
 	// Comparing against the row count taken on entry catches every way a query can end up with no
 	// row -- no seed chain, the min_chain_coverage prefilter, or every reg rejected by the rid
 	// bounds check above -- rather than just testing n_regs == 0 and missing the other two.
@@ -489,6 +488,7 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 	int n_regs[2] = {0, 0};
 	mm_reg1_t *regs[2] = {nullptr, nullptr};
 	map_pair(sequence1, sequence2, read_id.c_str(), n_regs, regs);
+	const RegionsGuard free_regs {regs, n_regs, 2};
 
 	// Find primary alignments for each segment (with bounds checking)
 	mm_reg1_t *primary[2] = {nullptr, nullptr};
@@ -570,10 +570,6 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 			append_unmapped(read_id, seg, mate_mapped[seg], mate_rev[seg], mate_rid[seg], mate_pos[seg], output);
 		}
 	}
-
-	for (int seg = 0; seg < 2; seg++) {
-		free_regions(regs[seg], n_regs[seg]);
-	}
 }
 
 bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view sequence2, const char *qname) {
@@ -595,19 +591,15 @@ bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view se
 		}
 		int n_regs = 0;
 		mm_reg1_t *regs = map_single(sequence1, qname, n_regs);
-		const bool mapped = any_known(regs, n_regs);
-		free_regions(regs, n_regs);
-		return mapped;
+		const RegionsGuard free_regs {&regs, &n_regs, 1};
+		return any_known(regs, n_regs);
 	}
 
 	int n_regs[2] = {0, 0};
 	mm_reg1_t *regs[2] = {nullptr, nullptr};
 	map_pair(sequence1, sequence2, qname, n_regs, regs);
-	const bool mapped = any_known(regs[0], n_regs[0]) || any_known(regs[1], n_regs[1]);
-	for (int seg = 0; seg < 2; seg++) {
-		free_regions(regs[seg], n_regs[seg]);
-	}
-	return mapped;
+	const RegionsGuard free_regs {regs, n_regs, 2};
+	return any_known(regs[0], n_regs[0]) || any_known(regs[1], n_regs[1]);
 }
 
 mm_reg1_t *Minimap2Aligner::map_single(std::string_view sequence, const char *qname, int &n_regs) {
@@ -615,12 +607,14 @@ mm_reg1_t *Minimap2Aligner::map_single(std::string_view sequence, const char *qn
 	              active_mapopt(), qname);
 }
 
-void Minimap2Aligner::free_regions(mm_reg1_t *regs, int n_regs) {
+Minimap2Aligner::RegionsGuard::~RegionsGuard() {
 	// MM_FREE, not free: minimap2 may allocate through jemalloc.
-	for (int j = 0; j < n_regs; j++) {
-		MM_FREE(regs[j].p);
+	for (int seg = 0; seg < segments; seg++) {
+		for (int j = 0; j < n_regs[seg]; j++) {
+			MM_FREE(regs[seg][j].p);
+		}
+		MM_FREE(regs[seg]);
 	}
-	MM_FREE(regs);
 }
 
 bool Minimap2Aligner::known_reference(int32_t rid) const {
