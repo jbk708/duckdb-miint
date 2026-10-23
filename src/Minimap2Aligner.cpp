@@ -589,8 +589,9 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 	mopt.flag |= MM_F_FRAG_MODE;
 
 	// minimap2 wants both segments of a pair on one strand: it pairs their hits by strand
-	// (mm_pair, pe.c), and every preset but splice:sr, which maps each alone first, also
-	// chains the seeds of both as one fragment. pe_ori names the segments read from the other
+	// (mm_pair, pe.c), and unless the preset sets MM_F_WEAK_PAIRING (splice:sr), which
+	// maps each alone first (mm_map_frag, map.c), it also chains the seeds of both as one
+	// fragment. pe_ori names the segments read from the other
 	// strand (the second, for the presets that pair forward-reverse: sr, short and
 	// splice:sr); minimap2 reverse-complements those before mapping, and flips their hits
 	// back after (worker_for, map.c).

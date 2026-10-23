@@ -11,8 +11,8 @@
 #   minimap2 version: 2.30-r1287
 #
 # Test data (simulated):
-#   data/minimap2/paired_subject.fasta - one random 6,000 bp sequence. The sr and
-#   map-ont runs above report no secondary or supplementary hit even with
+#   data/minimap2/paired_subject.fasta - one random 6,000 bp sequence. The sr, map-ont
+#   and splice:sr runs above report no secondary or supplementary hit even with
 #   -N 50 --secondary=yes, so align_minimap2's max_secondary changes no row here
 #   data/minimap2/paired_R1.fasta, paired_R2.fasta - 150 bp pairs. Mate 2 is read from
 #   the other strand of the fragment, as Illumina pairs are:
@@ -28,8 +28,8 @@
 # reverse-complements mate 2 before mapping, so that both mates lie on one strand.
 # That is what makes such a pair proper under all three. Under sr and short the seeds
 # of both mates then chain together as one fragment, which is what maps the fragment_*
-# pairs at all, whose mates each hold too few seeds to chain alone; splice:sr maps each
-# mate alone, and maps none of them.
+# pairs at all, whose mates each hold too few seeds to chain alone. None of them maps
+# under splice:sr.
 
 require miint
 
@@ -98,8 +98,8 @@ forward_fragment	147
 fragment_24	99
 fragment_24	147
 
-# splice:sr pairs forward-reverse too, so the pairs whose mates both map are proper,
-# but it maps each mate alone, so the fragment_* pairs do not map.
+# splice:sr pairs forward-reverse too, so the pairs whose mates both map are proper.
+# None of the fragment_* pairs maps under it (natively neither).
 query IIIITIIIIT
 SELECT read_id, flags, position, mapq, cigar, mate_position, template_length, tag_as, tag_nm, tag_md
 FROM align_minimap2('pairs', subject_table := 'subject', preset := 'splice:sr', eqx := true)

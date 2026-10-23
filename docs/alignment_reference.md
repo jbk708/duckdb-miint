@@ -573,7 +573,7 @@ Returns the same schema as `read_alignments` (21 columns):
 **Behavior:**
 - Subject sequences are loaded into memory at bind time (must fit in RAM)
 - Query sequences are processed in batches for memory efficiency
-- Supports both single-end and paired-end query sequences, and maps a pair as minimap2 does. The presets for forward-reverse pairs (`sr`, its alias `short`, and `splice:sr`) flag a pair proper (`0x2`) when its mates face each other, close together on one reference; every other preset flags a pair proper only when both mates lie on one strand. `sr` and `short` also map a pair as one fragment, so a pair can map when neither of its mates maps alone. Positions, strands and CIGARs are reported against each mate as given
+- Supports both single-end and paired-end query sequences, and maps a pair as minimap2 does. The presets for forward-reverse pairs (`sr`, its alias `short`, and `splice:sr`) flag a pair proper (`0x2`) when its mates face each other, close together on one reference; every other preset flags a pair proper only when both mates lie on one strand. `splice:sr` maps each mate alone and then pairs the hits; every other preset maps a pair as one fragment, and under `sr` and `short` a pair can then map when neither of its mates maps alone. Positions, strands and CIGARs are reported against each mate as given
 - Uses minimap2's in-memory indexing for fast alignment
 - Secondary alignments are controlled by `max_secondary` parameter
 
