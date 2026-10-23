@@ -69,29 +69,31 @@ missing required column
 statement ok
 DROP TABLE bad_table2;
 
-# Test error: a sequence that is not a string. RYpe is handed the column's own
-# bytes, so a type with no bytes to hand is refused by name, not cast
+# Test error: a sequence column that is not a string is refused, with an error
+# naming it, at bind: no index is there to load. RYpe is handed the column's own
+# bytes, not a cast of them. That includes a column of NULLs typed NULL, as
+# `NULL AS sequence2` makes one; NULL::VARCHAR is accepted (rype_paired_detection)
 statement ok
 CREATE TABLE int_sequence1 AS SELECT 'seq1' AS read_id, 42 AS sequence1;
 
 statement error
-SELECT * FROM rype_classify('data/rype/test.ryxdi', 'int_sequence1');
+SELECT * FROM rype_classify('nonexistent.ryxdi', 'int_sequence1');
 ----
-sequence1 in 'int_sequence1' must be VARCHAR or BLOB, not INTEGER
+Column 'sequence1' in 'int_sequence1' must be VARCHAR or BLOB, not INTEGER
 
 statement ok
-CREATE TABLE int_sequence2 AS SELECT 'seq1' AS read_id, 'ACGTACGTACGTACGTACGTACGTACGTACGT' AS sequence1, 42 AS sequence2;
+CREATE TABLE null_sequence2 AS SELECT 'seq1' AS read_id, 'ACGTACGTACGTACGTACGTACGTACGTACGT' AS sequence1, NULL AS sequence2;
 
 statement error
-SELECT * FROM rype_classify('data/rype/test.ryxdi', 'int_sequence2');
+SELECT * FROM rype_classify('nonexistent.ryxdi', 'null_sequence2');
 ----
-sequence2 in 'int_sequence2' must be VARCHAR or BLOB, not INTEGER
+Column 'sequence2' in 'null_sequence2' must be VARCHAR or BLOB, not "NULL"
 
 statement ok
 DROP TABLE int_sequence1;
 
 statement ok
-DROP TABLE int_sequence2;
+DROP TABLE null_sequence2;
 
 # Test error: invalid threshold (too low)
 statement error
@@ -294,9 +296,11 @@ WHERE read_id IN ('no_match', 'homopolymer');
 statement ok
 DROP TABLE varied_sequences;
 
-# The relation's name and the id column's go into the scan's SQL. Named so that
-# either would end the statement if spliced in raw, each is one identifier: the
-# call gives what the plain names give, and runs nothing else.
+# The relation's name and the id column's go into the scan's SQL. Each holds a
+# double quote and a second statement, so each is one identifier only when it is
+# quoted: the call then gives what the plain names give. The victim's count shows
+# nothing else ran, should the scan ever go through a call that runs several
+# statements.
 statement ok
 CREATE TABLE injection_victim AS SELECT 1 AS x;
 

@@ -58,6 +58,30 @@ missing required column
 statement ok
 DROP TABLE bad_table2;
 
+# Test error: a sequence1 that is not a string, refused at bind with an error
+# naming it. sequence2 is not read here, so its type is not checked
+statement ok
+CREATE TABLE int_sequence1 AS SELECT 'seq1' AS read_id, 42 AS sequence1;
+
+statement error
+SELECT * FROM rype_extract_minimizer_set('int_sequence1', 32, 10);
+----
+Column 'sequence1' in 'int_sequence1' must be VARCHAR or BLOB, not INTEGER
+
+statement ok
+CREATE TABLE int_sequence2 AS SELECT read_id, sequence1, 42 AS sequence2 FROM sequences;
+
+query I
+SELECT count(*) FROM rype_extract_strand_minimizers('int_sequence2', 32, 10);
+----
+3
+
+statement ok
+DROP TABLE int_sequence1;
+
+statement ok
+DROP TABLE int_sequence2;
+
 # Same errors for strand minimizers
 statement error
 SELECT * FROM rype_extract_strand_minimizers('sequences', 31, 10);
@@ -325,7 +349,8 @@ CREATE TABLE malformed_varchar AS SELECT * FROM (VALUES
 statement ok
 CREATE TABLE escaped_blob AS SELECT * FROM (VALUES
     ('same_bytes', ('ACGTTGCAAGCTTCGATCGGATCCAAGTTGCAACGTTAGC' || '\x5Cx47' || 'GCATGCATCCGGTTAAGCTAGCTTGACCGATCGTAGGCAT')::BLOB),
-    ('named_byte', ('ACGTTGCAAGCTTCGATCGGATCCAAGTTGCAACGTTAGC' || 'G' || 'GCATGCATCCGGTTAAGCTAGCTTGACCGATCGTAGGCAT')::BLOB)
+    ('named_byte', ('ACGTTGCAAGCTTCGATCGGATCCAAGTTGCAACGTTAGC' || 'G' || 'GCATGCATCCGGTTAAGCTAGCTTGACCGATCGTAGGCAT')::BLOB),
+    ('malformed_bytes', ('ACGTTGCAAGCTTCGATCGGATCCAAGTTGCAACGTTAGC' || '\x5Cz' || 'GCATGCATCCGGTTAAGCTAGCTTGACCGATCGTAGGCAT')::BLOB)
 ) AS t(read_id, sequence1);
 
 query III
@@ -337,10 +362,13 @@ WHERE v.read_id = 'escaped' AND same.read_id = 'same_bytes' AND named.read_id = 
 ----
 true	true	false
 
-query I
-SELECT len(fwd_set) > 0 FROM rype_extract_minimizer_set('malformed_varchar', 16, 4);
+query II
+SELECT len(m.fwd_set) > 0, m.fwd_set = same.fwd_set
+FROM (SELECT * FROM rype_extract_minimizer_set('malformed_varchar', 16, 4)) m,
+     (SELECT * FROM rype_extract_minimizer_set('escaped_blob', 16, 4)) same
+WHERE same.read_id = 'malformed_bytes';
 ----
-true
+true	true
 
 statement ok
 DROP TABLE escaped_varchar;

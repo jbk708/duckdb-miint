@@ -378,6 +378,8 @@ private:
 };
 
 //! Start the single scan of the caller's relation and wrap it in a stream.
+//! sequence1, and sequence2 when the pair column is included, must be VARCHAR
+//! or BLOB; a VARCHAR is reinterpreted as BLOB in place, not cast.
 //!
 //! The returned object must be kept alive by the caller until RYpe is finished
 //! with the stream — i.e. until after the RYpe output stream has been released.

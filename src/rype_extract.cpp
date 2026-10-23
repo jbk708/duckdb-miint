@@ -77,7 +77,8 @@ static unique_ptr<RypeExtractData> BindExtraction(ClientContext &context, TableF
 	// Capture the id column's storage type so read_id mirrors it on output
 	// (BIGINT/UUID/VARCHAR) instead of always VARCHAR. Extraction is single-end,
 	// so has_sequence2 is irrelevant here.
-	data->id_type = ValidateSequenceTable(context, data->sequence_table, data->id_column).id_type;
+	data->id_type =
+	    ValidateSequenceTable(context, data->sequence_table, data->id_column, /*reads_sequence2=*/false).id_type;
 
 	return data;
 }

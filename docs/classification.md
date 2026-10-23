@@ -4,7 +4,7 @@ Assign sequencing reads to references or taxa by their minimizer/k-mer content a
 
 These functions are powered by [RYpe](https://github.com/biocore/rype), a minimizer-based sequence classification tool that uses RY-space encoding (purine/pyrimidine) for robust sequence matching. They require a RYpe index directory (`.ryxdi`), which contains a Parquet-based inverted index built from reference sequences.
 
-Most of these functions take a `sequence_table` parameter that references a DuckDB table or view containing sequence data. The table must have a `sequence1` column (VARCHAR or BLOB, read byte for byte as stored, so a backslash in a VARCHAR is not an escape) and an identifier column (default `read_id`); `rype_filter` needs only `sequence1`. The exception is `rype_index_create`, which *builds* a `.ryxdi` index from a chunked reference table. Sequence tables are typically produced by the readers in [reading](reading.md). For turning classification hits into per-sample abundance tables, see [profiling](profiling.md). When your buckets are NCBI taxids, resolve them to ranks, names, and full lineages with the [NCBI taxonomy](insdc_ncbi.md#taxonomy) functions.
+Most of these functions take a `sequence_table` parameter that references a DuckDB table or view containing sequence data. The table must have a `sequence1` column (VARCHAR or BLOB, read byte for byte as stored) and an identifier column (default `read_id`); `rype_filter` needs only `sequence1`. The exception is `rype_index_create`, which *builds* a `.ryxdi` index from a chunked reference table. Sequence tables are typically produced by the readers in [reading](reading.md). For turning classification hits into per-sample abundance tables, see [profiling](profiling.md). When your buckets are NCBI taxids, resolve them to ranks, names, and full lineages with the [NCBI taxonomy](insdc_ncbi.md#taxonomy) functions.
 
 ## Table of Contents
 
@@ -85,7 +85,7 @@ Classify sequences against a RYpe index, returning bucket assignments with confi
 
 **Parameters:**
 - `index_path` (VARCHAR): Path to a RYpe index directory (`.ryxdi`)
-- `sequence_table` (VARCHAR): Name of a DuckDB table or view containing sequences. Must have columns: identifier column + `sequence1` + optional `sequence2`
+- `sequence_table` (VARCHAR): Name of a DuckDB table or view containing sequences. Must have columns: identifier column + `sequence1` (VARCHAR or BLOB) + optional `sequence2` (VARCHAR or BLOB)
 - `id_column` (VARCHAR, optional, default `'read_id'`): Name of the identifier column in the sequence table
 - `threshold` (DOUBLE, optional, default 0.1): Minimum score threshold (0.0-1.0). Only matches with score >= threshold are returned
 - `negative_index` (VARCHAR, optional): Path to a second RYpe index used as a negative filter
@@ -206,7 +206,7 @@ Compute the log-ratio of classification scores between two single-bucket RYpe in
 **Parameters:**
 - `numerator_path` (VARCHAR): Path to a single-bucket RYpe index directory (`.ryxdi`) used as the numerator
 - `denominator_path` (VARCHAR): Path to a single-bucket RYpe index directory (`.ryxdi`) used as the denominator
-- `sequence_table` (VARCHAR): Name of a DuckDB table or view containing sequences. Must have columns: identifier column + `sequence1` + optional `sequence2`
+- `sequence_table` (VARCHAR): Name of a DuckDB table or view containing sequences. Must have columns: identifier column + `sequence1` (VARCHAR or BLOB) + optional `sequence2` (VARCHAR or BLOB)
 - `id_column` (VARCHAR, optional, default `'read_id'`): Name of the identifier column in the sequence table
 - `skip_threshold` (DOUBLE, optional, default 0.5): Numerator score threshold for fast-path. Reads with numerator score >= this value skip denominator classification and get `+inf` log_ratio immediately. Set to 0 or negative to disable the fast-path
 - `max_memory` (BIGINT, optional, default 0): Byte budget for RYpe's internal batch sizing (how many reads it accumulates before each pass over the index). 0 derives one — see [Memory budget](#memory-budget) below
@@ -269,7 +269,7 @@ SELECT * FROM rype_log_ratio('host.ryxdi', 'microbe.ryxdi', 'seqs', id_column :=
 Extract deduplicated minimizer hash sets from sequences for both forward and reverse complement strands.
 
 **Parameters:**
-- `sequence_table` (VARCHAR): Name of a DuckDB table or view with identifier column + `sequence1`
+- `sequence_table` (VARCHAR): Name of a DuckDB table or view with identifier column + `sequence1` (VARCHAR or BLOB)
 - `k` (BIGINT): K-mer size. Must be 16, 32, or 64 (constrained by RY-space 1-bit encoding fitting in uint64)
 - `w` (BIGINT): Window size for minimizer selection. Must be > 0
 - `salt` (UBIGINT, optional, default 6148914691236517205): Hash salt for reproducible but varied minimizer selection
@@ -324,7 +324,7 @@ WHERE a.read_id < b.read_id;
 Extract minimizer hashes with their positions for both forward and reverse complement strands. Unlike `rype_extract_minimizer_set`, this preserves positional information and may contain duplicate hashes at different positions.
 
 **Parameters:**
-- `sequence_table` (VARCHAR): Name of a DuckDB table or view with identifier column + `sequence1`
+- `sequence_table` (VARCHAR): Name of a DuckDB table or view with identifier column + `sequence1` (VARCHAR or BLOB)
 - `k` (BIGINT): K-mer size. Must be 16, 32, or 64
 - `w` (BIGINT): Window size for minimizer selection. Must be > 0
 - `salt` (UBIGINT, optional, default 6148914691236517205): Hash salt for reproducible but varied minimizer selection

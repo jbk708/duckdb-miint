@@ -723,11 +723,7 @@ unique_ptr<FunctionData> RypeFilterTableFunction::Bind(ClientContext &context, T
 			continue;
 		}
 		(is_sequence1 ? data->sequence1_column : data->sequence2_column) = i;
-		const auto type = columns.types[i].id();
-		if (type != LogicalTypeId::VARCHAR && type != LogicalTypeId::BLOB) {
-			throw BinderException("Column '%s' in '%s' must be VARCHAR or BLOB, not %s", name, data->relation,
-			                      columns.types[i].ToString());
-		}
+		RequireRypeSequenceType(columns.types[i], is_sequence1 ? "sequence1" : "sequence2", data->relation);
 	}
 	if (data->sequence1_column == DConstants::INVALID_INDEX) {
 		throw BinderException("Table '%s' missing required column 'sequence1'", data->relation);

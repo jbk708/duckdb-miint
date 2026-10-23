@@ -99,7 +99,7 @@ unique_ptr<FunctionData> RypeLogRatioTableFunction::Bind(ClientContext &context,
 	// Validate sequence table exists and has required columns. Capture the id
 	// column's storage type so read_id mirrors it on output (BIGINT/UUID/VARCHAR)
 	// instead of always VARCHAR.
-	auto table_info = ValidateSequenceTable(context, data->sequence_table, data->id_column);
+	auto table_info = ValidateSequenceTable(context, data->sequence_table, data->id_column, /*reads_sequence2=*/true);
 	data->has_sequence2 = table_info.has_sequence2;
 	data->id_type = table_info.id_type;
 	data->types[0] = data->id_type;

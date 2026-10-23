@@ -1,4 +1,5 @@
 #include "rype_input_stream.hpp"
+#include "rype_common.hpp"
 
 #include "duckdb/common/arrow/arrow_converter.hpp"
 #include "duckdb/common/optional_idx.hpp"
@@ -26,16 +27,6 @@ unique_ptr<StreamingQuery> SubmitScan(Connection &conn, const std::string &selec
 		                            query_result->GetError());
 	}
 	return query_result;
-}
-
-//! Refuse a sequence column AppendSlice cannot hand RYpe in place. It
-//! reinterprets VARCHAR or BLOB as BLOB, which is sound only for the string
-//! physical type: anything else would hand RYpe a pointer that is not one.
-void RequireStringSequence(const LogicalType &type, const std::string &column, const RypeInputStreamOptions &options) {
-	if (type.id() != LogicalTypeId::VARCHAR && type.id() != LogicalTypeId::BLOB) {
-		throw InvalidInputException("%s in '%s' must be VARCHAR or BLOB, not %s", column, options.source_name,
-		                            type.ToString());
-	}
 }
 
 } // namespace
@@ -119,11 +110,13 @@ unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id
 	}
 
 	auto query_result = SubmitScan(conn, select_cols, options);
+	// Bind refuses these types already; this check is what AppendSlice's
+	// reinterpret rests on, for a relation redefined since bind.
 	const auto &types = query_result->GetTypes();
 	const RypeSourceColumns source;
-	RequireStringSequence(types[source.sequence], "sequence1", options);
+	RequireRypeSequenceType(types[source.sequence], "sequence1", options.source_name);
 	if (options.include_pair_column) {
-		RequireStringSequence(types[source.pair_sequence], "sequence2", options);
+		RequireRypeSequenceType(types[source.pair_sequence], "sequence2", options.source_name);
 	}
 	return make_uniq<RypeInputStream>(std::move(query_result), id_map, std::move(options));
 }
@@ -155,11 +148,11 @@ unique_ptr<RypeInputStream> BuildRypeFilterStream(Connection &conn, const vector
 	}
 
 	auto query_result = SubmitScan(conn, select_cols, options);
+	// As in BuildRypeInputStream: bind refuses these, and AppendSlice rests on it.
 	const auto &types = query_result->GetTypes();
-	for (const auto &position : {sequence1, sequence2}) {
-		if (position.IsValid()) {
-			RequireStringSequence(types[position.GetIndex()], columns[position.GetIndex()], options);
-		}
+	RequireRypeSequenceType(types[source.sequence], "sequence1", options.source_name);
+	if (options.has_sequence2) {
+		RequireRypeSequenceType(types[source.pair_sequence], "sequence2", options.source_name);
 	}
 	return make_uniq<RypeInputStream>(std::move(query_result), nullptr, std::move(options), source);
 }
@@ -596,9 +589,9 @@ idx_t RypeInputStream::AppendSlice(ArrowAppender &appender, DataChunk &chunk, id
 	// so nothing is copied here — ArrowAppender copies straight from the scan's
 	// buffers into the Arrow batch. transformed is deliberately not Reset(): every
 	// index in [from, to) of the id vector is written below, and the sequence
-	// columns are re-referenced each call. Reinterpret, not Reference: a filter
-	// stream's sequence may be VARCHAR, whose physical type BLOB shares, and
-	// BuildRypeFilterStream allowed nothing else.
+	// columns are re-referenced each call. Reinterpret, not Reference: a sequence
+	// may be VARCHAR, whose physical type BLOB shares, and both builders refuse
+	// any other type (RequireRypeSequenceType).
 	auto ids = FlatVector::GetDataMutable<int64_t>(transformed.data[COL_ID]);
 	for (idx_t i = from; i < to; i++) {
 		ids[i] = static_cast<int64_t>(base + (i - from));

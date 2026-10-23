@@ -313,6 +313,16 @@ struct RypeSequenceTableInfo {
 	LogicalType id_type = LogicalType(LogicalTypeId::INVALID);
 };
 
+//! Refuse a sequence column RYpe cannot be handed as it is. RYpe's input stream
+//! reinterprets VARCHAR or BLOB as BLOB in place, which is sound only for the
+//! string physical type: anything else would hand RYpe a pointer that is not one.
+//! `column` is "sequence1" or "sequence2"; `relation` is the caller's name for it.
+inline void RequireRypeSequenceType(const LogicalType &type, const std::string &column, const std::string &relation) {
+	if (type.id() != LogicalTypeId::VARCHAR && type.id() != LogicalTypeId::BLOB) {
+		throw BinderException("Column '%s' in '%s' must be VARCHAR or BLOB, not %s", column, relation, type.ToString());
+	}
+}
+
 //! Validate that a table/view exists and has the required columns for RYpe
 //! functions. Reports whether the optional "sequence2" column is present and the
 //! id column's storage type. All RYpe functions require id_column and
@@ -320,27 +330,35 @@ struct RypeSequenceTableInfo {
 //! ids as strings internally and emits them back in their SQL storage type, so
 //! only the codec-supported set round-trips losslessly; anything else is
 //! rejected loud at bind, matching align_minimap2 and the rest of the id-aware
-//! tree.
+//! tree. The sequences RYpe reads (sequence2 only when `reads_sequence2`) must
+//! be VARCHAR or BLOB (RequireRypeSequenceType).
 inline RypeSequenceTableInfo ValidateSequenceTable(ClientContext &context, const std::string &table_name,
-                                                   const std::string &id_column) {
+                                                   const std::string &id_column, bool reads_sequence2) {
 	auto cols = GetTableColumnsLower(context, table_name);
 	auto &col_names = cols.names;
 
 	auto id_col_lower = StringUtil::Lower(id_column);
 	auto id_it = std::find(col_names.begin(), col_names.end(), id_col_lower);
-	bool has_seq1 = std::find(col_names.begin(), col_names.end(), "sequence1") != col_names.end();
-	bool has_seq2 = std::find(col_names.begin(), col_names.end(), "sequence2") != col_names.end();
+	auto seq1_it = std::find(col_names.begin(), col_names.end(), "sequence1");
+	auto seq2_it = std::find(col_names.begin(), col_names.end(), "sequence2");
+	const auto type_at = [&](vector<string>::const_iterator it) {
+		return cols.types[static_cast<size_t>(std::distance(col_names.cbegin(), it))];
+	};
 
 	if (id_it == col_names.end()) {
 		throw BinderException("Table '%s' missing required column '%s'", table_name, id_column);
 	}
-	if (!has_seq1) {
+	if (seq1_it == col_names.end()) {
 		throw BinderException("Table '%s' missing required column 'sequence1'", table_name);
+	}
+	RequireRypeSequenceType(type_at(seq1_it), "sequence1", table_name);
+	if (reads_sequence2 && seq2_it != col_names.end()) {
+		RequireRypeSequenceType(type_at(seq2_it), "sequence2", table_name);
 	}
 
 	RypeSequenceTableInfo info;
-	info.has_sequence2 = has_seq2;
-	info.id_type = cols.types[static_cast<size_t>(std::distance(col_names.begin(), id_it))];
+	info.has_sequence2 = seq2_it != col_names.end();
+	info.id_type = type_at(id_it);
 
 	if (!IsAllowedIdType(info.id_type)) {
 		throw BinderException("Column '%s' in table '%s' must be %s", id_column, table_name, AllowedIdTypeList());
