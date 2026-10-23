@@ -658,13 +658,13 @@ fi
 # The main pass, on MIINT_TEST_JOBS workers (checked at the top).
 if [ "$MIINT_TEST_JOBS" -gt 1 ]; then
     python3 test/scripts/run_tests_parallel.py --jobs "$MIINT_TEST_JOBS" \
-        --unittest ./build/release/test/unittest --cpp-tests ./build/release/extension/miint/tests \
-        --cpp-tests ./build/release/extension/miint/tests_duckdb
+        --unittest ./build/release/test/unittest --cpp-tests ./build/release/extension/miint/tests
 else
     make test
     ./build/release/extension/miint/tests
-    ./build/release/extension/miint/tests_duckdb
 fi
+# A few seconds long, so it runs after either pass rather than as one of its jobs.
+./build/release/extension/miint/tests_duckdb
 
 # read_fastx_fd_release.test must run under a low RLIMIT_NOFILE: it asserts that one scan
 # over many paths holds descriptors proportional to thread count, not to path count, and

@@ -2,10 +2,10 @@
 """Run the SQL test files and the C++ tests on parallel workers.
 
 `MIINT_TEST_JOBS=N bash run_tests.sh` runs this in place of `make test` followed by the
-C++ test binaries. The SQL files are the ones `make test` runs: unittest lists them from
+C++ test binary. The SQL files are the ones `make test` runs: unittest lists them from
 the spec `make test` passes it, test/*, this script's default. Each runs in its own
 unittest process, and so gets a {TEST_DIR} of its own.
-Each C++ test binary is one more job, queued first because they are the longest.
+The C++ binary is one more job, queued first because it is the longest.
 
 One job's failure does not stop the others, and a job still running after --timeout seconds
 is killed and counts as failed. The run fails if any job failed, after printing each failed
@@ -21,6 +21,7 @@ import subprocess
 import sys
 import time
 
+CPP_JOB = "C++ tests"
 SKIP_HEADER = "Skipped tests for the following reasons:"
 
 
@@ -57,9 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--jobs", type=int, required=True, help="worker processes")
     parser.add_argument("--unittest", required=True, help="DuckDB's unittest binary")
-    parser.add_argument(
-        "--cpp-tests", required=True, action="append", help="one of miint's Catch2 test binaries; repeat for each"
-    )
+    parser.add_argument("--cpp-tests", required=True, help="miint's Catch2 test binary")
     parser.add_argument(
         "--timeout",
         type=int,
@@ -105,16 +104,14 @@ def main():
     sql_env.setdefault("RUST_MIN_STACK", "4194304")
 
     # -w NoTests: a name that matches nothing fails instead of passing as "No tests ran".
-    cpp_jobs = {os.path.basename(binary): binary for binary in args.cpp_tests}
-    jobs = [(name, [binary], None) for name, binary in cpp_jobs.items()]
-    jobs += [(f, unittest + ["-w", "NoTests", f], sql_env) for f in files]
+    jobs = [(CPP_JOB, [args.cpp_tests], None)] + [(f, unittest + ["-w", "NoTests", f], sql_env) for f in files]
     print(f"Running {len(files)} SQL test files and the C++ tests on {args.jobs} workers...", flush=True)
 
     failed = []
     statuses = collections.Counter()
     reasons = collections.Counter()
     assertions = 0
-    cpp_summaries = {}
+    cpp_summary = ""
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = [pool.submit(run, name, cmd, env, args.timeout) for name, cmd, env in jobs]
         try:
@@ -128,8 +125,8 @@ def main():
                     status = "skip"
                 else:
                     status = "ok"
-                if name in cpp_jobs:
-                    cpp_summaries[name] = output.strip().splitlines()[-1] if output.strip() else "(no output)"
+                if name == CPP_JOB:
+                    cpp_summary = output.strip().splitlines()[-1] if output.strip() else "(no output)"
                 else:
                     statuses[status] += 1
                     reasons.update(skip_reasons(output))
@@ -154,9 +151,7 @@ def main():
         print(SKIP_HEADER)
         for reason, count in sorted(reasons.items()):
             print(f"{reason}: {count}")
-    failed_names = {f[0] for f in failed}
-    for name in cpp_jobs:
-        print(f"C++ tests, {name}: {'FAILED, see above' if name in failed_names else cpp_summaries[name]}")
+    print(f"C++ tests: {'FAILED, see above' if any(f[0] == CPP_JOB for f in failed) else cpp_summary}")
     return 1 if failed else 0
 
 
