@@ -919,7 +919,7 @@ TEST_CASE("SequenceReader reads ahead no more than read()'s byte budget", "[Sequ
 TEST_CASE("SequenceReader reads long records ahead a few at a time", "[SequenceReader][read_ahead]") {
 	// A poll is sized by the room left under READ_AHEAD_BYTES, not by read()'s far larger default
 	// budget nor by the whole of READ_AHEAD_BYTES: records of a quarter of it are read no more than
-	// four at a time, not sixteen, and the read-ahead holds about four of them, not six or more.
+	// four at a time, not sixteen, and the read-ahead holds no more than four of them.
 	TempFileFixture fixture;
 	auto path = "read_ahead_long.fa";
 	const size_t length = miint::SequenceReader::READ_AHEAD_BYTES / 4;
@@ -976,8 +976,9 @@ namespace {
 
 //! Writes `text` into the FIFO at `path` on a thread of its own. Leaving scope waits for it,
 //! having first opened the FIFO for reading itself: if no reader ever did, the writer would
-//! otherwise wait in its open forever. `text` must fit in the pipe's buffer (16 KiB at least),
-//! or a writer blocked on a full pipe would still hang that wait.
+//! otherwise wait in its open forever. `text` must fit in the pipe's buffer, or a writer blocked
+//! on a full pipe would still hang that wait: under a page (4 KiB) fits on Linux even once a
+//! user's pipes are cut to their minimum.
 class FifoWriter {
 public:
 	FifoWriter(std::string path, std::string text)
@@ -1061,16 +1062,18 @@ TEST_CASE("SequenceReader reads a pipe as it is asked to, never ahead", "[Sequen
 	REQUIRE((mkfifo(fifo.c_str(), 0600) == 0));
 	TempFileFixture fixture;
 	std::string text;
-	for (const auto &record : ReadAheadRecords(fixture, "1", 40)) {
+	// Twelve records, about 3.7 KB: under a page, see FifoWriter.
+	for (const auto &record : ReadAheadRecords(fixture, "1", 12)) {
 		text += record;
 	}
+	REQUIRE((text.size() < 4096));
 	{
 		FifoWriter writer(fifo, text);
 		miint::SequenceReader reader(fifo, std::nullopt, false, true);
 		REQUIRE((reader.read(2).size() == 2));
 		REQUIRE(WaitIdle(reader, 0));
 		REQUIRE((reader.ReadAheadBytes(0) == 0));
-		REQUIRE((reader.read(100).size() == 38));
+		REQUIRE((reader.read(100).size() == 10));
 	}
 	std::filesystem::remove(fifo);
 }

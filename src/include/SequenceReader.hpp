@@ -42,9 +42,9 @@ public:
 	//! inflating and parsing it overlap the caller's work. It stops reading ahead once it holds
 	//! this many bytes of records per file, or read()'s own byte budget if that is smaller. Each
 	//! poll asks for as many records as the last one read says fit in the room left (at least
-	//! one, at most sixteen), as read() sizes its own polls, so a poll passes it by about a
-	//! record, or by more where records suddenly grow. Only regular files are read ahead: a read from a pipe can
-	//! wait on its writer forever, and the reader could then never be dropped.
+	//! one, at most sixteen), so a poll passes it by about a record, or by up to sixteen where
+	//! record lengths jump. Only regular files are read ahead: a read from a pipe can wait on
+	//! its writer forever, and the reader could then never be dropped.
 	static constexpr size_t READ_AHEAD_BYTES = 4 * 1024 * 1024;
 
 	//! Whether a scan of `files` files (pairs of them, if `paired`), all read at once, can read

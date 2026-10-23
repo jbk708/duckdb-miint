@@ -132,12 +132,11 @@ static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int re
 // hands records out as read_stream(n) would return them: in order, and n of them, fewer only at
 // the end of the stream. The thread stops while the queue holds READ_AHEAD_BYTES, or read()'s
 // budget if that is smaller, unless read() is waiting on more records than that. It sizes each
-// poll by the room left under that cap and the last record read, as read() sizes its polls by
-// its budget: a poll passes the cap by about a record, or by more where records suddenly grow.
-// An error
-// the stream raises is raised by the first Take the records before it cannot satisfy. As with
-// read_stream, a poll that fails loses the records it read before the error, and since the
-// thread's polls are not read()'s, read() can fail a few records sooner than without it.
+// poll by the room left under that cap and the last record read, so a poll passes the cap by
+// about a record, or by up to sixteen where record lengths jump. An error the stream raises is
+// raised by the first Take the records before it cannot satisfy. As with read_stream, a poll
+// that fails loses the records it read before the error, and since the thread's polls are not
+// read()'s, read() can fail a few records sooner than without it.
 class SequenceReader::ReadAhead {
 public:
 	ReadAhead(StreamVar &stream, size_t peeked_record_bytes, size_t max_bytes)
