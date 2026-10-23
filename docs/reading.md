@@ -58,7 +58,7 @@ SELECT * FROM read_fastx('some_file.fasta');
 - `filepath` (VARCHAR, optional): File path when include_filepath=true
 
 **Behavior:**
-- Detects FASTA (`>` headers) or FASTQ (`@` headers) from the file's content, whatever its extension
+- Detects FASTA (`>` headers) or FASTQ (`@` headers) from the file's content, whatever its extension. Both files of a pair must be the same format: a FASTA file paired with a FASTQ file fails the query
 - Supports gzip-compressed files (.gz extension)
 - Supports stdin input using `-` or `/dev/stdin` (single file only, no paired-end)
 - Quality scores converted to integers using specified offset (Phred+33 or Phred+64)
