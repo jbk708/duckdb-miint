@@ -294,6 +294,34 @@ WHERE read_id IN ('no_match', 'homopolymer');
 statement ok
 DROP TABLE varied_sequences;
 
+# The relation's name and the id column's go into the scan's SQL. Named so that
+# either would end the statement if spliced in raw, each is one identifier: the
+# call gives what the plain names give, and runs nothing else.
+statement ok
+CREATE TABLE injection_victim AS SELECT 1 AS x;
+
+statement ok
+CREATE TABLE "sequences""; DROP TABLE injection_victim; --" AS
+SELECT read_id AS "id""; DROP TABLE injection_victim; --", sequence1 FROM sequences;
+
+query II
+WITH evil AS (
+    SELECT read_id, bucket_name, score
+    FROM rype_classify('data/rype/test.ryxdi', 'sequences"; DROP TABLE injection_victim; --',
+                       id_column := 'id"; DROP TABLE injection_victim; --', threshold := 0.05)),
+plain AS (
+    SELECT read_id, bucket_name, score FROM rype_classify('data/rype/test.ryxdi', 'sequences', threshold := 0.05))
+SELECT (SELECT count(*) FROM evil) > 0,
+       (SELECT count(*) FROM ((SELECT * FROM evil EXCEPT ALL SELECT * FROM plain)
+                              UNION ALL (SELECT * FROM plain EXCEPT ALL SELECT * FROM evil)));
+----
+true	0
+
+query I
+SELECT count(*) FROM injection_victim;
+----
+1
+
 # Clean up
 statement ok
 DROP TABLE sequences;
