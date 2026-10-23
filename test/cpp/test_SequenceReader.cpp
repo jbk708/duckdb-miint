@@ -1,9 +1,12 @@
 #define CATCH_CONFIG_MAIN
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <chrono>
 #include <string>
 #include <fstream>
 #include <filesystem>
+#include <future>
+#include <thread>
 #include "QualScore.hpp"
 #include "SequenceRecord.hpp"
 #include "SequenceReader.hpp"
@@ -668,3 +671,180 @@ TEST_CASE("SequenceReader byte budget default (SIZE_MAX) unchanged behavior", "[
 	auto batch = reader.read(100); // no budget argument -> default SIZE_MAX
 	REQUIRE((batch.size() == 50));
 }
+
+// A local file is read on a thread of its own, ahead of the reads that take its records, so
+// that inflating and parsing it overlap whatever the caller does with each batch. What has to
+// hold: the read-ahead runs while nothing is pulled, and again as soon as records are taken; it
+// stops at its bytes, or at read()'s byte budget if that is smaller, which memory is counted
+// against; a read still gets every record it asks for when they take more bytes than that;
+// records come out as they would without it, in order and with mates in step; and a reader
+// dropped while reading ahead goes at once. A build without threads reads nothing ahead.
+#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
+
+namespace {
+
+std::vector<std::string> ReadAheadRecords(TempFileFixture &fixture, const std::string &mate, int count) {
+	std::vector<std::string> records;
+	for (int i = 0; i < count; i++) {
+		records.push_back(fixture.simple_read("r" + std::to_string(i) + "/" + mate, std::string(150, "ACGT"[i % 4]),
+		                                      std::string(150, 'I')));
+	}
+	return records;
+}
+
+//! Waits up to five seconds for the read-ahead of `segment` to hold at least `bytes`.
+bool ReadAheadReaches(const miint::SequenceReader &reader, int segment, size_t bytes) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+	while (reader.ReadAheadBytes(segment) < bytes) {
+		if (std::chrono::steady_clock::now() > deadline) {
+			return false;
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	return true;
+}
+
+//! reader.read(n), failing the run rather than hanging it if the read never returns. The read
+//! still waits then, holding the reader, so nothing can be torn down: the run aborts.
+miint::SequenceRecordBatch ReadWithin(miint::SequenceReader &reader, int n) {
+	auto read = std::async(std::launch::async, [&reader, n]() { return reader.read(n); });
+	if (read.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+		FAIL_CHECK("read(" << n << ") has not returned after ten seconds");
+		std::abort();
+	}
+	return read.get();
+}
+
+} // namespace
+
+TEST_CASE("SequenceReader reads a local file ahead of its reads, up to its bytes", "[SequenceReader][read_ahead]") {
+	TempFileFixture fixture;
+	auto path = "read_ahead_se.fq";
+	// About 12 MB of records: three times what the read-ahead holds.
+	const int count = 40000;
+	fixture.write_temp_fastq(path, ReadAheadRecords(fixture, "1", count));
+	miint::SequenceReader reader(path);
+
+	// Nothing is read ahead before the first read, which sets the byte budget it works within.
+	REQUIRE((reader.ReadAheadBytes(0) == 0));
+	auto first = reader.read(10);
+	REQUIRE((first.size() == 10));
+	// Then the file is read on while nothing is pulled, up to the read-ahead's bytes...
+	const size_t record = 3 + 150 + 150;
+	REQUIRE(ReadAheadReaches(reader, 0, miint::SequenceReader::READ_AHEAD_BYTES - 16 * (record + 6)));
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	// ...and no further than one more poll past them.
+	REQUIRE((reader.ReadAheadBytes(0) <= miint::SequenceReader::READ_AHEAD_BYTES + 16 * (record + 6)));
+	// Taking one poll's records leaves it short of its bytes, and it reads on at once, not at the
+	// next read.
+	auto second = reader.read(16);
+	REQUIRE((second.size() == 16));
+	REQUIRE(ReadAheadReaches(reader, 0, miint::SequenceReader::READ_AHEAD_BYTES));
+
+	// Every record comes out once, in order.
+	size_t total = first.size() + second.size();
+	while (true) {
+		auto batch = reader.read(2048);
+		if (batch.empty()) {
+			break;
+		}
+		REQUIRE((batch.read_ids[0] == "r" + std::to_string(total)));
+		total += batch.size();
+	}
+	REQUIRE((total == static_cast<size_t>(count)));
+}
+
+TEST_CASE("SequenceReader reads both files of a pair ahead and keeps the mates in step",
+          "[SequenceReader][read_ahead]") {
+	TempFileFixture fixture;
+	auto path1 = "read_ahead_r1.fq";
+	auto path2 = "read_ahead_r2.fq";
+	const int count = 40000;
+	fixture.write_temp_fastq(path1, ReadAheadRecords(fixture, "1", count));
+	fixture.write_temp_fastq(path2, ReadAheadRecords(fixture, "2", count));
+	miint::SequenceReader reader(path1, std::string(path2));
+
+	auto first = reader.read(10);
+	REQUIRE((first.size() == 10));
+	REQUIRE(ReadAheadReaches(reader, 0, miint::SequenceReader::READ_AHEAD_BYTES / 2));
+	REQUIRE(ReadAheadReaches(reader, 1, miint::SequenceReader::READ_AHEAD_BYTES / 2));
+
+	size_t total = first.size();
+	while (true) {
+		auto batch = reader.read(2048);
+		if (batch.empty()) {
+			break;
+		}
+		for (size_t i = 0; i < batch.size(); i++) {
+			REQUIRE((batch.read_ids[i] == "r" + std::to_string(total + i)));
+			REQUIRE((batch.sequences2[i] == batch.sequences1[i]));
+		}
+		total += batch.size();
+	}
+	REQUIRE((total == static_cast<size_t>(count)));
+}
+
+TEST_CASE("SequenceReader reads ahead no more than read()'s byte budget", "[SequenceReader][read_ahead]") {
+	TempFileFixture fixture;
+	auto path = "read_ahead_budget.fq";
+	fixture.write_temp_fastq(path, ReadAheadRecords(fixture, "1", 40000));
+	miint::SequenceReader reader(path);
+	// A budget far below the read-ahead's own bytes.
+	const size_t budget = 32 * 1024;
+	const size_t record = 3 + 150 + 150;
+
+	auto first = reader.read(10, budget);
+	REQUIRE((first.size() == 10));
+	REQUIRE(ReadAheadReaches(reader, 0, budget - 16 * (record + 6)));
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	REQUIRE((reader.ReadAheadBytes(0) <= budget + 16 * (record + 6)));
+
+	auto next = reader.read(2048, budget);
+	REQUIRE((next.read_ids[0] == "r10"));
+}
+
+TEST_CASE("SequenceReader gets a read every record it asks for, more than the read-ahead holds",
+          "[SequenceReader][read_ahead]") {
+	// Mate 2's records are long: fifteen of them fill the read-ahead, which then stops short of
+	// the sixteen a read asks each file for, and must read on for that read. Mate 1's are short,
+	// so its read-ahead holds plenty.
+	TempFileFixture fixture;
+	auto path1 = "read_ahead_long_r1.fq";
+	auto path2 = "read_ahead_long_r2.fq";
+	const int count = 20;
+	const size_t length = 150000;
+	REQUIRE((14 * 2 * length >= miint::SequenceReader::READ_AHEAD_BYTES));
+	std::vector<std::string> mates1;
+	std::vector<std::string> mates2;
+	for (int i = 0; i < count; i++) {
+		const std::string id = "r" + std::to_string(i);
+		mates1.push_back(fixture.simple_read(id + "/1", std::string(150, 'A'), std::string(150, 'I')));
+		mates2.push_back(fixture.simple_read(id + "/2", std::string(length, 'C'), std::string(length, 'I')));
+	}
+	fixture.write_temp_fastq(path1, mates1);
+	fixture.write_temp_fastq(path2, mates2);
+	miint::SequenceReader reader(path1, std::string(path2));
+
+	// The first record of each file was read when the reader opened; the second is the first
+	// a read-ahead hands out, after reading sixteen in one poll. Mate 2's keeps fifteen.
+	REQUIRE((reader.read(2).size() == 2));
+	auto batch = ReadWithin(reader, 16);
+	REQUIRE((batch.size() == 16));
+	for (size_t i = 0; i < batch.size(); i++) {
+		REQUIRE((batch.read_ids[i] == "r" + std::to_string(2 + i)));
+		REQUIRE((batch.sequences2[i].size() == length));
+	}
+	REQUIRE((ReadWithin(reader, 16).size() == 2));
+}
+
+TEST_CASE("SequenceReader dropped while reading ahead goes at once", "[SequenceReader][read_ahead]") {
+	TempFileFixture fixture;
+	auto path = "read_ahead_drop.fq";
+	fixture.write_temp_fastq(path, ReadAheadRecords(fixture, "1", 40000));
+	for (int i = 0; i < 20; i++) {
+		miint::SequenceReader reader(path);
+		REQUIRE((reader.read(1).size() == 1));
+	}
+}
+
+#endif
