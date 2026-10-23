@@ -1,4 +1,5 @@
 #include "Minimap2Aligner.hpp"
+#include <minimap2/bseq.h>
 #include <minimap2/minimap.h>
 #include <minimap2/mmpriv.h>
 #include <cstdlib>
@@ -15,10 +16,6 @@
 #else
 #define MM_FREE(ptr) free(ptr)
 #endif
-
-// minimap2's complement for every byte a read may hold (bseq.c), which it uses to
-// reverse-complement a segment; declared here as format.c declares it.
-extern "C" unsigned char seq_comp_table[256];
 
 namespace miint {
 
@@ -597,7 +594,6 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 	// those before mapping, and flips their hits back after (worker_for, map.c).
 	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
 	const std::string *given[2] = {&sequence1, &sequence2};
-	std::string flipped[2];
 	int qlens[2];
 	const char *seqs[2];
 	for (int seg = 0; seg < 2; seg++) {
@@ -605,11 +601,15 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 		qlens[seg] = static_cast<int>(seq.length());
 		seqs[seg] = seq.c_str();
 		if (flip[seg]) {
-			flipped[seg].resize(seq.length());
+			// minimap2's own complement (bseq.h), so every byte a read holds is
+			// complemented as minimap2 complements it; indexed unsigned, which
+			// mm_revcomp_bseq does not do for the bytes it swaps.
+			auto &flipped = flipped_[seg];
+			flipped.resize(seq.length());
 			for (size_t i = 0; i < seq.length(); i++) {
-				flipped[seg][seq.length() - 1 - i] = static_cast<char>(seq_comp_table[static_cast<uint8_t>(seq[i])]);
+				flipped[seq.length() - 1 - i] = static_cast<char>(seq_comp_table[static_cast<uint8_t>(seq[i])]);
 			}
-			seqs[seg] = flipped[seg].c_str();
+			seqs[seg] = flipped.c_str();
 		}
 	}
 

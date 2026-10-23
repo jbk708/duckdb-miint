@@ -5,6 +5,8 @@
 # Ground truth generated with:
 #   minimap2 -a -x sr --eqx --MD data/minimap2/paired_subject.fasta \
 #       data/minimap2/paired_R1.fasta data/minimap2/paired_R2.fasta
+#   minimap2 -a -x map-ont --frag=yes --eqx --MD data/minimap2/paired_subject.fasta \
+#       data/minimap2/paired_R1.fasta data/minimap2/paired_R2.fasta
 #   minimap2 version: 2.30-r1287
 #
 # Test data (simulated):
@@ -77,3 +79,20 @@ ORDER BY read_id, flags;
 ----
 mate1_only	73	subject	4501	4651	60	150=	300	0	150
 mate2_only	153	subject	5201	5351	60	150=	300	0	150
+
+# A preset that does not pair forward-reverse maps both mates as given. map-ont
+# pairs same-strand mates, so these pairs are not proper, and the fragment_* pairs,
+# whose mates chain only when mate 2 is flipped, do not map.
+query IIIIIITTIIIIT
+SELECT read_id, flags, reference, position, stop_position, mapq, cigar,
+       mate_reference, mate_position, template_length, tag_as, tag_nm, tag_md
+FROM align_minimap2('pairs', subject_table := 'subject', preset := 'map-ont', eqx := true)
+WHERE read_id NOT IN ('mate1_only', 'mate2_only')
+ORDER BY read_id, flags;
+----
+forward_fragment	97	subject	1001	1151	60	150=	=	1301	450	300	0	150
+forward_fragment	145	subject	1301	1451	60	150=	=	1001	-450	300	0	150
+mismatched	97	subject	2001	2151	60	20=1X54=1X54=1X19=	=	2251	400	282	3	20C54A54T19
+mismatched	145	subject	2251	2401	60	10=1X49=1X79=1X9=	=	2001	-400	282	3	10C49T79G9
+reverse_fragment	81	subject	3301	3451	60	150=	=	3001	-450	300	0	150
+reverse_fragment	161	subject	3001	3151	60	150=	=	3301	450	300	0	150

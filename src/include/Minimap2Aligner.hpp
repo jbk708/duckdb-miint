@@ -204,6 +204,7 @@ private:
 	std::shared_ptr<SharedMinimap2Index> shared_index_; // Shared index (mutually exclusive with index_)
 	char *md_buf_ = nullptr;                            // Pooled buffer for mm_gen_MD (Opt 5)
 	int md_max_len_ = 0;                                // Current capacity of md_buf_
+	std::string flipped_[2];                            // Reused by map_pair for a reverse-complemented mate
 
 	// Build raw mm_idx_t* from subjects (shared by build_index and BuildSharedIndex)
 	static mm_idx_t *BuildRawIndex(const std::vector<AlignmentSubject> &subjects, const mm_idxopt_t &iopt,
