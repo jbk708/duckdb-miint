@@ -27,12 +27,12 @@
 // row rather than an emergent property of two scans, which is a stronger
 // guarantee than the TEMP table gave, not a weaker one.
 //
-// Threading. get_next runs on whichever thread pulls RYpe's output stream. For
-// rype_classify, rype_log_ratio and rype_extract that is the table function's
-// Execute, which each pins to one thread (MaxThreads() is 1), so the RypeIdMap is
-// written and read from one thread. rype_filter pulls from one classify job at a
-// time and keeps no id map. RYpe's internal rayon parallelism happens inside
-// classification, after the pull returns.
+// Threading. get_next runs on whichever thread pulls RYpe's output stream. A
+// stream with an id map is pulled by its table function's Execute, which pins
+// MaxThreads() to 1, so the RypeIdMap is written and read from one thread. A
+// filter stream keeps no id map, and one classify job at a time pulls it. RYpe's
+// internal rayon parallelism happens inside classification, after the pull
+// returns.
 //
 // Filter streams (BuildRypeFilterStream) read the caller's own columns instead,
 // keep no id map, and end after a set number of rows so that one RYpe call sees
@@ -101,9 +101,9 @@ constexpr idx_t RYPE_ARROW_BATCH_BYTES = 256ULL * 1024 * 1024;
 //! DuckDB parses and range-checks the value for us.
 idx_t GetRypeArrowBatchBytes(ClientContext &context);
 
-//! A BIGINT extension option that must not be negative, as LoadInternal registers
-//! miint_rype_arrow_batch_bytes and miint_rype_filter_group_rows: `if_null` when
-//! it is NULL. `zero_means` says, in the error for a negative value, what 0 does.
+//! A BIGINT extension option, registered in LoadInternal, that must not be
+//! negative: `if_null` when it is NULL. `zero_means` says, in the error for a
+//! negative value, what 0 does.
 idx_t GetNonNegativeOption(ClientContext &context, const char *name, idx_t if_null, const char *zero_means);
 
 //! Everything the stream needs that is not derivable from the connection.

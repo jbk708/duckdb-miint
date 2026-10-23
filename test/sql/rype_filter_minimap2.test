@@ -216,9 +216,10 @@ RESET miint_rype_filter_group_rows;
 
 endloop
 
-# The rows a run returns keep the relation's id type, with minimap2 and without.
-# DESCRIBE binds without running, and the EXCEPT ALL above would cast a changed
-# type to a common one.
+# read_id keeps the relation's type for every id type, with minimap2 and
+# without: typeof is fixed when the query binds, so this checks the bound type,
+# as DESCRIBE does, in queries that also return rows. The EXCEPT ALL above
+# compares values, and would cast a changed type to a common one.
 query IIII
 SELECT (SELECT DISTINCT typeof(read_id)
         FROM rype_filter('pairs_bigint', 'data/rype/test.ryxdi', '{TEST_DIR}/rype_filter_host.mmi', threshold := 0.05)),

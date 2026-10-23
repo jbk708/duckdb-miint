@@ -163,8 +163,9 @@ struct RypeFilterTableFunction::Schedule {
 	//! otherwise left to a woken thread.
 	RypeFilterFollowUp FinishUnitLocked(const RypeFilterUnit &unit, bool inline_jobs);
 
-	//! Free the RYpe index, the minimap2 index, the held rows, the scan and its
-	//! connection. The GlobalState calls it once the jobs are drained: a job's task
+	//! Free the RYpe index, the held rows, the scan and its connection, and drop
+	//! the schedule's reference to the minimap2 index (an aligner a DuckDB thread
+	//! holds keeps its own). The GlobalState calls it once the jobs are drained: a job's task
 	//! is dropped, with its reference to the schedule, only after the executor has
 	//! counted it finished, so the last reference can go on any of the pool's
 	//! threads, after the query. ~Schedule calls it too; a second call does nothing.
