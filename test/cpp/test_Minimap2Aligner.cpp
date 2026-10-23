@@ -1,5 +1,4 @@
 #include <catch2/catch_test_macros.hpp>
-#include <catch2/matchers/catch_matchers_string.hpp>
 #include "Minimap2Aligner.hpp"
 #include "SAMRecord.hpp"
 #include "SequenceRecord.hpp"
@@ -1410,95 +1409,74 @@ TEST_CASE("any_mapped agrees with align() on a mixed paired batch", "[Minimap2Al
 	REQUIRE(queries.size() - mapped >= 20);
 }
 
-// =============================================================================
-// IsMultiPartIndex: answering "single part?" without loading the index
-// =============================================================================
+// A prebuilt index can be read on several threads, which build its buckets' hash tables, and must
+// come out the index read on one. mm_idx_dump writes every hash entry in table order, so two loads
+// that dump alike hold the same sequences, the same buckets and every entry in the same place: a
+// bucket built from the wrong entries, from part of them, or not at all shows as a difference.
+// The reference repeats pieces of itself, so that many minimizers occur more than once and the
+// buckets' position arrays are not empty.
 
-// A filter that refuses multi-part indexes must say so before it starts work, not
-// after loading part 1 (9 s for a human reference). The answer must match what the
-// loaders decide, or the early check and the load would disagree about the file.
-
-static void write_bytes(const std::string &path, const std::string &bytes) {
-	std::ofstream out(path, std::ios::binary | std::ios::trunc);
-	REQUIRE(out.good());
-	out << bytes;
-}
-
-static std::string read_bytes(const std::string &path) {
+static std::string dump_index(const mm_idx_t *idx, const std::string &path) {
+	FILE *fp = std::fopen(path.c_str(), "wb");
+	REQUIRE(fp != nullptr);
+	mm_idx_dump(fp, idx);
+	std::fclose(fp);
 	std::ifstream in(path, std::ios::binary);
-	REQUIRE(in.good());
-	return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+	std::remove(path.c_str());
+	return bytes;
 }
 
-TEST_CASE("IsMultiPartIndex agrees with Minimap2PartCursor on single- and multi-part files", "[Minimap2Aligner]") {
-	const std::string part1 = "data/shards/test_is_multipart_p1.mmi";
-	const std::string part2 = "data/shards/test_is_multipart_p2.mmi";
-	const std::string multipart = "data/shards/test_is_multipart.mmi";
+TEST_CASE("A minimap2 index read on several threads is the index read on one", "[Minimap2Aligner]") {
+	std::mt19937 rng {20261022};
+	Minimap2Config config;
+	config.preset = "sr";
+	const std::string repeat = random_dna(rng, 20000);
+	const std::string ref_a = repeat + random_dna(rng, 150000) + repeat;
+	const std::string ref_b = random_dna(rng, 100000) + mutate(rng, repeat, 0.01);
+
+	const std::string path = "data/shards/test_threaded_load.mmi";
+	Minimap2Aligner builder(config);
+	builder.build_index({{"ref_a", ref_a}, {"ref_b", ref_b}});
+	builder.save_index(path);
+
+	Minimap2IndexReader one(path, config, 1);
+	Minimap2IndexReader many(path, config, 4);
+	auto from_one = one.ReadNextPart();
+	auto from_many = many.ReadNextPart();
+	REQUIRE(from_one != nullptr);
+	REQUIRE(from_many != nullptr);
+	// Read to the end of the part, and no further.
+	REQUIRE(many.AtEof());
+	REQUIRE(from_many->subject_names() == from_one->subject_names());
+	const std::string dumped_one = dump_index(from_one->index(), path + ".one");
+	const std::string dumped_many = dump_index(from_many->index(), path + ".many");
+	REQUIRE(dumped_one.size() > 1000000);
+	REQUIRE(dumped_many == dumped_one);
+
+	std::remove(path.c_str());
+}
+
+TEST_CASE("A multi-part minimap2 index read on several threads stops at each part's end", "[Minimap2Aligner]") {
+	const std::string part1 = "data/shards/test_threaded_multipart_p1.mmi";
+	const std::string part2 = "data/shards/test_threaded_multipart_p2.mmi";
+	const std::string multipart = "data/shards/test_threaded_multipart.mmi";
 	build_multipart_mmi_fixture(part1, part2, multipart);
 
 	Minimap2Config config;
 	config.preset = "sr";
 	config.k = 5;
-
-	REQUIRE_FALSE(Minimap2Aligner::IsMultiPartIndex(part1));
-	REQUIRE_FALSE(Minimap2PartCursor(part1, config, nullptr).IsMultiPart());
-
-	REQUIRE(Minimap2Aligner::IsMultiPartIndex(multipart));
-	REQUIRE(Minimap2PartCursor(multipart, config, nullptr).IsMultiPart());
+	Minimap2IndexReader reader(multipart, config, 4);
+	auto p1 = reader.ReadNextPart();
+	REQUIRE(p1 != nullptr);
+	REQUIRE(p1->subject_names() == std::vector<std::string> {"part1_ref"});
+	REQUIRE_FALSE(reader.AtEof());
+	auto p2 = reader.ReadNextPart();
+	REQUIRE(p2 != nullptr);
+	REQUIRE(p2->subject_names() == std::vector<std::string> {"part2_ref"});
+	REQUIRE(reader.AtEof());
 
 	std::remove(part1.c_str());
 	std::remove(part2.c_str());
 	std::remove(multipart.c_str());
-}
-
-TEST_CASE("IsMultiPartIndex treats trailing bytes after one part as single-part, as the loaders do",
-          "[Minimap2Aligner]") {
-	const std::string part1 = "data/shards/test_is_multipart_trailing_p1.mmi";
-	const std::string part2 = "data/shards/test_is_multipart_trailing_p2.mmi";
-	const std::string multipart = "data/shards/test_is_multipart_trailing.mmi";
-	const std::string padded = "data/shards/test_is_multipart_trailing_padded.mmi";
-	build_multipart_mmi_fixture(part1, part2, multipart);
-	write_bytes(padded, read_bytes(part1) + std::string(64, '\0'));
-
-	Minimap2Config config;
-	config.preset = "sr";
-	config.k = 5;
-	REQUIRE_FALSE(Minimap2Aligner::IsMultiPartIndex(padded));
-	REQUIRE_FALSE(Minimap2PartCursor(padded, config, nullptr).IsMultiPart());
-
-	for (const auto &path : {part1, part2, multipart, padded}) {
-		std::remove(path.c_str());
-	}
-}
-
-TEST_CASE("IsMultiPartIndex fails loudly, naming the file, on a damaged or foreign file", "[Minimap2Aligner]") {
-	const std::string part1 = "data/shards/test_is_multipart_bad_p1.mmi";
-	const std::string part2 = "data/shards/test_is_multipart_bad_p2.mmi";
-	const std::string multipart = "data/shards/test_is_multipart_bad.mmi";
-	const std::string truncated = "data/shards/test_is_multipart_truncated.mmi";
-	const std::string foreign = "data/shards/test_is_multipart_foreign.mmi";
-	build_multipart_mmi_fixture(part1, part2, multipart);
-
-	const std::string whole = read_bytes(part1);
-	write_bytes(truncated, whole.substr(0, whole.size() / 2));
-	write_bytes(foreign, ">ref\nACGTACGTACGTACGTACGT\n");
-
-	auto message_of = [](const std::string &path) {
-		try {
-			Minimap2Aligner::IsMultiPartIndex(path);
-		} catch (const std::runtime_error &e) {
-			return std::string(e.what());
-		}
-		return std::string("no error");
-	};
-	// A cut-short index cannot be answered for: guessing "single part" would let a
-	// later load fail far from the cause.
-	REQUIRE_THAT(message_of(truncated), Catch::Matchers::ContainsSubstring(truncated));
-	REQUIRE_THAT(message_of(foreign), Catch::Matchers::ContainsSubstring(foreign));
-	REQUIRE_THAT(message_of("data/shards/no_such_index.mmi"),
-	             Catch::Matchers::ContainsSubstring("data/shards/no_such_index.mmi"));
-
-	for (const auto &path : {part1, part2, multipart, truncated, foreign}) {
-		std::remove(path.c_str());
-	}
 }

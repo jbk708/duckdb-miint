@@ -36,7 +36,9 @@
 // Filter streams (BuildRypeFilterStream) read the caller's own columns instead,
 // keep no id map, and end after a set number of rows so that one RYpe call sees
 // exactly one group. The rows a group sent are held, shared rather than copied,
-// for the caller to take once RYpe has classified them.
+// for the caller to take once RYpe has classified them. A filter stream can also
+// read ahead (SetReadAhead): another thread fetches the scan's chunks while RYpe
+// classifies, since a streaming result produces only as it is fetched from.
 
 #include "rype_id_map.hpp"
 
@@ -51,6 +53,10 @@
 #include "duckdb/main/query_result.hpp"
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
 #include <string>
 
 namespace duckdb {
@@ -246,11 +252,33 @@ public:
 	//! teardown. Idempotent.
 	void ReleaseScan();
 
+	//! Filter streams only: let the scan run up to `bytes` of chunks ahead of the
+	//! batches, fetched by ReadAhead. `start` is called, on the thread taking a
+	//! chunk, when what was read ahead has fallen to half of `bytes` and no
+	//! ReadAhead is under way or called for; it should have ReadAhead run on another
+	//! thread. It is not called again until that ReadAhead returns.
+	//!
+	//! Why: DuckDB v2.0's streaming result produces as it is fetched from (the
+	//! fetching thread runs the scan's pipeline), not ahead of a consumer that is
+	//! busy. Fetched only from get_next, the scan stops whenever RYpe classifies.
+	//! Raising max_streaming_buffer_size does not change that.
+	void SetReadAhead(idx_t bytes, std::function<void()> start);
+
+	//! Fetch the scan's chunks ahead of the batches until those not yet taken come
+	//! to the read-ahead's bytes, the scan ends, or the stream is aborted. Runs
+	//! alongside get_next on another thread. One fetch is made at a time, so the
+	//! chunks keep scan order; and a pull that finds nothing read ahead, and no
+	//! fetch under way, fetches for itself rather than wait for a ReadAhead that
+	//! may not have started. A scan error is kept for the pull that reaches it.
+	void ReadAhead();
+
+	//! The bytes of the chunks read ahead and not yet taken.
+	idx_t ReadAheadBytes();
+
 	//! Make every later get_next fail, so a RYpe call reading the stream on
-	//! another thread stops at its next batch. Safe to call from any thread.
-	void Abort() {
-		aborted = true;
-	}
+	//! another thread stops at its next batch, and stop any ReadAhead. Safe to call
+	//! from any thread.
+	void Abort();
 
 private:
 	static int StreamGetSchema(ArrowArrayStream *stream, ArrowSchema *out);
@@ -262,6 +290,12 @@ private:
 	//! current is spent. False at end of stream; throws only when the scan
 	//! reported an actual error.
 	bool EnsureChunk();
+	//! The scan's next chunk: the oldest read ahead, else one fetched here unless a
+	//! fetch is under way on another thread. Null at end of stream.
+	shared_ptr<DataChunk> NextChunk();
+	//! With `fetching` taken and `guard` held: fetch one chunk into `ahead`, or end
+	//! the scan, releasing `guard` meanwhile.
+	void FetchLocked(std::unique_lock<std::mutex> &guard);
 	//! Build one record batch; leaves out->release null when the input is drained.
 	void FetchBatch(ArrowArray *out);
 	//! Append rows of `chunk` starting at `from` to `appender`, recording
@@ -313,6 +347,28 @@ private:
 	ErrorData last_error;
 	//! Set by Abort, from any thread.
 	std::atomic<bool> aborted {false};
+
+	//! The scan's fetched chunks not yet taken, and the read-ahead's state. `result`
+	//! is fetched from by whichever thread holds `fetching`, so by one at a time.
+	struct AheadChunk {
+		shared_ptr<DataChunk> chunk;
+		idx_t bytes;
+	};
+	std::mutex ahead_lock;
+	//! Signalled when a fetch finishes and when the stream is aborted.
+	std::condition_variable ahead_progress;
+	// Guarded by ahead_lock.
+	std::deque<AheadChunk> ahead;
+	idx_t ahead_bytes = 0;
+	bool fetching = false;
+	//! The scan has no chunk left to fetch; scan_error says whether it failed.
+	bool scan_ended = false;
+	ErrorData scan_error;
+	//! A ReadAhead is called for or under way.
+	bool reading_ahead = false;
+	//! Set once, before the batches are pulled.
+	idx_t read_ahead_bytes = 0;
+	std::function<void()> start_read_ahead;
 };
 
 //! Start the single scan of the caller's relation and wrap it in a stream.

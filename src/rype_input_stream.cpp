@@ -232,17 +232,84 @@ bool RypeInputStream::EnsureChunk() {
 	if (current_chunk && chunk_offset < current_chunk->size()) {
 		return true;
 	}
-	current_chunk = result->Fetch();
+	current_chunk = NextChunk();
 	chunk_offset = 0;
-	if (current_chunk && current_chunk->size() > 0) {
-		return true;
+	return current_chunk != nullptr;
+}
+
+shared_ptr<DataChunk> RypeInputStream::NextChunk() {
+	std::unique_lock<std::mutex> guard(ahead_lock);
+	while (ahead.empty() && !scan_ended) {
+		if (aborted) {
+			throw InterruptException();
+		}
+		if (fetching) {
+			// A ReadAhead on another thread is fetching the next chunk.
+			ahead_progress.wait(guard);
+			continue;
+		}
+		fetching = true;
+		FetchLocked(guard);
 	}
-	current_chunk.reset();
-	// A stream reports an execution error by ending early with HasError() set; rethrow it with its original type
-	if (result->HasError()) {
-		result->GetErrorObject().Throw();
+	if (ahead.empty()) {
+		// Rethrown with its original type.
+		if (scan_error.HasError()) {
+			scan_error.Throw();
+		}
+		return nullptr;
 	}
-	return false;
+	auto chunk = std::move(ahead.front().chunk);
+	ahead_bytes -= ahead.front().bytes;
+	ahead.pop_front();
+	// Half of what may be read ahead is left: fetch more before the pulls run out.
+	const bool start = start_read_ahead && !reading_ahead && !scan_ended && ahead_bytes <= read_ahead_bytes / 2;
+	if (start) {
+		reading_ahead = true;
+	}
+	guard.unlock();
+	if (start) {
+		start_read_ahead();
+	}
+	return chunk;
+}
+
+void RypeInputStream::FetchLocked(std::unique_lock<std::mutex> &guard) {
+	D_ASSERT(fetching);
+	guard.unlock();
+	shared_ptr<DataChunk> chunk;
+	ErrorData error;
+	try {
+		chunk = result->Fetch();
+		if (chunk && chunk->size() == 0) {
+			chunk.reset();
+		}
+		// A stream reports an execution error by ending early with HasError() set.
+		if (!chunk && result->HasError()) {
+			error = result->GetErrorObject();
+		}
+	} catch (std::exception &e) {
+		error = ErrorData(e);
+	}
+	const idx_t bytes = chunk ? chunk->GetAllocationSize() : 0;
+	guard.lock();
+	fetching = false;
+	// On a ReadAhead's thread nothing would see this throw, and the pulls would
+	// carry on past the chunk it lost: end the scan with the error instead.
+	try {
+		if (chunk) {
+			ahead.push_back(AheadChunk {chunk, bytes});
+		}
+	} catch (std::exception &e) {
+		chunk.reset();
+		error = ErrorData(e);
+	}
+	if (chunk) {
+		ahead_bytes += bytes;
+	} else {
+		scan_ended = true;
+		scan_error = std::move(error);
+	}
+	ahead_progress.notify_all();
 }
 
 void RypeInputStream::SetBatchRows(idx_t rows) {
@@ -274,6 +341,44 @@ bool RypeInputStream::BeginGroup() {
 	group_remaining = group_rows;
 	ArmStream();
 	return true;
+}
+
+void RypeInputStream::SetReadAhead(idx_t bytes, std::function<void()> start) {
+	// A stream with an id map drops its scan when RYpe releases it, which a
+	// ReadAhead on another thread could be fetching from.
+	if (id_map) {
+		throw InternalException("RypeInputStream::SetReadAhead needs a filter stream");
+	}
+	std::lock_guard<std::mutex> guard(ahead_lock);
+	read_ahead_bytes = bytes;
+	start_read_ahead = std::move(start);
+}
+
+void RypeInputStream::ReadAhead() {
+	std::unique_lock<std::mutex> guard(ahead_lock);
+	while (!aborted && !scan_ended && ahead_bytes < read_ahead_bytes) {
+		if (fetching) {
+			// A pull is fetching for itself; carry on after it.
+			ahead_progress.wait(guard);
+			continue;
+		}
+		fetching = true;
+		FetchLocked(guard);
+	}
+	reading_ahead = false;
+}
+
+idx_t RypeInputStream::ReadAheadBytes() {
+	std::lock_guard<std::mutex> guard(ahead_lock);
+	return ahead_bytes;
+}
+
+void RypeInputStream::Abort() {
+	{
+		std::lock_guard<std::mutex> guard(ahead_lock);
+		aborted = true;
+	}
+	ahead_progress.notify_all();
 }
 
 vector<RypeHeldRows> RypeInputStream::TakeGroup() {
@@ -345,10 +450,6 @@ void RypeInputStream::FetchBatch(ArrowArray *out) {
 	// than a null dereference.
 	if (!result) {
 		return;
-	}
-
-	if (result->HasError()) {
-		result->GetErrorObject().Throw();
 	}
 
 	// A filter stream's group ends after group_rows rows, wherever that falls in a

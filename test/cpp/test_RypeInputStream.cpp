@@ -25,7 +25,11 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 
+#include <algorithm>
+#include <condition_variable>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -158,33 +162,19 @@ struct FilterStreamFixture {
 	}
 };
 
-} // namespace
-
-TEST_CASE("Filter stream groups are the relation's rows, each once and in order, with ids that run on",
-          "[RypeInputStream]") {
-	FilterStreamFixture f;
-	f.Exec("CREATE TABLE reads AS SELECT i AS ord, 'S' || i AS sequence1 FROM range(" + std::to_string(ROWS) +
-	       ") t(i)");
-
-	// Group sizes either side of a 2048-row scan chunk, and ones that do not divide it, so groups
-	// end mid-chunk and chunks straddle groups.
-	const idx_t group_rows = GENERATE(as<idx_t> {}, 1, 7, 2047, 2048, 2049, 3000, 5000, 6000);
-	// The Arrow batch's own ceilings close batches inside a group; the group must still be whole.
-	const auto ceiling = GENERATE(std::pair<idx_t, idx_t>(STANDARD_VECTOR_SIZE, 0), std::pair<idx_t, idx_t>(5, 0),
-	                              std::pair<idx_t, idx_t>(STANDARD_VECTOR_SIZE, 1));
-	INFO("group_rows=" << group_rows << " batch_rows=" << ceiling.first << " batch_bytes=" << ceiling.second);
-
-	auto stream = f.Open("reads", {"ord", "sequence1"}, group_rows, ceiling.first, ceiling.second);
+// Pull every group of `stream`, a scan of `SELECT i AS ord, 'S' || i AS sequence1 FROM range(rows)`, and
+// check that together they are its rows, each once and in scan order, under ids that run on.
+void ExpectWholeGroups(RypeInputStream &stream, idx_t group_rows, idx_t rows) {
 	idx_t next = 0;
 	idx_t groups = 0;
-	while (stream->BeginGroup()) {
+	while (stream.BeginGroup()) {
 		INFO("group " << groups);
 		// Once every row has gone out there is no group to begin; an empty one would loop forever.
-		REQUIRE(next < ROWS);
-		const auto sent = ConsumeGroup(*stream);
-		const auto held = stream->TakeGroup();
+		REQUIRE(next < rows);
+		const auto sent = ConsumeGroup(stream);
+		const auto held = stream.TakeGroup();
 
-		const idx_t expect = MinValue<idx_t>(group_rows, ROWS - next);
+		const idx_t expect = MinValue<idx_t>(group_rows, rows - next);
 		std::vector<int64_t> expect_ids;
 		std::vector<std::string> expect_sequences;
 		for (idx_t i = 0; i < expect; i++) {
@@ -222,8 +212,116 @@ TEST_CASE("Filter stream groups are the relation's rows, each once and in order,
 		next += expect;
 		groups++;
 	}
-	CHECK(next == ROWS);
-	CHECK(groups == (ROWS + group_rows - 1) / group_rows);
+	CHECK(next == rows);
+	CHECK(groups == (rows + group_rows - 1) / group_rows);
+}
+
+// Pull groups as rype_filter does until the stream ends or fails, counting the rows sent. Returns the
+// error, or "" for a clean end.
+std::string PullUntilError(RypeInputStream &stream, idx_t &rows) {
+	std::string error;
+	try {
+		while (error.empty() && stream.BeginGroup()) {
+			auto taken = TakeStream(stream);
+			for (;;) {
+				ArrowArray batch;
+				if (taken.get_next(&taken, &batch) != 0) {
+					error = taken.get_last_error(&taken);
+					break;
+				}
+				if (!batch.release) {
+					break;
+				}
+				rows += static_cast<idx_t>(batch.length);
+				batch.release(&batch);
+			}
+			taken.release(&taken);
+			stream.TakeGroup();
+		}
+	} catch (std::exception &e) {
+		// The error may also surface while BeginGroup looks for the next group's first row.
+		error = e.what();
+	}
+	return error;
+}
+
+// Runs ReadAhead on a thread of its own whenever the stream asks, as rype_filter's job on DuckDB's
+// async pool does. Must go before the stream does.
+class ReadAheadThread {
+public:
+	ReadAheadThread(RypeInputStream &stream_p, idx_t bytes) : stream(stream_p) {
+		stream.SetReadAhead(bytes, [this]() {
+			std::lock_guard<std::mutex> guard(lock);
+			pending++;
+			most_pending = std::max(most_pending, pending);
+			requests++;
+			wake.notify_all();
+		});
+		worker = std::thread([this]() { Run(); });
+	}
+
+	~ReadAheadThread() {
+		{
+			std::lock_guard<std::mutex> guard(lock);
+			stop = true;
+		}
+		wake.notify_all();
+		worker.join();
+	}
+
+	//! Requests not yet served, at most at once, and in all. Read on the test's thread.
+	idx_t MostPending() {
+		std::lock_guard<std::mutex> guard(lock);
+		return most_pending;
+	}
+	idx_t Requests() {
+		std::lock_guard<std::mutex> guard(lock);
+		return requests;
+	}
+
+private:
+	void Run() {
+		std::unique_lock<std::mutex> guard(lock);
+		for (;;) {
+			wake.wait(guard, [this]() { return pending > 0 || stop; });
+			if (pending == 0) {
+				return;
+			}
+			pending--;
+			guard.unlock();
+			stream.ReadAhead();
+			guard.lock();
+		}
+	}
+
+	RypeInputStream &stream;
+	std::mutex lock;
+	std::condition_variable wake;
+	idx_t pending = 0;
+	idx_t most_pending = 0;
+	idx_t requests = 0;
+	bool stop = false;
+	std::thread worker;
+};
+
+} // namespace
+
+TEST_CASE("Filter stream groups are the relation's rows, each once and in order, with ids that run on",
+          "[RypeInputStream]") {
+	FilterStreamFixture f;
+	f.Exec("CREATE TABLE reads AS SELECT i AS ord, 'S' || i AS sequence1 FROM range(" + std::to_string(ROWS) +
+	       ") t(i)");
+
+	// Group sizes either side of a 2048-row scan chunk, and ones that do not divide it, so groups
+	// end mid-chunk and chunks straddle groups.
+	const idx_t group_rows = GENERATE(as<idx_t> {}, 1, 7, 2047, 2048, 2049, 3000, 5000, 6000);
+	// The Arrow batch's own ceilings close batches inside a group; the group must still be whole.
+	const auto ceiling = GENERATE(std::pair<idx_t, idx_t>(STANDARD_VECTOR_SIZE, 0), std::pair<idx_t, idx_t>(5, 0),
+	                              std::pair<idx_t, idx_t>(STANDARD_VECTOR_SIZE, 1));
+	INFO("group_rows=" << group_rows << " batch_rows=" << ceiling.first << " batch_bytes=" << ceiling.second);
+
+	auto stream = f.Open("reads", {"ord", "sequence1"}, group_rows, ceiling.first, ceiling.second);
+	ExpectWholeGroups(*stream, group_rows, ROWS);
 }
 
 TEST_CASE("A group that ends mid-chunk leaves the rest of the chunk to the next group, shared, not copied",
@@ -367,30 +465,99 @@ TEST_CASE("A scan error in a later group is reported, never taken for the end of
 	auto stream = f.Open("reads", {"sequence1"}, 7);
 
 	idx_t rows = 0;
-	std::string error;
-	try {
-		while (error.empty() && stream->BeginGroup()) {
-			auto taken = TakeStream(*stream);
-			for (;;) {
-				ArrowArray batch;
-				if (taken.get_next(&taken, &batch) != 0) {
-					error = taken.get_last_error(&taken);
-					break;
-				}
-				if (!batch.release) {
-					break;
-				}
-				rows += static_cast<idx_t>(batch.length);
-				batch.release(&batch);
-			}
-			taken.release(&taken);
-			stream->TakeGroup();
-		}
-	} catch (std::exception &e) {
-		// The error may also surface while BeginGroup looks for the next group's first row.
-		error = e.what();
-	}
+	const auto error = PullUntilError(*stream, rows);
 	INFO("rows before the error: " << rows);
 	CHECK(rows < 4000);
 	CHECK_THAT(error, ContainsSubstring("scan failed at 4000"));
+}
+
+TEST_CASE("Read-ahead fetches the scan while nothing is pulled, and stops at its bytes", "[RypeInputStream]") {
+	// A streaming result produces only as it is fetched from, so a scan fetched from get_next alone
+	// stands still while RYpe classifies. ReadAhead has to move the scan on with nothing pulled, and
+	// stop at its bytes, which rype_filter's memory budget counts.
+	FilterStreamFixture f;
+	const idx_t rows = 10 * STANDARD_VECTOR_SIZE;
+	f.Exec("CREATE TABLE reads AS SELECT i AS ord, 'S' || i AS sequence1 FROM range(" + std::to_string(rows) +
+	       ") t(i)");
+
+	// What one scan chunk of this table costs: a read-ahead of one byte fetches exactly one.
+	idx_t chunk_bytes = 0;
+	{
+		auto probe = f.Open("reads", {"ord", "sequence1"}, 7);
+		probe->SetReadAhead(1, []() {});
+		probe->ReadAhead();
+		chunk_bytes = probe->ReadAheadBytes();
+	}
+	REQUIRE(chunk_bytes > 0);
+
+	auto stream = f.Open("reads", {"ord", "sequence1"}, 7);
+	idx_t starts = 0;
+	stream->SetReadAhead(3 * chunk_bytes, [&starts]() { starts++; });
+	stream->ReadAhead();
+	// Three chunks ahead, with nothing pulled, and not a fourth.
+	CHECK(stream->ReadAheadBytes() >= 3 * chunk_bytes);
+	CHECK(stream->ReadAheadBytes() < 4 * chunk_bytes);
+	// Called directly, not asked for.
+	CHECK(starts == 0);
+
+	// Nothing serves the request below, so the pulls fetch every later chunk themselves: a pull never
+	// waits for a ReadAhead that has not started, which on a busy pool may not start for a while.
+	ExpectWholeGroups(*stream, 7, rows);
+	// Asked for once, when the chunks read ahead fell to half the bytes, and not again while unserved.
+	CHECK(starts == 1);
+}
+
+TEST_CASE("Groups stay whole while read-ahead runs on another thread", "[RypeInputStream]") {
+	FilterStreamFixture f;
+	const idx_t rows = 10 * STANDARD_VECTOR_SIZE + 99;
+	f.Exec("CREATE TABLE reads AS SELECT i AS ord, 'S' || i AS sequence1 FROM range(" + std::to_string(rows) +
+	       ") t(i)");
+	const idx_t group_rows = GENERATE(as<idx_t> {}, 7, 2047, 3000);
+	// One byte keeps a single chunk ahead, so read-ahead is asked for at nearly every chunk and races
+	// the pulls for the scan; the most there is reads the whole scan ahead.
+	const idx_t bytes = GENERATE(as<idx_t> {}, 1, NumericLimits<idx_t>::Maximum());
+	INFO("group_rows=" << group_rows << " read-ahead bytes=" << bytes);
+
+	auto stream = f.Open("reads", {"ord", "sequence1"}, group_rows);
+	ReadAheadThread reader(*stream, bytes);
+	ExpectWholeGroups(*stream, group_rows, rows);
+	CHECK(reader.Requests() > 0);
+	// A request is not repeated before it is served: rype_filter would otherwise queue a job per chunk.
+	CHECK(reader.MostPending() == 1);
+}
+
+TEST_CASE("A scan error met reading ahead is reported to the pull that reaches it", "[RypeInputStream]") {
+	FilterStreamFixture f;
+	f.Exec("CREATE VIEW reads AS SELECT CASE WHEN i = 4000 THEN error('scan failed at 4000') ELSE 'S' || i END "
+	       "AS sequence1 FROM range(" +
+	       std::to_string(ROWS) + ") t(i)");
+	auto stream = f.Open("reads", {"sequence1"}, 7);
+	stream->SetReadAhead(NumericLimits<idx_t>::Maximum(), []() {});
+	// Met on the read-ahead's thread and kept there: thrown from ReadAhead, it would be lost, and the
+	// pulls would take the end of the chunks for the end of the input.
+	REQUIRE_NOTHROW(stream->ReadAhead());
+
+	idx_t rows = 0;
+	const auto error = PullUntilError(*stream, rows);
+	INFO("rows before the error: " << rows);
+	CHECK(rows < 4000);
+	CHECK_THAT(error, ContainsSubstring("scan failed at 4000"));
+}
+
+TEST_CASE("Abort stops read-ahead and fails the next pull", "[RypeInputStream]") {
+	// rype_filter aborts the stream when a query ends early (a LIMIT, an error), and a read-ahead job
+	// must then stop rather than keep reading the relation.
+	FilterStreamFixture f;
+	f.Exec("CREATE TABLE reads AS SELECT 'S' || i AS sequence1 FROM range(" + std::to_string(ROWS) + ") t(i)");
+	auto stream = f.Open("reads", {"sequence1"}, 7);
+	stream->SetReadAhead(NumericLimits<idx_t>::Maximum(), []() {});
+	REQUIRE(stream->BeginGroup());
+	stream->Abort();
+	stream->ReadAhead();
+	CHECK(stream->ReadAheadBytes() == 0);
+
+	auto taken = TakeStream(*stream);
+	ArrowArray batch;
+	CHECK(taken.get_next(&taken, &batch) != 0);
+	taken.release(&taken);
 }

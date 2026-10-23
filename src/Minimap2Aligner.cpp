@@ -3,8 +3,6 @@
 #include <minimap2/mmpriv.h>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <stdexcept>
 
 // When MIINT_USE_JEMALLOC is defined, minimap2 is compiled with malloc/free
@@ -220,8 +218,13 @@ void Minimap2Aligner::LoadIndexFromFile(const std::string &path, const mm_idxopt
 }
 
 // Minimap2IndexReader implementation.
-Minimap2IndexReader::Minimap2IndexReader(const std::string &index_path, const Minimap2Config &config)
-    : index_path_(index_path) {
+Minimap2IndexReader::Minimap2IndexReader(const std::string &index_path, const Minimap2Config &config, int n_threads)
+    : index_path_(index_path), n_threads_(n_threads < 1 ? 1 : n_threads) {
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+	// minimap2 would start its threads with pthread_create, which a wasm build
+	// without -pthread does not have.
+	n_threads_ = 1;
+#endif
 	mm_idxopt_t iopt;
 	Minimap2Aligner::InitOptions(config, iopt, mopt_template_);
 	reader_ = mm_idx_reader_open(index_path.c_str(), &iopt, nullptr);
@@ -241,16 +244,15 @@ bool Minimap2IndexReader::AtEof() {
 }
 
 std::shared_ptr<SharedMinimap2Index> Minimap2IndexReader::ReadNextPart() {
-	// n_threads=1: matches the existing single-part load in LoadIndexFromFile.
-	// mm_idx_load (the is_idx path mm_idx_reader_read takes for a prebuilt .mmi)
-	// doesn't parallelize on this argument regardless.
+	// For a prebuilt .mmi, n_threads_ build the part's hash tables (the
+	// is_idx path of mm_idx_reader_read, in miint's minimap2).
 	//
 	// Wrapped in the RAII deleter immediately: this is the exact memory-pressure
 	// regime (a multi-part index is only in play when a whole reference doesn't
 	// fit) where make_shared's control-block allocation below can throw
 	// bad_alloc. A raw mm_idx_t* held across that throw would leak a whole
 	// index part with nothing left to free it.
-	Minimap2IndexPtr idx(mm_idx_reader_read(reader_, 1));
+	Minimap2IndexPtr idx(mm_idx_reader_read(reader_, n_threads_));
 	if (!idx) {
 		return nullptr;
 	}
@@ -959,84 +961,6 @@ void Minimap2Aligner::save_index(const std::string &output_path) const {
 	if (fclose(fp) != 0) {
 		throw std::runtime_error("Error closing index file: " + output_path);
 	}
-}
-
-bool Minimap2Aligner::IsMultiPartIndex(const std::string &path) {
-	// Follows mm_idx_dump's layout (ext/minimap2/index.c): magic, then {w, k, b, n_seq, flag}, then per
-	// sequence a 1-byte name length, the name and a 4-byte length; then 2^b buckets, each a count n,
-	// n 8-byte positions, a count size and size 16-byte hash entries; then the packed sequence unless
-	// MM_I_NO_SEQ. Only the counts are read. A small buffer keeps each skipped bucket to one short read
-	// (2 x 2^b of them, 16384 at the default b = 14) instead of a full default-sized refill.
-	std::error_code ec;
-	const uint64_t file_size = std::filesystem::file_size(path, ec);
-	if (ec) {
-		throw std::runtime_error("Cannot open index file: " + path);
-	}
-	char buffer[512];
-	std::ifstream in;
-	in.rdbuf()->pubsetbuf(buffer, sizeof(buffer));
-	in.open(path, std::ios::binary);
-	if (!in) {
-		throw std::runtime_error("Cannot open index file: " + path);
-	}
-	const auto truncated = [&]() {
-		return std::runtime_error("Index file '" + path + "' ends inside its first part (truncated or damaged)");
-	};
-	uint64_t offset = 0;
-	const auto read = [&](void *out, size_t n) {
-		if (!in.read(static_cast<char *>(out), static_cast<std::streamsize>(n))) {
-			throw truncated();
-		}
-		offset += n;
-	};
-	const auto skip = [&](uint64_t n) {
-		offset += n;
-		if (offset > file_size) {
-			throw truncated();
-		}
-		in.seekg(static_cast<std::streamoff>(offset));
-	};
-
-	char magic[4];
-	if (!in.read(magic, sizeof(magic)) || memcmp(magic, MM_IDX_MAGIC, sizeof(magic)) != 0) {
-		throw std::runtime_error("File is not a valid minimap2 index: " + path);
-	}
-	offset = sizeof(magic);
-	uint32_t header[5]; // w, k, b, n_seq, flag
-	read(header, sizeof(header));
-	const uint32_t bucket_bits = header[2];
-	const uint32_t n_seq = header[3];
-	const uint32_t flag = header[4];
-	if (bucket_bits >= 32) {
-		throw std::runtime_error("Index file '" + path + "' has an invalid header (bucket bits " +
-		                         std::to_string(bucket_bits) + ")");
-	}
-
-	uint64_t sum_len = 0;
-	char name[255];
-	for (uint32_t i = 0; i < n_seq; i++) {
-		uint8_t name_len;
-		read(&name_len, 1);
-		read(name, name_len);
-		uint32_t seq_len;
-		read(&seq_len, sizeof(seq_len));
-		sum_len += seq_len;
-	}
-	for (uint64_t i = 0; i < (uint64_t(1) << bucket_bits); i++) {
-		uint32_t n;
-		read(&n, sizeof(n));
-		skip(uint64_t(n) * 8);
-		uint32_t size;
-		read(&size, sizeof(size));
-		skip(uint64_t(size) * 16);
-	}
-	if (!(flag & MM_I_NO_SEQ)) {
-		skip((sum_len + 7) / 8 * 4);
-	}
-
-	// The same test NextPartExists applies once part 1 is loaded: another part begins with the magic.
-	char next[4];
-	return in.read(next, sizeof(next)) && memcmp(next, MM_IDX_MAGIC, sizeof(next)) == 0;
 }
 
 bool Minimap2Aligner::is_index_file(const std::string &path) {

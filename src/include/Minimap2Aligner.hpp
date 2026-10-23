@@ -113,7 +113,9 @@ private:
 // underlying mm_idx_reader_t at a time.
 class Minimap2IndexReader {
 public:
-	Minimap2IndexReader(const std::string &index_path, const Minimap2Config &config);
+	// n_threads build each part's hash tables, which is most of reading a part:
+	// the file is still read in order, on the calling thread.
+	Minimap2IndexReader(const std::string &index_path, const Minimap2Config &config, int n_threads = 1);
 	~Minimap2IndexReader();
 
 	Minimap2IndexReader(const Minimap2IndexReader &) = delete;
@@ -135,6 +137,7 @@ public:
 private:
 	mm_idx_reader_t *reader_ = nullptr;
 	std::string index_path_; // for error messages
+	int n_threads_ = 1;
 	// Built once at construction (preset/k/w parsed and validated there, not
 	// per part) and copied into a fresh mm_mapopt_t for each ReadNextPart call,
 	// which then runs only mm_mapopt_update against that part's own minimizer
@@ -176,12 +179,6 @@ public:
 
 	// Check if file is a valid minimap2 index
 	static bool is_index_file(const std::string &path);
-
-	// True if the .mmi at `path` holds more than one part. Reads part 1's counts and seeks over its
-	// payloads, so nothing is loaded. Like the loaders, it takes trailing bytes that do not start
-	// with the index magic as the end of a single-part file. Throws, naming the file, if it is
-	// missing, is not a minimap2 index, or ends inside part 1.
-	static bool IsMultiPartIndex(const std::string &path);
 
 	// Static helpers for option/index initialization (shared with SharedMinimap2Index)
 	static void InitOptions(const Minimap2Config &config, mm_idxopt_t &iopt, mm_mapopt_t &mopt);

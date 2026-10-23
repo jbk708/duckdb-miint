@@ -5,8 +5,9 @@
 require miint
 
 # ---------------------------------------------------------------------------
-# rype_filter classifies a group on a background job while DuckDB's threads map
-# and emit the group before it, each taking one held chunk's rows at a time.
+# rype_filter classifies a group on a background job while other background
+# jobs map the group before it and DuckDB's threads emit it, each taking one
+# held chunk's rows at a time.
 # The rows come out in no fixed order, as rype_classify's and align_minimap2's
 # do, so every check compares the rows as a set. None of the scheduling may show
 # in that set: every check below is the answer the one-thread checks in
@@ -139,6 +140,125 @@ true
 endloop
 
 endloop
+
+# ---------------------------------------------------------------------------
+# Through FASTQ files: miint's FASTQ writer takes its rows in order, so DuckDB
+# runs the whole query on one of its threads, and rype_filter maps on jobs of
+# its own instead. Single-end, paired into an R1 and an R2 file, and paired
+# interleaved into one, with async threads to map on and without
+# ---------------------------------------------------------------------------
+
+statement ok
+RESET preserve_insertion_order;
+
+statement ok
+CREATE TABLE fq_pairs AS
+SELECT read_id, sequence1, list_transform(range(length(sequence1)), lambda x: 40)::UTINYINT[] AS qual1,
+       sequence2, list_transform(range(length(sequence2)), lambda x: 30)::UTINYINT[] AS qual2
+FROM pairs WHERE sequence2 IS NOT NULL ORDER BY ord;
+
+statement ok
+CREATE TABLE fq_single AS SELECT read_id, sequence1, qual1 FROM fq_pairs;
+
+statement ok
+CREATE TABLE fq_pairs_rype AS
+SELECT * FROM fq_pairs ANTI JOIN rype_classify('data/rype/test.ryxdi', 'fq_pairs', threshold := 0.05) c USING (read_id);
+
+statement ok
+CREATE TABLE expected_fq_pairs AS
+SELECT * FROM fq_pairs_rype
+ANTI JOIN align_minimap2('fq_pairs_rype', index_path := '{TEST_DIR}/rype_filter_host.mmi') a USING (read_id);
+
+statement ok
+CREATE TABLE fq_single_rype AS
+SELECT * FROM fq_single ANTI JOIN rype_classify('data/rype/test.ryxdi', 'fq_single', threshold := 0.05) c USING (read_id);
+
+statement ok
+CREATE TABLE expected_fq_single AS
+SELECT * FROM fq_single_rype
+ANTI JOIN align_minimap2('fq_single_rype', index_path := '{TEST_DIR}/rype_filter_host.mmi') a USING (read_id);
+
+# minimap2 removes some of what RYpe keeps, single-end and paired.
+query II
+SELECT (SELECT count(*) FROM expected_fq_single) BETWEEN 1 AND (SELECT count(*) FROM fq_single_rype) - 1,
+       (SELECT count(*) FROM expected_fq_pairs) BETWEEN 1 AND (SELECT count(*) FROM fq_pairs_rype) - 1;
+----
+true	true
+
+foreach async 8 0
+
+statement ok
+SET async_threads = {async};
+
+foreach group_rows 7 0
+
+statement ok
+SET miint_rype_filter_group_rows = {group_rows};
+
+statement ok
+COPY (SELECT * FROM rype_filter('fq_single', 'data/rype/test.ryxdi', '{TEST_DIR}/rype_filter_host.mmi', threshold := 0.05))
+TO '{TEST_DIR}/rype_filter_single.fq' (FORMAT FASTQ);
+
+statement ok
+CREATE OR REPLACE VIEW got_single AS
+SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/rype_filter_single.fq');
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM got_single EXCEPT ALL SELECT * FROM expected_fq_single)
+    UNION ALL
+    (SELECT * FROM expected_fq_single EXCEPT ALL SELECT * FROM got_single));
+----
+0
+
+statement ok
+COPY (SELECT * FROM rype_filter('fq_pairs', 'data/rype/test.ryxdi', '{TEST_DIR}/rype_filter_host.mmi', threshold := 0.05))
+TO '{TEST_DIR}/rype_filter_split_{ORIENTATION}.fq' (FORMAT FASTQ);
+
+statement ok
+CREATE OR REPLACE VIEW got_split AS
+SELECT read_id, sequence1, qual1, sequence2, qual2
+FROM read_fastx('{TEST_DIR}/rype_filter_split_R1.fq', sequence2 := '{TEST_DIR}/rype_filter_split_R2.fq');
+
+query I
+SELECT count(*) FROM (
+    (SELECT * FROM got_split EXCEPT ALL SELECT * FROM expected_fq_pairs)
+    UNION ALL
+    (SELECT * FROM expected_fq_pairs EXCEPT ALL SELECT * FROM got_split));
+----
+0
+
+statement ok
+COPY (SELECT * FROM rype_filter('fq_pairs', 'data/rype/test.ryxdi', '{TEST_DIR}/rype_filter_host.mmi', threshold := 0.05))
+TO '{TEST_DIR}/rype_filter_interleaved.fq' (FORMAT FASTQ, INTERLEAVE true);
+
+# Each pair is two records under its read_id, R1 then R2 straight after it.
+statement ok
+CREATE OR REPLACE VIEW got_interleaved AS
+SELECT read_id, s[1] AS sequence1, q[1] AS qual1, s[2] AS sequence2, q[2] AS qual2, len(s) AS records, span
+FROM (SELECT read_id, list(sequence1 ORDER BY sequence_index) AS s, list(qual1 ORDER BY sequence_index) AS q,
+             max(sequence_index) - min(sequence_index) AS span
+      FROM read_fastx('{TEST_DIR}/rype_filter_interleaved.fq') GROUP BY read_id);
+
+query II
+SELECT count(*) FILTER (WHERE records <> 2), count(*) FILTER (WHERE span <> 1) FROM got_interleaved;
+----
+0	0
+
+query I
+SELECT count(*) FROM (
+    (SELECT read_id, sequence1, qual1, sequence2, qual2 FROM got_interleaved EXCEPT ALL SELECT * FROM expected_fq_pairs)
+    UNION ALL
+    (SELECT * FROM expected_fq_pairs EXCEPT ALL SELECT read_id, sequence1, qual1, sequence2, qual2 FROM got_interleaved));
+----
+0
+
+endloop
+
+endloop
+
+statement ok
+RESET async_threads;
 
 # ---------------------------------------------------------------------------
 # Under a tight memory limit, with DuckDB's insertion order setting at its
