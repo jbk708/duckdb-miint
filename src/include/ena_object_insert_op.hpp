@@ -25,6 +25,7 @@
 #include "ena_client.hpp"
 #include "ena_envelope_builder.hpp" // miint::ENAAction, miint::ActionName
 #include "ena_insert_common.hpp"
+#include "ena_parser.hpp" // ResolvePortalBaseFromEnv
 #include "ena_post_fn.hpp"
 #include "ena_storage.hpp"
 

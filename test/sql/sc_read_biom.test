@@ -1,0 +1,56 @@
+# name: test/sql/sc_read_biom.test
+# description: read_biom feeds sc directly; the sc tests' inlined copy of test.biom matches the file
+# group: [sql]
+
+require miint
+
+require-env HDF5_AVAILABLE
+
+statement ok
+PRAGMA enable_verification;
+
+# The inlined copy the other sc tests use instead of the file.
+statement ok
+CREATE TABLE test_biom (sample_id VARCHAR, feature_id VARCHAR, value DOUBLE);
+
+statement ok
+INSERT INTO test_biom VALUES
+  ('Sample1', 'GG_OTU_2', 5.0),
+  ('Sample1', 'GG_OTU_4', 2.0),
+  ('Sample2', 'GG_OTU_2', 1.0),
+  ('Sample2', 'GG_OTU_4', 1.0),
+  ('Sample2', 'GG_OTU_5', 1.0),
+  ('Sample3', 'GG_OTU_1', 1.0),
+  ('Sample3', 'GG_OTU_3', 1.0),
+  ('Sample3', 'GG_OTU_4', 1.0),
+  ('Sample3', 'GG_OTU_5', 1.0),
+  ('Sample4', 'GG_OTU_2', 2.0),
+  ('Sample4', 'GG_OTU_3', 4.0),
+  ('Sample5', 'GG_OTU_2', 3.0),
+  ('Sample6', 'GG_OTU_2', 1.0),
+  ('Sample6', 'GG_OTU_3', 2.0),
+  ('Sample6', 'GG_OTU_4', 1.0);
+
+statement ok
+CREATE TABLE from_file AS SELECT * FROM read_biom('data/biom/test.biom');
+
+# The copy is the file, cell for cell, so tests that use it test what a
+# BIOM-backed fit would see.
+query II
+SELECT (SELECT count(*) FROM (SELECT * FROM from_file EXCEPT SELECT * FROM test_biom)),
+       (SELECT count(*) FROM (SELECT * FROM test_biom EXCEPT SELECT * FROM from_file));
+----
+0	0
+
+statement ok
+CREATE TABLE months AS
+  SELECT unnest(['Sample1','Sample2','Sample3','Sample4','Sample5','Sample6']) AS sample_id,
+         unnest([1.0, 3, 6, 9, 12, 15]) AS month;
+
+# read_biom's output goes straight into a fit, and the model is the one the
+# inlined copy produces.
+query I
+SELECT (SELECT md5(model_blob) FROM fit_regressor('from_file', 'months', n_estimators := 10, random_state := 1, name := 'f'))
+     = (SELECT md5(model_blob) FROM fit_regressor('test_biom', 'months', n_estimators := 10, random_state := 1, name := 'f'));
+----
+true

@@ -1,6 +1,7 @@
 #include "ena_parser.hpp"
 #include "expat_runner.hpp"
 #include <expat.h>
+#include <cstdlib>
 #include <sstream>
 #include <stdexcept>
 
@@ -74,6 +75,20 @@ void ENAParser::ValidateFields(const std::string &fields) {
 
 // ---- URL construction ----
 
+std::string TrimTrailingSlash(std::string s) {
+	if (!s.empty() && s.back() == '/') {
+		s.pop_back();
+	}
+	return s;
+}
+
+std::string ResolvePortalBaseFromEnv() {
+	const char *override_base = std::getenv("MIINT_ENA_PORTAL_URL_BASE");
+	const std::string base = (override_base != nullptr && *override_base != '\0') ? std::string(override_base)
+	                                                                              : std::string(DEFAULT_PORTAL_BASE);
+	return TrimTrailingSlash(base);
+}
+
 std::string ENAParser::BuildSearchURL(const std::string &accession, const std::string &result_type,
                                       const std::string &fields) {
 	ValidateAccession(accession);
@@ -83,7 +98,7 @@ std::string ENAParser::BuildSearchURL(const std::string &accession, const std::s
 	auto query_param = QueryParamForAccessionType(acc_type);
 
 	std::ostringstream url;
-	url << PORTAL_BASE << "/search?"
+	url << ResolvePortalBaseFromEnv() << "/search?"
 	    << "result=" << result_type << "&query=" << query_param << "%3D%22" << accession << "%22"
 	    << "&fields=" << fields << "&limit=0&format=tsv";
 	return url.str();
@@ -107,7 +122,7 @@ std::string ENAParser::BuildSearchURLBatch(const std::vector<std::string> &acces
 	// URL-encoded form of: <query_param> IN ("acc1","acc2",...)
 	//   space = %20   ( = %28   ) = %29   , = %2C   " = %22
 	std::ostringstream url;
-	url << PORTAL_BASE << "/search?"
+	url << ResolvePortalBaseFromEnv() << "/search?"
 	    << "result=" << result_type << "&query=" << query_param << "%20IN%20%28";
 	for (size_t i = 0; i < accessions.size(); i++) {
 		if (i > 0) {
@@ -351,11 +366,16 @@ std::vector<std::string> ENAParser::FTPtoHTTPS(const std::string &ftp_field) {
 			path = ftp_field.substr(start, pos - start);
 		}
 		if (!path.empty()) {
-			// Strip ftp:// prefix if present before prepending https://
-			if (path.rfind("ftp://", 0) == 0) {
-				path = path.substr(6);
+			// See FTPtoHTTPS in ena_parser.hpp.
+			if (path.rfind("http://", 0) == 0 || path.rfind("https://", 0) == 0) {
+				urls.push_back(path);
+			} else {
+				// Strip ftp:// prefix if present before prepending https://
+				if (path.rfind("ftp://", 0) == 0) {
+					path = path.substr(6);
+				}
+				urls.push_back("https://" + path);
 			}
-			urls.push_back("https://" + path);
 		}
 		if (pos == std::string::npos) {
 			break;

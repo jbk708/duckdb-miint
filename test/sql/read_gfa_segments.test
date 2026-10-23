@@ -1,0 +1,86 @@
+# name: test/sql/read_gfa_segments.test
+# description: read_gfa_segments returns a GFA file's S records as typed columns
+# group: [sql]
+
+require miint
+
+query TT
+SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM read_gfa_segments('data/gfa/spec_example.gfa'));
+----
+segment_id	VARCHAR
+sequence	VARCHAR
+tag_ln	BIGINT
+tag_rc	BIGINT
+tag_fc	BIGINT
+tag_kc	BIGINT
+tag_sh	VARCHAR
+tag_ur	VARCHAR
+tags	MAP(VARCHAR, VARCHAR)
+
+# The GFA specification's segment tags (LN, RC, FC, KC, SH, UR) are typed columns, NULL when
+# the record does not carry them. Every other tag stays in the map.
+query TTIIIITTT
+SELECT segment_id, sequence, tag_ln, tag_rc, tag_fc, tag_kc, tag_sh, tag_ur, array_to_string(map_keys(tags), '|')
+FROM read_gfa_segments('data/gfa/spec_example.gfa') ORDER BY segment_id;
+----
+s1	ACGTACGT	8	120	NULL	NULL	NULL	NULL	(empty)
+s2	NULL	1000	NULL	NULL	NULL	NULL	NULL	ST
+s3	GGCCTTAA	NULL	NULL	NULL	-42	NULL	NULL	fl|nm|js|hx|ba|bf
+
+statement ok
+COPY (SELECT * FROM (VALUES (E'S\ts4\t*\tFC:i:3\tSH:H:0A1B\tUR:Z:file:///genome.fa\tzz:i:1')) t(line))
+TO '{TEST_DIR}/segment_tags.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query IITTT
+SELECT tag_fc, tag_ln, tag_sh, tag_ur, tags FROM read_gfa_segments('{TEST_DIR}/segment_tags.gfa');
+----
+3	NULL	0A1B	file:///genome.fa	{zz=1}
+
+# The SAM grammar GFA adopts allows an integer a sign and leading zeros, as read_paf does.
+statement ok
+COPY (SELECT * FROM (VALUES (E'S\ts5\t*\tLN:i:+8\tRC:i:008')) t(line))
+TO '{TEST_DIR}/signed_length.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query II
+SELECT tag_ln, tag_rc FROM read_gfa_segments('{TEST_DIR}/signed_length.gfa');
+----
+8	8
+
+# read_gfa checks a value against the type its tag declares; the column checks it against
+# the type the specification gives the tag. A length that is not a 64-bit integer is an error
+# naming the segment, not a NULL.
+statement ok
+COPY (SELECT * FROM (VALUES (E'S\ts1\t*\tLN:Z:long'), (E'S\ts2\t*\tLN:i:99999999999999999999')) t(line))
+TO '{TEST_DIR}/bad_length.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT tag_ln FROM read_gfa_segments('{TEST_DIR}/bad_length.gfa') WHERE segment_id = 's1';
+----
+read_gfa_segments: segment 's1': tag LN is not a 64-bit integer: 'long'
+
+statement error
+SELECT tag_ln FROM read_gfa_segments('{TEST_DIR}/bad_length.gfa') WHERE segment_id = 's2';
+----
+read_gfa_segments: segment 's2': tag LN is not a 64-bit integer: '99999999999999999999'
+
+# '*' is GFA's "sequence not stored"; it must not read as a one-base sequence.
+query I
+SELECT count(*) FROM read_gfa_segments('data/gfa/spec_example.gfa') WHERE sequence = '*';
+----
+0
+
+# myloasm stores no sequences, only lengths and depths as tags.
+query TIT
+SELECT segment_id, tag_ln, tags['DP']
+FROM read_gfa_segments('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz') ORDER BY segment_id;
+----
+u491ctg	196466	51.0
+u826ctg	195577	51.0
+u840ctg	51274	32.0
+u912ctg	55666	2.0
+u982ctg	50902	32.0
+
+query I
+SELECT count(*) FROM read_gfa_segments('data/myloasm/ecoli_sim/final_contig_graph.gfa.gz') WHERE sequence IS NOT NULL;
+----
+0

@@ -3,6 +3,7 @@
 #
 # Usage:
 #   bash onboarding-tutorials/run_tutorial_tests.sh [duckdb_path]
+#   MIINT_TUTORIAL_LIVE=1 bash onboarding-tutorials/run_tutorial_tests.sh   # ENA itself, not the mock
 #
 # duckdb_path defaults to ./build/release/duckdb
 #
@@ -26,6 +27,22 @@ mkdir -p "$OUTDIR"
 EXT_PATH="$(cd "$(dirname "$DUCKDB")" && pwd)/extension/miint/miint.duckdb_extension"
 if [ ! -f "$EXT_PATH" ]; then
     EXT_PATH="$(pwd)/build/release/extension/miint/miint.duckdb_extension"
+fi
+
+# The tutorials read ERR1074767 from ENA, or, unless MIINT_TUTORIAL_LIVE=1, from the ENA
+# mock (docs/testing.md, "Guards and skipped tests").
+source "$SCRIPT_DIR/../test/scripts/ena_mock_env.sh"
+if [ "${MIINT_TUTORIAL_LIVE:-0}" != "1" ]; then
+    # Set first, so an exit while the mock boots still stops it.
+    trap 'kill ${ENA_MOCK_PID:-} 2>/dev/null || true' EXIT
+    if ! start_ena_mock; then
+        echo "ERROR: the ENA mock did not start" >&2
+        exit 1
+    fi
+    echo "ENA: the mock at $ENA_WEBIN_MOCK_URL (MIINT_TUTORIAL_LIVE=1 reads from ENA itself)"
+else
+    unset_ena_mock_env
+    echo "ENA: live"
 fi
 
 PASS=0

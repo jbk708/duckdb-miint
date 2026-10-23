@@ -35,7 +35,7 @@ Most of these methods are powered by the embedded [`unifrac-binaries`](https://g
 
 ### Feature table
 
-A long-form `(sample_id VARCHAR, feature_id VARCHAR, value DOUBLE)` relation — the same schema produced by [`read_biom`](reading.md#biom). Duplicate `(sample_id, feature_id)` rows are summed; rows with NULL or zero values are silently dropped (sparse-storage invariant).
+A long-form `(sample_id VARCHAR, feature_id VARCHAR, value DOUBLE)` relation — the same schema produced by [`read_biom`](reading.md#biom). Duplicate `(sample_id, feature_id)` rows are summed; rows with NULL or zero values are silently dropped (sparse-storage invariant). A NaN value is an error naming its cell: NaN is not a missing count but the trace of a failed upstream computation (0/0, a failed normalisation). Replace NaN cells with NULL, or 0, if missing is what they mean. The progressive PCoA functions ([`progressive_pcoa_from_unifrac`](#progressive-pcoa-from-unifrac), [`progressive_pcoa_from_features`](#progressive-pcoa-from-community-distances)) read the table their own way and drop a NaN like a NULL.
 
 ```sql
 CREATE TABLE observations AS SELECT * FROM read_biom('data/biom/test.biom');
@@ -548,7 +548,7 @@ There is deliberately **no `subsample_depth`**: rarefaction and progressive alig
 
   **So do not expect a seeded run to be byte-reproducible unless you also pin `threads := 1`** — and note that even then the general fp32 caveat under [Reproducibility](#reproducibility) applies, since the FSVD and its BLAS reductions carry ~1e-7 noise of their own. If you need to compare two runs — different storage layout, different tree, different build — compare them as ordinations with [`procrustes`](#procrustes-align-two-ordinations), whose M² is frame-invariant and therefore immune to all three effects. That is the only comparison this project is willing to promise. The same applies to `progressive_pcoa_from_distances`, which exhibits it without any UniFrac being involved at all.
 
-  **Judge agreement on the ordination, not on coordinates.** The drift is amplified by a randomized SVD and a procrustes fit, so it is larger than one rounding step and it grows with the table: 3.1e-06 max abs on a 40-sample fixture, but 2.4e-05 on 23,814 samples — about 5e-4 relative to the largest coordinate there. What held exactly is the thing that matters: procrustes M² against a full `unifrac_pcoa` was **identical to five decimals (0.19484) at `threads := 1` and `threads := 14`**. So do not diff coordinates across thread counts or use them as a cache key; compare ordinations with [`procrustes`](#procrustes-align-two-ordinations). Fixing `threads := N` and re-running in one session is **not** enough to get identical coordinates back at N > 1 — see the point above — so pin `threads := 1` if you need to compare coordinates at all. See [Reproducibility](#reproducibility) for the same fp32 caveat on the non-progressive paths.
+  **Judge agreement on the ordination, not on coordinates.** The drift is amplified by a randomized SVD and a procrustes fit, so it is larger than one rounding step and it grows with the table: between `threads := 1` and `threads := 14`, up to 9.92e-06 max abs on a 40-sample fixture (10 runs), but 2.4e-05 on 23,814 samples — about 5e-4 relative to the largest coordinate there. What held exactly is the thing that matters: procrustes M² against a full `unifrac_pcoa` was **identical to five decimals (0.19484) at `threads := 1` and `threads := 14`**. So do not diff coordinates across thread counts or use them as a cache key; compare ordinations with [`procrustes`](#procrustes-align-two-ordinations). Fixing `threads := N` and re-running in one session is **not** enough to get identical coordinates back at N > 1 — see the point above — so pin `threads := 1` if you need to compare coordinates at all. See [Reproducibility](#reproducibility) for the same fp32 caveat on the non-progressive paths.
 - **Samples & features:** samples with no nonzero feature are excluded (they cannot be ordinated). The tree must cover every feature in the table (validated once at bind); each batch's features are a subset, so the check makes them all safe.
 - **Cancellable:** as in [`progressive_pcoa_from_distances`](#progressive-cancellation) — cancellation is checked before every batch, so a run that would take hours stops within about one block.
 - **Fewer than two samples**, `n_anchors` outside `[n_dims + 1, n_samples]`, `n_dims > n_samples - 1`, `batch_size < 1`, an unknown `variant`, or a tree missing a feature: an error. Parameter, tree and schema problems are reported when the query is bound; a failure inside a block surfaces when the run reaches it.
@@ -882,7 +882,7 @@ ORDER BY iteration, axis;
 
 #### Reproducibility
 
-Same seed → same output **at fp32 precision**. The randomized FSVD plus cblas/LAPACKE reduction ordering produces ~1e-7 bit-level noise across runs even with `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`. For seed-reproducibility checks, compare with a tolerance:
+Same seed → same output **at fp32 precision**. Runs with the same seed differ by ~1e-7 at the bit level, even with `OMP_NUM_THREADS=1`. For seed-reproducibility checks, compare with a tolerance:
 
 ```sql
 WITH a AS (SELECT * FROM unifrac_pcoa('observations', 'tree', seed := 42)),

@@ -1,4 +1,5 @@
 #include "table_function_common.hpp"
+#include "remote_file_helper.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -9,6 +10,7 @@
 #include "duckdb/common/vector/string_vector.hpp"
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 
 namespace duckdb {
 
@@ -64,6 +66,25 @@ bool ParseIncludeFilepathParameter(const named_argument_map_t &named_parameters)
 		return fp_param->second.GetValue<bool>();
 	}
 	return false;
+}
+
+unique_ptr<NodeStatistics> EstimateFileScanCardinality(const std::vector<std::string> &paths, idx_t bytes_per_row) {
+	constexpr idx_t GZIP_EXPANSION_FACTOR = 4;
+	constexpr idx_t UNKNOWN_SIZE_ESTIMATE = 10'000'000; // err large
+
+	idx_t total_bytes = 0;
+	for (const auto &path : paths) {
+		if (IsStdinPath(path) || miint::RemoteFileHelper::IsRemotePath(path)) {
+			return make_uniq<NodeStatistics>(UNKNOWN_SIZE_ESTIMATE);
+		}
+		std::error_code ec;
+		auto size = std::filesystem::file_size(path, ec);
+		if (ec) {
+			return make_uniq<NodeStatistics>(UNKNOWN_SIZE_ESTIMATE);
+		}
+		total_bytes += IsGzipped(path) ? size * GZIP_EXPANSION_FACTOR : size;
+	}
+	return make_uniq<NodeStatistics>(std::max<idx_t>(1, total_bytes / bytes_per_row));
 }
 
 std::vector<std::string> ExpandGlobPattern(FileSystem &fs, ClientContext &context, const std::string &pattern) {
@@ -223,11 +244,18 @@ void SetResultVectorListUInt8(Vector &result_vector, const std::vector<miint::Qu
 		value_offset += len;
 	}
 
+	// A mask with no buffer already means all-valid, and giving it one sends every score down the
+	// storage append's row-by-row path (docs/internals/duckdb-engine-notes.md), so only a buffer
+	// left over from earlier use is rewritten.
 	auto &validity = FlatVector::ValidityMutable(result_vector);
-	validity.SetAllValid(output_count);
+	if (validity.CanHaveNull()) {
+		validity.SetAllValid(output_count);
+	}
 
 	auto &child_validity = FlatVector::ValidityMutable(child_vector);
-	child_validity.SetAllValid(total_child_elements);
+	if (child_validity.CanHaveNull()) {
+		child_validity.SetAllValid(total_child_elements);
+	}
 }
 
 void SetResultVectorInt32(Vector &result_vector, const std::vector<int32_t> &values) {

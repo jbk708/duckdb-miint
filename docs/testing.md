@@ -18,6 +18,9 @@ The primary testing mechanism for user-facing functionality uses DuckDB's SQL lo
 # Run all tests (SQL, C++, and shell)
 bash run_tests.sh
 
+# The same tests, with the SQL files and the C++ tests on 8 parallel workers
+MIINT_TEST_JOBS=8 bash run_tests.sh
+
 # Run all SQL tests
 make test
 
@@ -27,6 +30,10 @@ make test
 # Run tests matching a pattern
 ./build/release/test/unittest "[alignment]"
 ```
+
+`MIINT_TEST_JOBS=N` runs the files `make test` runs, each in its own `unittest` process, alongside the C++ test binary (`test/scripts/run_tests_parallel.py`). It prints a line per file as each finishes, then the output of every file that failed, and reports skips per reason as the serial pass does. A job still running after ten minutes is killed and fails the run, so a deadlocked test cannot stall it; each SQL file is one job, and so is the whole C++ test binary. The descriptor-limit rerun and the shell tests stay serial. Its SQL jobs run with `RUST_MIN_STACK=4194304` unless that is already set. Under heavy load on a many-core machine, the workers of rayon's global pool, which rype classifies on, can overflow Rust's default 2 MiB thread stack ([RYpe#28](https://github.com/the-miint/RYpe/issues/28)). The parallel jobs make that load themselves; a serial run meets it only when other heavy work shares the machine. CI leaves `MIINT_TEST_JOBS` unset and runs the serial pass.
+
+`build/release/duckdb`, `test/unittest`, `extension/miint/tests` and the loadable `miint.duckdb_extension` are separate build targets, so after an incremental `ninja` of one of them the others can be stale. Rebuild every binary you probe with, e.g. `ninja -C build/release duckdb test/unittest extension/miint/tests`.
 
 **Test file structure:**
 SQL logic tests consist of statements and expected outputs. Each test file follows this format:
@@ -75,6 +82,21 @@ File not found: nonexistent.fastq
 - Verify data types and column ordering
 - Keep test data files small and focused
 - Use clear, descriptive comments for each test section
+- A test that reads through a glob and asserts `filepath` values selects `replace(filepath, '\', '/')`: glob expansion returns native separators on Windows. A single path or an explicit path list keeps the caller's string and needs no wrapping.
+- Write files under `__TEST_DIR__`, the per-process scratch directory unittest substitutes into a test's SQL. Under `MIINT_TEST_JOBS`, test files and the C++ tests run at the same time in one working directory, so any other path a test writes must be one no other test reads or writes. For the same reason the parallel runner gives each SQL process a spill directory under its `__TEST_DIR__` (`docs/internals/duckdb-engine-notes.md`, "Storage").
+
+**Guards and skipped tests:**
+
+`require-env` guards only what a deployment can lack: an optional embedded library, a runtime binary, a network resource or served data. The one other category is process state that the pass over every test file, serial or parallel, cannot set, such as a lowered descriptor limit, which `run_tests.sh` provides in a rerun. `run_tests.sh` decides which guards are exported. A test of this repository's own C++ code is never guarded: an oracle produced by an external tool is committed as a fixture, and a missing or corrupted fixture fails the test. A checksum gate in `run_tests.sh` would turn a corrupted golden into a skip and leave the run green, so a parity test that pins its golden's checksum checks it with an assertion.
+
+A skipped file is not a passing one, and the suite's skip count is part of its result: a run that skips more files than before covers less, whatever its summary line says. Three skips are easy to miss:
+
+- DuckDB's `unittest` skips a test whose error contains "HTTP" or "Unable to connect" unless its config names other messages. `run_tests.sh` exports `DUCKDB_TEST_CONFIG=test/configs/no_skipped_errors.json`, under which every error fails the test; set it the same way when running `unittest` by hand.
+- `require httpfs` skips whenever the build does not include httpfs, and `extension_config.cmake` does not build it on this DuckDB version, so `make test` skips every `require httpfs` file: the HTTP-reader tests, the ENA mock-server tests and the live ENA and NCBI tests. `run_tests.sh` reruns them after `make test`, in what it calls the httpfs pass, with `DUCKDB_TEST_AUTOLOADING=all`, `DUCKDB_TEST_ON_INIT='LOAD httpfs;'` and `HOME=build/release/httpfs_test_home`, into which it installs httpfs once, and passes unittest `--keep-home`, without which DuckDB 2.0's unittest replaces `HOME` with an empty sandbox of its own. Autoloading runs miint from the copy installed in that `HOME`, not the linked one, so the script installs the fresh build there with `FORCE INSTALL` on every run (a file copied over an earlier install does not load, because the install records the build's version). The pass fails when httpfs or miint does not load, when any file in its list matches no test, when a file skips for anything but a `require-env` guard of the kinds above (an optional embedded library, a runtime binary, a network resource) or one on Webin credentials or an opt-in such as `MIINT_BLAST_LIVE_TEST`, or when it outlasts `MIINT_HTTPFS_TIMEOUT_SECONDS` (default 1800), since a stalled transfer otherwise hangs it. Once `run_tests.sh` has set that `HOME` up, one file runs with `HOME=$PWD/build/release/httpfs_test_home DUCKDB_TEST_AUTOLOADING=all DUCKDB_TEST_ON_INIT='LOAD httpfs;' DUCKDB_TEST_CONFIG=$PWD/test/configs/no_skipped_errors.json ./build/release/test/unittest --keep-home test/sql/<file>.test`; after a rebuild, install it there first with `HOME=$PWD/build/release/httpfs_test_home ./build/release/duckdb -unsigned -c "FORCE INSTALL '$PWD/build/release/extension/miint/miint.duckdb_extension'"`. Several files go in one comma-separated argument: separate arguments join into a single filter that matches nothing, and the run reports "No tests ran" with exit status 0.
+- The live ENA tests (`require-env ENA_AVAILABLE`, and `test/shell/read_ena_sequences_aspera.sh`) skip unless `MIINT_ENA_LIVE_TEST=1`, which CI sets only in its nightly run. EBI's HTTP 500s, empty answers and md5 mismatches failed 18 of the 175 attempts of CI's test job between 2026-08-01 and 2026-10-22.
+  - The rest of `run_tests.sh` sends miint's Portal, checklist and Reports requests to the mock `test/scripts/ena_webin_mock.py`, through the base URLs `test/scripts/ena_mock_env.sh` exports. The Portal base covers every Portal request, so a live test run with it would read from the mock; the live tests run after the httpfs pass instead, without those variables and with `ENA_AVAILABLE`, which nothing else sets.
+  - On every run, `read_ena_sequences_mock.test` reads runs through the mock, from `data/ena/`, and `read_ena_input_errors.test` checks the ENA read functions' input errors, which need no request.
+  - `onboarding-tutorials/run_tutorial_tests.sh` starts the same mock unless `MIINT_TUTORIAL_LIVE=1`, which CI also sets only nightly. The tutorials still fetch a genome from NCBI and install httpfs from DuckDB's extension repository on every run.
 
 ## C++ Unit Tests
 
@@ -162,6 +184,8 @@ bash test/shell/read_alignments_stdin.sh
 # All tests (SQL, C++, and shell)
 bash run_tests.sh
 ```
+
+A script that loads httpfs (`read_https.sh`, `read_ena_sequences_aspera.sh`) skips itself when the shell cannot load it, as on any machine with no httpfs under `~/.duckdb`, CI included. `run_tests.sh` runs such a script with the httpfs pass's `HOME=build/release/httpfs_test_home`, where the shell has already loaded httpfs, and picks such scripts by the text `load httpfs`, matched case-insensitively. By hand, run one with `HOME=$PWD/build/release/httpfs_test_home` once `run_tests.sh` has set that `HOME` up.
 
 **Test file structure:**
 Shell tests use simple bash scripts with conditional logic and exit codes:

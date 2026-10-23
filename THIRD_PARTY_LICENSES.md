@@ -956,6 +956,103 @@ SOFTWARE.
 
 ---
 
+## sc
+
+Random forest classification and regression, nested cross-validation and
+path-dependent TreeSHAP, consumed through its C API and the Arrow C Data
+Interface. Its symbols ship inside the same merged `libmiint_rust_glue.a`
+archive as rype and sylph. Used by `fit_classifier`, `fit_regressor`,
+`predict`, `predict_proba`, `cross_validate_classifier`,
+`cross_validate_regressor`, `shap`, `feature_importances` and
+`model_features`. Reported as the `sc` row in `miint_versions()`.
+
+- Repository: https://github.com/the-miint/sc (pinned at the submodule SHA that `git submodule status ext/sc` reports)
+- License: BSD 3-Clause. The text ships at `ext/sc/LICENSE` and is reproduced below.
+- sc's crates.io dependencies, and the retained q2-sample-classifier notice
+  for the fixture data under `ext/sc/oracle/fixtures/` that
+  `test/sql/sc_oracle_ecam.test`, `test/sql/sc_shap.test` and
+  `test/sql/sc_cross_validate.test` read, are catalogued in
+  `ext/sc/THIRD_PARTY_LICENSES.md`. That catalogue labels the `sc-arrow` /
+  `sc-capi` stack "never wasm" because sc's own WASM artifact does not include
+  it; miint links `sc-capi` into its WASM extension as well, so those crates
+  ship in both of miint's builds.
+
+### BSD 3-Clause License
+
+BSD 3-Clause License
+
+Copyright (c) 2026, Daniel McDonald
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+---
+
+## st3 (SourceTracker3)
+
+The SourceTracker collapsed-Gibbs model for microbial source attribution,
+consumed through its C ABI over the Arrow C Data Interface. Its symbols ship
+inside the merged `libmiint_rust_glue.a` static archive (built from the
+`ext/miint-rust-glue/` umbrella crate) and are linked into the extension. Used
+by `sourcetracker`. Reported as the `st3` row in `miint_versions()`.
+
+- Repository: https://github.com/the-miint/st3 (pinned at the submodule SHA in `.gitmodules` / `git submodule status ext/st3`)
+- License: BSD 3-Clause
+
+### BSD 3-Clause License
+
+Copyright (c) 2026, The SourceTracker3 Development Team
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+---
+
 ## microtar
 
 Minimal TAR archive reader. Compiled as C directly into the extension
@@ -1089,7 +1186,7 @@ code was developed with reference to them, or because they generated committed
 golden data used by the parity tests. This mirrors the Biopython entry above,
 where a reference-only consultation is likewise recorded.
 
-All seven Python projects are distributed under the 3-clause BSD license; the
+All eight Python projects are distributed under the 3-clause BSD license; the
 shared license text appears once at the end of this section with each project's
 copyright notice listed alongside it.
 
@@ -1312,6 +1409,24 @@ Dorrestein, P. C.; and Knight, R. (2019) "Learning representations of
 microbe-metabolite interactions", Nature Methods, 16(12), 1306-1314.
 doi: 10.1038/s41592-019-0616-3
 
+### SourceTracker2 (biota/sourcetracker2)
+
+The Python reference implementation of the SourceTracker model that
+`sourcetracker` follows. Executed once, at `a921a05`, to generate the committed
+golden `data/sourcetracker/tiny_test_st2_rarefied.tsv` used by
+`test/sql/sourcetracker.test`; the test's comment records the exact call. No
+code is vendored or linked.
+
+- Repository: https://github.com/biota/sourcetracker2
+- License: `BSD-3-Clause` — Copyright (c) 2016, Biota Technology
+
+#### Citation
+
+Knights, D.; Kuczynski, J.; Charlson, E. S.; Zaneveld, J.; Mozer, M. C.;
+Collman, R. G.; Bushman, F. D.; Knight, R.; and Kelley, S. T. (2011) "Bayesian
+community-wide culture-independent microbial source tracking", Nature Methods,
+8(9), 761-763. doi: 10.1038/nmeth.1650
+
 ### species_abund_sim / ord_survey (Kuczynski et al. 2010 reference code)
 
 `simulate_gradient_otus` and `simulate_cluster_otus`
@@ -1335,8 +1450,8 @@ doi: 10.1038/nmeth.1499
 
 ### BSD 3-Clause License
 
-Applies to cogent3, NumPy, SciPy, pysyndna, scikit-learn, scikit-bio, and mmvec,
-each with its own copyright notice as listed above.
+Applies to cogent3, NumPy, SciPy, pysyndna, scikit-learn, scikit-bio, mmvec, and
+SourceTracker2, each with its own copyright notice as listed above.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:

@@ -1,0 +1,117 @@
+#include "sc_feature_importances_function.hpp"
+
+#include "catalog_utils.hpp"
+#include "id_column_utils.hpp"
+#include "sc_common.hpp"
+
+#include "duckdb/common/string_util.hpp"
+#include "duckdb/main/connection.hpp"
+
+#include <string>
+#include <vector>
+#include "miint_named_parameter.hpp"
+
+namespace duckdb {
+
+namespace {
+
+struct ScImportancesData : public TableFunctionData {
+	string model_relation;
+	//! Empty selects the whole relation, which must then be one row.
+	string model_name;
+	//! The feature_id type the model was fit on.
+	LogicalType feature_id_type = LogicalType::VARCHAR;
+};
+
+struct ScImportancesGlobalState : public GlobalTableFunctionState {
+	vector<string> feature_ids;
+	vector<double> importances;
+	idx_t emitted = 0;
+	bool loaded = false;
+};
+
+unique_ptr<FunctionData> ScImportancesBind(ClientContext &context, TableFunctionBindInput &input,
+                                           vector<LogicalType> &return_types, vector<Identifier> &names) {
+	auto data = make_uniq<ScImportancesData>();
+	data->model_relation = input.inputs[0].GetValue<string>();
+	RejectCTERelationName(input, data->model_relation);
+	if (data->model_relation.empty()) {
+		throw InvalidInputException("feature_importances: model relation name must not be empty");
+	}
+	for (auto &kv : input.named_parameters) {
+		miint::RequireNotNull(kv.first.GetIdentifierName(), kv.second, "feature_importances");
+		if (kv.first == "name") {
+			data->model_name = kv.second.GetValue<string>();
+		}
+	}
+	{
+		auto conn = MakeReadOnlyHelperConnection(context);
+		data->feature_id_type =
+		    miint::ReadModelHeader(conn, data->model_relation, data->model_name, "feature_importances", false)
+		        .feature_id_type;
+	}
+	names = {"feature_id", "importance"};
+	return_types = {data->feature_id_type, LogicalType::DOUBLE};
+	return std::move(data);
+}
+
+unique_ptr<GlobalTableFunctionState> ScImportancesInitGlobal(ClientContext &, TableFunctionInitInput &) {
+	return make_uniq<ScImportancesGlobalState>();
+}
+
+void ScImportancesExecute(ClientContext &context, TableFunctionInput &input, DataChunk &output) {
+	auto &gstate = input.global_state->Cast<ScImportancesGlobalState>();
+	const auto &bind = input.bind_data->Cast<ScImportancesData>();
+
+	if (!gstate.loaded) {
+		gstate.loaded = true;
+		auto conn = MakeReadOnlyHelperConnection(context);
+
+		miint::ScContext ctx;
+		miint::OpenScContext(0, "feature_importances", ctx);
+		miint::ScModel model;
+		miint::LoadModelFromRelation(conn, bind.model_relation, bind.model_name, "feature_importances", "",
+		                             bind.feature_id_type, ctx.ptr, model);
+
+		// Two exports, both owned by us from here. The RAII wrapper releases
+		// them even if the second call throws.
+		miint::OwnedArrowArray ids;
+		if (auto st = sc_model_feature_ids(model.ptr, ids.array(), ids.schema()); st != SC_OK) {
+			miint::ThrowSc("sc_model_feature_ids", nullptr, st);
+		}
+		miint::OwnedArrowArray weights;
+		if (auto st = sc_feature_importances(model.ptr, weights.array(), weights.schema()); st != SC_OK) {
+			miint::ThrowSc("sc_feature_importances", nullptr, st);
+		}
+
+		gstate.feature_ids = ids.ReadUtf8("sc_model_feature_ids");
+		gstate.importances = weights.ReadFloat64("sc_feature_importances");
+		// Both are indexed by model column, so a length mismatch means the two
+		// have drifted apart inside sc -- not something a caller can cause, but
+		// silently zipping mismatched arrays would mislabel every row.
+		if (gstate.feature_ids.size() != gstate.importances.size()) {
+			throw InternalException("sc_feature_importances: %llu feature ids but %llu importances",
+			                        (uint64_t)gstate.feature_ids.size(), (uint64_t)gstate.importances.size());
+		}
+	}
+
+	const idx_t remaining = gstate.feature_ids.size() - gstate.emitted;
+	const idx_t n = remaining < STANDARD_VECTOR_SIZE ? remaining : STANDARD_VECTOR_SIZE;
+	output.SetChildCardinality(n);
+	for (idx_t i = 0; i < n; i++) {
+		EmitIdCell(output.data[0], i, gstate.feature_ids[gstate.emitted + i], bind.feature_id_type);
+		output.data[1].SetValue(i, Value::DOUBLE(gstate.importances[gstate.emitted + i]));
+	}
+	gstate.emitted += n;
+}
+
+} // namespace
+
+void ScFeatureImportancesFunction::Register(ExtensionLoader &loader) {
+	TableFunction fn("feature_importances", {LogicalType::VARCHAR}, ScImportancesExecute, ScImportancesBind,
+	                 ScImportancesInitGlobal);
+	AddNamedParameter(fn, "name", LogicalType::VARCHAR);
+	loader.RegisterFunction(fn);
+}
+
+} // namespace duckdb
