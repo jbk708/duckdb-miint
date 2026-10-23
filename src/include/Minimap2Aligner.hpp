@@ -218,6 +218,10 @@ private:
 	void align_single(const std::string &read_id, const std::string &sequence, SAMRecordBatch &output);
 	void align_paired(const std::string &read_id, const std::string &sequence1, const std::string &sequence2,
 	                  SAMRecordBatch &output);
+	// Map a pair as one fragment, as minimap2 does: the hits of each segment come back
+	// against that segment as given. regs are minimap2's, freed by the caller.
+	void map_pair(const std::string &sequence1, const std::string &sequence2, const char *qname, int n_regs[2],
+	              mm_reg1_t *regs[2]);
 
 	// Convert minimap2 result to SAM fields
 	void reg_to_sam(const mm_reg1_t *reg, const std::string &read_id, const std::string &query_seq,

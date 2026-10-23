@@ -16,6 +16,10 @@
 #define MM_FREE(ptr) free(ptr)
 #endif
 
+// minimap2's complement for every byte a read may hold (bseq.c), which it uses to
+// reverse-complement a segment; declared here as format.c declares it.
+extern "C" unsigned char seq_comp_table[256];
+
 namespace miint {
 
 // Custom deleters
@@ -488,17 +492,9 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 		return; // No alignments for empty queries
 	}
 
-	// Setup for paired-end
-	int qlens[2] = {static_cast<int>(sequence1.length()), static_cast<int>(sequence2.length())};
-	const char *seqs[2] = {sequence1.c_str(), sequence2.c_str()};
 	int n_regs[2] = {0, 0};
 	mm_reg1_t *regs[2] = {nullptr, nullptr};
-
-	// Enable fragment mode for paired-end
-	mm_mapopt_t mopt_copy = *active_mapopt();
-	mopt_copy.flag |= MM_F_FRAG_MODE;
-
-	mm_map_frag(active_index(), 2, qlens, seqs, n_regs, regs, tbuf_.get(), &mopt_copy, read_id.c_str());
+	map_pair(sequence1, sequence2, read_id.c_str(), n_regs, regs);
 
 	// Find primary alignments for each segment (with bounds checking)
 	mm_reg1_t *primary[2] = {nullptr, nullptr};
@@ -587,6 +583,56 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 			MM_FREE(regs[seg][j].p);
 		}
 		MM_FREE(regs[seg]);
+	}
+}
+
+void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &sequence2, const char *qname,
+                               int n_regs[2], mm_reg1_t *regs[2]) {
+	mm_mapopt_t mopt = *active_mapopt();
+	mopt.flag |= MM_F_FRAG_MODE;
+
+	// minimap2 chains the seeds of both segments as one fragment, so it wants them
+	// on one strand. pe_ori names the segments read from the other strand (the sr
+	// preset's forward-reverse pairs: the second); minimap2 reverse-complements
+	// those before mapping, and flips their hits back after (worker_for, map.c).
+	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
+	const std::string *given[2] = {&sequence1, &sequence2};
+	std::string flipped[2];
+	int qlens[2];
+	const char *seqs[2];
+	for (int seg = 0; seg < 2; seg++) {
+		const std::string &seq = *given[seg];
+		qlens[seg] = static_cast<int>(seq.length());
+		seqs[seg] = seq.c_str();
+		if (flip[seg]) {
+			flipped[seg].resize(seq.length());
+			for (size_t i = 0; i < seq.length(); i++) {
+				flipped[seg][seq.length() - 1 - i] = static_cast<char>(seq_comp_table[static_cast<uint8_t>(seq[i])]);
+			}
+			seqs[seg] = flipped[seg].c_str();
+		}
+	}
+
+	mm_map_frag(active_index(), 2, qlens, seqs, n_regs, regs, tbuf_.get(), &mopt, qname);
+
+	for (int seg = 0; seg < 2; seg++) {
+		if (!flip[seg]) {
+			continue;
+		}
+		for (int j = 0; j < n_regs[seg]; j++) {
+			mm_reg1_t *reg = &regs[seg][j];
+			const int32_t qs = reg->qs;
+			reg->qs = qlens[seg] - reg->qe;
+			reg->qe = qlens[seg] - qs;
+			reg->rev = !reg->rev;
+			if (reg->p) {
+				if (reg->p->trans_strand == 1) {
+					reg->p->trans_strand = 2;
+				} else if (reg->p->trans_strand == 2) {
+					reg->p->trans_strand = 1;
+				}
+			}
+		}
 	}
 }
 

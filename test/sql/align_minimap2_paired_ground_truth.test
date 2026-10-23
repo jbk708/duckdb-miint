@@ -1,0 +1,79 @@
+# name: test/sql/align_minimap2_paired_ground_truth.test
+# description: Verify align_minimap2 maps read pairs as native minimap2 (2.30-r1287) does, field by field
+# group: [sql]
+
+# Ground truth generated with:
+#   minimap2 -a -x sr --eqx --MD data/minimap2/paired_subject.fasta \
+#       data/minimap2/paired_R1.fasta data/minimap2/paired_R2.fasta
+#   minimap2 version: 2.30-r1287
+#
+# Test data (simulated):
+#   data/minimap2/paired_subject.fasta - one random 6,000 bp sequence
+#   data/minimap2/paired_R1.fasta, paired_R2.fasta - 150 bp pairs. Mate 2 is read from
+#   the other strand of the fragment, as Illumina pairs are:
+#   - forward_fragment, reverse_fragment: exact pairs from a fragment on each strand
+#   - mismatched: three substitutions in each mate
+#   - mate1_only, mate2_only: the other mate is random
+#   - unmapped: both mates random
+#   - fragment_24, fragment_28, fragment_30: random mates, each holding one short exact
+#     match (24 to 31 bases) to the subject, the two in a fragment's orientation
+#
+# minimap2 maps a pair as one fragment. It reverse-complements mate 2 first, so that
+# the seeds of both mates lie on one strand and chain together; that is what makes a
+# pair proper, and what maps the fragment_* pairs at all, whose mates each hold too few
+# seeds to chain alone.
+
+require miint
+
+statement ok
+CREATE TABLE subject AS SELECT * FROM read_fastx('data/minimap2/paired_subject.fasta');
+
+statement ok
+CREATE TABLE pairs AS
+SELECT * FROM read_fastx('data/minimap2/paired_R1.fasta', sequence2 := 'data/minimap2/paired_R2.fasta');
+
+# The fragment_* pairs are in the fixture for this: neither of their mates maps alone.
+statement ok
+CREATE TABLE fragment_mates AS
+SELECT read_id || '/1' AS read_id, sequence1 FROM pairs WHERE read_id LIKE 'fragment_%'
+UNION ALL
+SELECT read_id || '/2', sequence2 FROM pairs WHERE read_id LIKE 'fragment_%';
+
+query I
+SELECT count(*) FROM align_minimap2('fragment_mates', subject_table := 'subject', eqx := true);
+----
+0
+
+# Pairs whose mates both map: every field minimap2 writes
+query IIIIIITTIIIIT
+SELECT read_id, flags, reference, position, stop_position, mapq, cigar,
+       mate_reference, mate_position, template_length, tag_as, tag_nm, tag_md
+FROM align_minimap2('pairs', subject_table := 'subject', eqx := true)
+WHERE read_id NOT IN ('mate1_only', 'mate2_only')
+ORDER BY read_id, flags;
+----
+forward_fragment	99	subject	1001	1151	60	150=	=	1301	450	300	0	150
+forward_fragment	147	subject	1301	1451	60	150=	=	1001	-450	300	0	150
+fragment_24	99	subject	3985	4010	7	107S25=18S	=	4208	248	50	0	25
+fragment_24	147	subject	4208	4233	8	60S25=65S	=	3985	-248	50	0	25
+fragment_28	99	subject	3904	3932	4	59S28=63S	=	4054	178	56	0	28
+fragment_28	147	subject	4054	4082	4	28S28=94S	=	3904	-178	56	0	28
+fragment_30	99	subject	3098	3129	7	42S31=77S	=	3397	329	62	0	31
+fragment_30	147	subject	3397	3427	8	43S30=77S	=	3098	-329	60	0	30
+mismatched	99	subject	2001	2151	60	20=1X54=1X54=1X19=	=	2251	400	270	3	20C54A54T19
+mismatched	147	subject	2251	2401	60	10=1X49=1X79=1X9=	=	2001	-400	270	3	10C49T79G9
+reverse_fragment	83	subject	3301	3451	60	150=	=	3001	-450	300	0	150
+reverse_fragment	163	subject	3001	3151	60	150=	=	3301	450	300	0	150
+
+# Pairs with one mate mapped. minimap2 also writes the unmapped mate, placed at its
+# mate's position, and points the mapped mate at it; align_minimap2 reports no row
+# for an unmapped mate by default, nor a position for it, so the mate fields are left
+# out here.
+query IIIIIITIIT
+SELECT read_id, flags, reference, position, stop_position, mapq, cigar, tag_as, tag_nm, tag_md
+FROM align_minimap2('pairs', subject_table := 'subject', eqx := true)
+WHERE read_id IN ('mate1_only', 'mate2_only')
+ORDER BY read_id, flags;
+----
+mate1_only	73	subject	4501	4651	60	150=	300	0	150
+mate2_only	153	subject	5201	5351	60	150=	300	0	150
