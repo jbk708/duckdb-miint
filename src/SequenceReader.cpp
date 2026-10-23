@@ -4,6 +4,7 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
+#include <filesystem>
 #include <mutex>
 #include <system_error>
 #include <thread>
@@ -98,7 +99,7 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n) {
 }
 
 SequenceReader::SequenceReader(const std::string &path1, const std::optional<std::string> &path2,
-                               bool allow_format_mismatch)
+                               bool allow_format_mismatch, bool read_ahead)
     : first_read_(true) {
 	sequence1_reader_ = std::make_unique<SeqStreamIn>(path1);
 
@@ -131,10 +132,14 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 		// Keep buffered_read2_ to return on first read() call instead of recreating reader
 	}
 
-#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
-	// A local file is read ahead on a thread of its own (see ReadAhead). A wasm build
-	// without -pthread has no thread to start, and reads in read() as before.
-	read_ahead_enabled_ = true;
+#ifndef __EMSCRIPTEN__
+	// Regular files only (see READ_AHEAD_BYTES). Not in wasm, where a thread is a Web Worker
+	// that may not start while the thread that asked for it waits on it.
+	const auto regular = [](const std::string &path) {
+		std::error_code ec;
+		return std::filesystem::is_regular_file(path, ec);
+	};
+	read_ahead_enabled_ = read_ahead && regular(path1) && (!paired_ || regular(path2.value()));
 	peeked_record_bytes_[0] = record_bytes(buffered_read1_[0]);
 	if (paired_) {
 		peeked_record_bytes_[1] = record_bytes(buffered_read2_[0]);
@@ -256,11 +261,13 @@ static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int re
 }
 
 // Reads one stream ahead of read(), on a thread of its own, into a queue of records. Take(n)
-// hands records out as read_stream(n) would return them: in order, n of them, fewer only at
-// the end of the stream, and an error where the stream raised it. The thread polls the stream
-// as read() would, sized by read()'s byte budget, so that no single poll materializes more than
-// read() itself would; and it stops while the queue holds READ_AHEAD_BYTES, or read()'s budget
-// if that is smaller, unless read() is waiting on more records than that.
+// hands records out as read_stream(n) would return them: in order, and n of them, fewer only at
+// the end of the stream. The thread stops while the queue holds READ_AHEAD_BYTES, or read()'s
+// budget if that is smaller, unless read() is waiting on more records than that; and it sizes
+// each poll by that same cap, so that a poll of long records cannot run far past it. An error
+// the stream raises is raised by the first Take the records before it cannot satisfy. As with
+// read_stream, a poll that fails loses the records it read before the error, and since the
+// thread's polls are not read()'s, read() can fail a few records sooner than without it.
 class SequenceReader::ReadAhead {
 public:
 	ReadAhead(StreamVar &stream, size_t peeked_record_bytes, size_t max_bytes)
@@ -274,7 +281,7 @@ public:
 			stopping_ = true;
 		}
 		progress_.notify_all();
-		// A poll in flight finishes first: a local read returns.
+		// A poll in flight finishes first: a regular file's read returns.
 		thread_.join();
 	}
 
@@ -310,33 +317,46 @@ public:
 		return max_poll_count_;
 	}
 
+	bool Idle() {
+		std::lock_guard<std::mutex> guard(lock_);
+		return ended_ || (waiting_ && !WantsMoreLocked());
+	}
+
 private:
 	size_t CapLocked() const {
 		return std::min(READ_AHEAD_BYTES, budget_);
 	}
 
+	bool WantsMoreLocked() const {
+		return queue_.size() < wanted_ || queued_bytes_ < CapLocked();
+	}
+
 	void Run() {
+		// Whatever is thrown here goes to read(): escaping the thread would end the process.
+		try {
+			ReadUntilStopped();
+		} catch (...) {
+			std::lock_guard<std::mutex> guard(lock_);
+			error_ = std::current_exception();
+			ended_ = true;
+			progress_.notify_all();
+		}
+	}
+
+	void ReadUntilStopped() {
 		for (;;) {
 			int poll_n;
 			{
 				std::unique_lock<std::mutex> guard(lock_);
-				progress_.wait(guard,
-				               [&]() { return stopping_ || queue_.size() < wanted_ || queued_bytes_ < CapLocked(); });
+				waiting_ = true;
+				progress_.wait(guard, [&]() { return stopping_ || WantsMoreLocked(); });
+				waiting_ = false;
 				if (stopping_) {
 					return;
 				}
-				poll_n = dynamic_poll_n(observed_record_bytes_, budget_, POLL_CHUNK_SIZE);
+				poll_n = dynamic_poll_n(observed_record_bytes_, CapLocked(), POLL_CHUNK_SIZE);
 			}
-			std::vector<klibpp::KSeq> chunk;
-			try {
-				chunk = read_stream(stream_, poll_n);
-			} catch (...) {
-				std::lock_guard<std::mutex> guard(lock_);
-				error_ = std::current_exception();
-				ended_ = true;
-				progress_.notify_all();
-				return;
-			}
+			auto chunk = read_stream(stream_, poll_n);
 			std::lock_guard<std::mutex> guard(lock_);
 			max_poll_count_ = std::max(max_poll_count_, chunk.size());
 			if (chunk.empty()) {
@@ -363,6 +383,8 @@ private:
 	size_t budget_;
 	//! Records read() is waiting on; the queue fills to at least this many.
 	size_t wanted_ = 0;
+	//! The thread is waiting for the queue to want more records.
+	bool waiting_ = false;
 	bool ended_ = false;
 	bool stopping_ = false;
 	std::exception_ptr error_;
@@ -376,7 +398,9 @@ SequenceReader::~SequenceReader() = default;
 std::vector<klibpp::KSeq> SequenceReader::poll(int segment, int n, size_t max_bytes) {
 	StreamVar &stream = segment == 0 ? sequence1_reader_ : sequence2_reader_.value();
 	if (!read_ahead_enabled_) {
-		return read_stream(stream, n);
+		auto chunk = read_stream(stream, n);
+		max_poll_count_ = std::max(max_poll_count_, chunk.size());
+		return chunk;
 	}
 	auto &ahead = read_ahead_[segment];
 	if (!ahead) {
@@ -398,6 +422,10 @@ size_t SequenceReader::MaxPollCount() const {
 
 size_t SequenceReader::ReadAheadBytes(int segment) const {
 	return read_ahead_[segment] ? read_ahead_[segment]->QueuedBytes() : 0;
+}
+
+bool SequenceReader::ReadAheadIdle(int segment) const {
+	return read_ahead_[segment] ? read_ahead_[segment]->Idle() : true;
 }
 
 // Append a KSeq into an SE batch, stripping sequence whitespace in place.
@@ -468,7 +496,6 @@ SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes)
 		const int remaining = n - (int)batch.size();
 		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
 		auto more = poll(0, poll_n, max_bytes);
-		max_poll_count_ = more.size() > max_poll_count_ ? more.size() : max_poll_count_;
 		if (more.empty()) {
 			break;
 		}
@@ -566,7 +593,6 @@ SequenceRecordBatch SequenceReader::read_pe(const int n, const size_t max_bytes)
 		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
 		auto more1 = poll(0, poll_n, max_bytes);
 		auto more2 = poll(1, poll_n, max_bytes);
-		max_poll_count_ = more1.size() > max_poll_count_ ? more1.size() : max_poll_count_;
 
 		if (more1.empty() && more2.empty()) {
 			break;

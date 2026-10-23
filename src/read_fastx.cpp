@@ -6,6 +6,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/vector_size.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/statistics/node_statistics.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include <filesystem>
@@ -192,7 +193,10 @@ unique_ptr<GlobalTableFunctionState> ReadFastxTableFunction::InitGlobal(ClientCo
                                                                         TableFunctionInitInput &input) {
 	auto &data = input.bind_data->Cast<Data>();
 	auto &fs = FileSystem::GetFileSystem(context);
-	return duckdb::make_uniq<GlobalState>(fs, data.sequence1_paths, data.sequence2_paths, data.uses_stdin);
+	const auto threads = NumericCast<size_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
+	const bool read_ahead =
+	    miint::SequenceReader::ReadAheadFits(data.sequence1_paths.size(), data.sequence2_paths.has_value(), threads);
+	return duckdb::make_uniq<GlobalState>(fs, data.sequence1_paths, data.sequence2_paths, data.uses_stdin, read_ahead);
 }
 
 unique_ptr<LocalTableFunctionState> ReadFastxTableFunction::InitLocal(ExecutionContext &context,
