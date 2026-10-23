@@ -760,6 +760,19 @@ constexpr size_t READ_AHEAD_RECORD_BYTES = 8 + 150 + 150;
 //! Records of that size are polled sixteen at a time (POLL_CHUNK_SIZE in SequenceReader.cpp).
 constexpr size_t SHORT_RECORDS_PER_POLL = 16;
 
+//! The ids read() gets from a read-ahead before the error of a record damaged at `damaged`, once
+//! r0 (read when the reader opened) and r1 (the poll that starts the read-ahead) are taken. The
+//! thread polls from r1 on, SHORT_RECORDS_PER_POLL records at a time, and the poll holding the
+//! damaged record loses the records it read before it.
+std::vector<std::string> IdsBeforeFailedPoll(int damaged) {
+	const size_t before_failed_poll = 1 + (damaged - 1) / SHORT_RECORDS_PER_POLL * SHORT_RECORDS_PER_POLL;
+	std::vector<std::string> ids;
+	for (size_t i = 2; i < before_failed_poll; i++) {
+		ids.push_back("r" + std::to_string(i));
+	}
+	return ids;
+}
+
 std::vector<std::string> ReadAheadRecords(TempFileFixture &fixture, const std::string &mate, int count) {
 	std::vector<std::string> records;
 	for (int i = 0; i < count; i++) {
@@ -1171,13 +1184,7 @@ TEST_CASE("SequenceReader raises a read-ahead's error after the records read bef
 	REQUIRE(reader.ReadAheadStarted(0));
 	REQUIRE(WaitIdle(reader, 0));
 
-	// The thread polls from r1 on, sixteen records at a time, and the poll holding the damaged
-	// record loses those it read before it.
-	const size_t before_failed_poll = 1 + (damaged - 1) / SHORT_RECORDS_PER_POLL * SHORT_RECORDS_PER_POLL;
-	std::vector<std::string> expected;
-	for (size_t i = 2; i < before_failed_poll; i++) {
-		expected.push_back("r" + std::to_string(i));
-	}
+	const auto expected = IdsBeforeFailedPoll(damaged);
 	REQUIRE((ReadWithin(reader, static_cast<int>(expected.size())).read_ids == expected));
 	// "record 1001": the thread parsed on from where the reader's own first read stopped.
 	REQUIRE_THROWS_WITH(
@@ -1220,12 +1227,9 @@ TEST_CASE("SequenceReader names the mate whose read-ahead met the damage", "[Seq
 	REQUIRE(WaitIdle(reader, 0));
 	REQUIRE(WaitIdle(reader, 1));
 
-	const size_t before_failed_poll = 1 + (damaged - 1) / SHORT_RECORDS_PER_POLL * SHORT_RECORDS_PER_POLL;
-	std::vector<std::string> expected;
-	for (size_t i = 2; i < before_failed_poll; i++) {
-		expected.push_back("r" + std::to_string(i));
-	}
+	const auto expected = IdsBeforeFailedPoll(damaged);
 	REQUIRE((ReadWithin(reader, static_cast<int>(expected.size())).read_ids == expected));
+	// Mate 2's record count, from its own parser state, not mate 1's.
 	REQUIRE_THROWS_WITH(ReadWithin(reader, 1), "read_ahead_damaged_r2.fq: record 'r1000/2' (record 1001): sequence "
 	                                           "length 150 does not match quality length 149");
 }

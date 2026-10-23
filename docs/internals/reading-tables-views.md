@@ -121,8 +121,7 @@ nothing else.
 
 ## Streaming a relation
 
-`conn.Query()` holds the whole relation in memory. To stream, use `SubmitStream(conn, sql)`
-(above) and call `Fetch()` until it returns null. Precedents: `src/alignment_slice.cpp` and
+Stream with `SubmitStream`, as above. Precedents: `src/alignment_slice.cpp` and
 `src/rype_input_stream.cpp`. Check streaming by measurement: peak RSS stays flat as the
 input grows.
 
