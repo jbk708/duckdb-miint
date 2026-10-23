@@ -63,7 +63,7 @@ Two constraints come with it:
 
 ## Reading & writing
 
-- [Reading files](reading.md) - File formats with read support in MIINT (FASTA/FASTQ, SAM/BAM, SFF, BIOM, mzML/mzXML, GFF, jplace, Newick).
+- [Reading files](reading.md) - File formats with read support in MIINT (FASTA/FASTQ, SAM/BAM, PAF, GFA, SFF, BIOM, mzML/mzXML, GFF, jplace, Newick), and myloasm assembly output.
 - [Writing files](writing.md) - File formats with write support in MIINT.
 
 ## Public data repositories
@@ -88,6 +88,7 @@ Two constraints come with it:
 - [Taxonomic classification](classification.md) - Classify sequences by minimizer/k-mer content (RYpe).
 - [Profiling & feature tables](profiling.md) - Abundance profiling (sylph) and OGU feature tables (Woltka).
 - [Absolute quantification](absolute_quantification.md) - Turn compositional read counts into absolute quantities: cell counts from synDNA spike-ins (Zaramela et al. 2022), and copies of each ORF's ssRNA.
+- [Source tracking](source_tracking.md) - SourceTracker: estimate what fraction of each sink community came from each source environment, with per-feature assignments and leave-one-out validation.
 
 ## Phylogeny & diversity
 
@@ -96,6 +97,7 @@ Two constraints come with it:
 - [Community simulation](simulation.md) - Generate synthetic gradient / clustered OTU tables with known ground truth for benchmarking resemblance and ordination methods.
 - [scikit-bio methods](scikit_bio.md) - Statistics computed by scikit-bio itself, through skb-arrow, such as the Mantel test's permutation p-value and ANCOM-BC differential abundance.
 - [Multi-omics integration](multiomics.md) - MMvec: learn which metabolites co-occur with which microbes from paired count tables, without the spurious associations correlation produces on compositional data.
+- [Sample classification & regression](sample_classifier.md) - Random forests over a feature table (sc, a reimplementation of QIIME 2's q2-sample-classifier): fit, predict, estimate generalization by cross-validation, and explain individual predictions with SHAP (SHapley Additive exPlanations) feature attributions, computed exactly with path-dependent TreeSHAP.
 
 ## Mass spectrometry
 

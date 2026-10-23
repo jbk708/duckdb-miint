@@ -28,8 +28,8 @@ Axes are 0-indexed to match the `pcoa`/`unifrac_pcoa` output convention.
 
 Usage:
   conda run -n base python test/scripts/gen_procrustes_oracle.py [--check-q2]
-Regenerate goldens intentionally (run_tests.sh will re-pin the SHA sidecar):
-  MIINT_PROCRUSTES_REGENERATE=1 conda run -n base python test/scripts/gen_procrustes_oracle.py
+Running it regenerates the goldens and rewrites goldens.sha256, which
+test/sql/procrustes_parity.test checks the goldens against.
 """
 import argparse
 import hashlib

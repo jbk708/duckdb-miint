@@ -9,6 +9,7 @@
 // CooRow only -- deliberately NOT unifrac_support_biom.hpp, which would pull in
 // unifrac-binaries' api.hpp and re-couple these generic readers to that feature.
 #include "feature_table_row.hpp"
+#include "unifrac_metadata.hpp"
 
 namespace duckdb::unifrac_internal {
 
@@ -49,8 +50,8 @@ inline std::string AcceptedVariantList() {
 // "unifrac_permanova: ...").
 //
 // Rows with NULL sample_id, feature_id, or value are silently dropped,
-// as are zero/NaN values (UnifracSupportBiomView's sparse-storage
-// invariant would drop them anyway).
+// as are zero values (UnifracSupportBiomView's sparse-storage invariant
+// would drop them anyway). A NaN value throws, naming its cell.
 //
 // When `sample_id_type` / `feature_id_type` are non-null, the original SQL type of
 // that column (before the internal `::VARCHAR` cast) is written through it, so
@@ -235,5 +236,23 @@ inline LogicalType ResolveSampleIdOutputType(const LogicalType &input_type) {
 //
 // Returns a positive int suitable for OmpThreadPin / ComputeCallScope.
 int ResolveThreadsParameter(ClientContext &context, int32_t user_value, const std::string &caller_name);
+
+// Wide-form sample metadata, read once and unpivoted. Shared by permanova /
+// unifrac_permanova and sourcetracker, which all take a (sample_id, <variable>...)
+// relation and want it as long-form rows.
+struct WideMetadata {
+	std::vector<std::string> column_names;         // chosen variables, in canonical order
+	std::vector<miint::unifrac::MetadataRow> rows; // unpivoted long-form view
+};
+
+// Wide-form reader: metadata must have a `sample_id` column
+// (case-insensitive); every other column is a variable whose values are
+// cast to VARCHAR. `requested_variables` empty → use all non-sample_id
+// columns in original column order. Non-empty → exact-match lookup
+// (case-insensitive), preserving user-supplied order. `caller_name` prefixes
+// every error message so it names the SQL function the user actually called
+// (e.g. "permanova" vs "unifrac_permanova").
+WideMetadata ReadWideMetadata(ClientContext &context, const std::string &table_name,
+                              const std::vector<std::string> &requested_variables, const std::string &caller_name);
 
 } // namespace duckdb::unifrac_internal

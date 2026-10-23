@@ -550,12 +550,13 @@ combine them. That is what this returns.
 
 **Returns:** `LIST<STRUCT(start BIGINT, stop BIGINT)>` — 0-based, half-open, ascending and
 non-overlapping. Empty list for an unmapped or empty CIGAR. NULL if `cigar` or `flags` is
-NULL.
+NULL. Being 0-based is an [exception](reading.md#exceptions) to miint's 1-based intervals:
+add 1 to both ends to compare them with `read_paf`'s `query_start` / `query_stop`.
 
 **Behavior:**
 - **Intervals are in the original read's orientation, not the reference's.** SAM writes
   CIGARs in reference orientation, so on a reverse-strand record the leading clip sits at
-  the read's 3′ end. The reverse bit mirrors each interval onto the read axis, which is what
+  the read's 3′ end. The reverse bit mirrors each interval onto the read, which is what
   makes intervals from different records of the same read directly comparable.
 - `S` and `H` advance the cursor but are never covered, so the denominator is the full read
   length — the same quantity `cigar_query_length(cigar, true)` reports.

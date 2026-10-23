@@ -17,12 +17,18 @@ as follows:
   - `Dockerfile` `ARG DUCKDB_VERSION` (local default; `docker.yml` resolves the newest Docker Hub tag at runtime and passes `--build-arg`)
   - `DUCKDB_VERSION` default in `scripts/cron-publish-extension.sh` — it drives the `miint-<ver>-extension-*` artifact prefix and the published paths, so a stale value makes every publish reject
   - `duckdb==` pin in `python/pyproject.toml` — the CLI `LOAD`s the extension, so its DuckDB must match exactly
+  - `@duckdb/duckdb-wasm` pin in `scripts/wasm_browser/index.html`, the runtime of the browser check (`scripts/test_wasm_browser.sh`). Its npm version does not follow DuckDB's numbering: pick the release that reports the new core in `pragma_version()`, the same one the playground moves to (its pin is in [`docs/playground.md`](https://github.com/the-miint/the-miint.github.io/blob/main/docs/playground.md) of the-miint.github.io). The scripts do not rewrite it; the browser check fails, naming the file, until it matches.
 
 Outside this repo (do these after CI is green and a release tag is pushed):
 
 - The cron host's env file (e.g. `/etc/miint-publish.env`) overrides `DUCKDB_VERSION`; editing the script alone changes nothing there. The live FTP paths become `<ver>/` and `tagged/<ver>/`, leaving the previous version's trees serving until retired.
 - The playground console in the umbrella site repo pins both `@duckdb/duckdb-wasm` and `EXT_VERSION`. A C++ extension only loads into a duckdb-wasm of the *same* core version, so bump both together and verify the npm build actually reports the new version before flipping.
 - `duckdb/community-extensions` `extensions/miint/description.yml` carries the `ref` that `INSTALL miint FROM community` serves; open a PR bumping it to the new tag.
+
+Two traps when verifying a bump:
+
+- `scripts/test_wasm_load.sh` reuses `build/wasm_shell/src/libduckdb_static.a` whenever it exists, so after a bump it still links the old DuckDB core. Run it with `--clean`; an old core fails with a version-lock error that looks like an incompatibility.
+- DuckDB release tags are lightweight, so `git ls-remote <url> 'refs/tags/vX.Y.Z^{}'` matches nothing; query the plain ref as well, as `scripts/check-duckdb-version.sh` does.
 
 # API changes
 DuckDB extensions built with this extension template are built against the internal C++ API of DuckDB. This API is not guaranteed to be stable.

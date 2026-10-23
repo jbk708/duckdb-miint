@@ -83,8 +83,7 @@ unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id
 	}
 
 	// SubmitStream, not Query: the result must stream so memory stays O(batch)
-	// instead of materializing the whole corpus. (On DuckDB 1.5 a prepared statement
-	// would force-materialize even with allow_stream_result.)
+	// instead of materializing the whole corpus.
 	auto query_result = SubmitStream(conn, "SELECT " + select_cols + " FROM " + options.relation_quoted);
 	if (query_result->HasError()) {
 		throw InvalidInputException("Failed to read sequences from '%s': %s", options.source_name,

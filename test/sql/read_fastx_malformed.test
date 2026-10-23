@@ -1,0 +1,79 @@
+# name: test/sql/read_fastx_malformed.test
+# description: a malformed record or a damaged gzip file fails the scan, naming the file and the record
+# group: [sql]
+
+# Each of these inputs is damaged. A scan that stops at the damage as if it were the end of
+# the file returns only the records before it: a truncated gzip file reads as a smaller valid
+# file, and a corrupt one as an empty file. A short result here is data loss nobody is told
+# about, so each must be an error.
+
+require miint
+
+# Quality longer than its sequence. Record c is valid, and must not be lost with b.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_longer.fq');
+----
+malformed_qual_longer.fq: record 'b' (record 2): sequence length 3 does not match quality length 5
+
+# A '+' line with no quality line after it, at the end of the file.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_missing.fq');
+----
+malformed_qual_missing.fq: record 'b' (record 2): sequence length 4 does not match quality length 0
+
+# Quality shorter than its sequence. Wrapped-FASTQ reading appends the next line, record c's
+# header, to b's quality, so b gets "@c" as its last two scores and c is lost, with no error at
+# all. FASTQ records are four lines, so the short line is the error.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_shorter.fq');
+----
+malformed_qual_shorter.fq: record 'b' (record 2): sequence length 8 does not match quality length 6
+
+# The same, where the next header would overshoot the sequence length instead.
+statement error
+SELECT * FROM read_fastx('data/fastq/malformed_qual_shorter_overshoot.fq');
+----
+malformed_qual_shorter_overshoot.fq: record 'b' (record 2): sequence length 5 does not match quality length 3
+
+# A gzip file cut in half: 496 complete records, and part of a 497th, come back before the cut,
+# which is not the file.
+statement error
+SELECT count(*) FROM read_fastx('data/fastq/truncated.fq.gz');
+----
+truncated.fq.gz: read failed after record 496: unexpected end of file
+
+# A gzip file with 64 bytes zeroed mid-stream. Neither the count nor zlib's message is pinned,
+# since they depend on how much input zlib inflates per read. The zlib linked here meets this
+# damage only at the closing checksum and reports "after record 0: incorrect data check",
+# though the records before the zeros are intact.
+statement error
+SELECT count(*) FROM read_fastx('data/fastq/corrupt.fq.gz');
+----
+<REGEX>:.*corrupt\.fq\.gz: read failed after record [0-9]+: .*
+
+# A damaged record in the middle of a file, with read-ahead on (four threads;
+# SequenceReader::ReadAheadFits) and off (one). Read ahead, the damage is met on the read-ahead's
+# own thread, and the scan must fail on it as a scan without read-ahead does, never end there
+# with the 4000 records before it.
+statement ok
+COPY (SELECT unnest(['@r' || i, repeat('ACGT', 25), '+', repeat('I', CASE WHEN i = 4000 THEN 99 ELSE 100 END)])
+      FROM range(5000) t(i)) TO '{TEST_DIR}/damaged_mid_file.fq' (FORMAT csv, HEADER false);
+
+statement ok
+SET threads = 4;
+
+statement error
+SELECT count(*) FROM read_fastx('{TEST_DIR}/damaged_mid_file.fq');
+----
+damaged_mid_file.fq: record 'r4000' (record 4001): sequence length 100 does not match quality length 99
+
+statement ok
+SET threads = 1;
+
+statement error
+SELECT count(*) FROM read_fastx('{TEST_DIR}/damaged_mid_file.fq');
+----
+damaged_mid_file.fq: record 'r4000' (record 4001): sequence length 100 does not match quality length 99
+
+statement ok
+RESET threads;
