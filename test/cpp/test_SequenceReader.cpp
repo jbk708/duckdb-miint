@@ -1147,6 +1147,40 @@ TEST_CASE("SequenceReader dropped while reading ahead goes once its poll returns
 	REQUIRE((dropped_while_reading == 20));
 }
 
+// A damaged record is met by the read-ahead's thread but must be raised by read(), and only
+// after every record read ahead before the poll that met it: raised as soon as the thread
+// fails, it would drop those records and point at the wrong place in the file; taken for the
+// end of the file, it would end the scan early with no error at all.
+TEST_CASE("SequenceReader raises a read-ahead's error after the records read before it",
+          "[SequenceReader][read_ahead][error]") {
+	TempFileFixture fixture;
+	auto path = "read_ahead_damaged.fq";
+	// Far past the first poll and well short of what the read-ahead holds, so the thread meets
+	// the damage while nothing is taken.
+	const int damaged = 1000;
+	auto records = ReadAheadRecords(fixture, "1", 2000);
+	records[damaged] = fixture.simple_read("r1000/1", std::string(150, 'A'), std::string(149, 'I'));
+	fixture.write_temp_fastq(path, records);
+	miint::SequenceReader reader(path, std::nullopt, false, false, true);
+
+	// The record read when the reader opened, then one from the read-ahead, which starts it.
+	REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r0"}));
+	REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r1"}));
+	REQUIRE(WaitIdle(reader, 0));
+
+	// The thread polls from r1 on, sixteen records at a time, and the poll holding the damaged
+	// record loses those it read before it.
+	const size_t before_failed_poll = 1 + (damaged - 1) / SHORT_RECORDS_PER_POLL * SHORT_RECORDS_PER_POLL;
+	for (size_t i = 2; i < before_failed_poll; i++) {
+		CAPTURE(i);
+		REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r" + std::to_string(i)}));
+	}
+	// "record 1001": the thread parsed on from where the reader's own first read stopped.
+	REQUIRE_THROWS_WITH(
+	    reader.read(1),
+	    "read_ahead_damaged.fq: record 'r1000/1' (record 1001): sequence length 150 does not match quality length 149");
+}
+
 // read_fastx reads ahead whenever DuckDB's threads allow, so `allow_empty := true` meets
 // read-ahead on most machines.
 TEST_CASE("SequenceReader allow_empty reads an empty file as no records with read-ahead on",
