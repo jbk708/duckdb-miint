@@ -53,7 +53,7 @@ Run-time / conditional: `MIINT_USE_JEMALLOC` is set when DuckDB's jemalloc is li
   - **`sam_read1`'s negative returns are not all end of stream:** `-1` is end of stream, and `-3` on the first read is a rejected file format (`empty_format` for a zero-byte file, EFTYPE for anything unidentifiable, including a whitespace-only file). Within a readable file, a truncated or corrupt BAM record returns `-2`, `-3` or `-4` depending on where the damage falls (`bam_read1` in `ext/htslib-1.22.1/sam.c`), a SAM record that fails to parse returns `-2`, and `sam_read1_bam` returns `-3` for a tid or mtid outside the header. Leniency for `-3` is gated on `fp->format.format`, not on the code. A reader that treats every negative return as end of stream ends the batch, and the next `read()` resumes after the bad record, so the scan returns the records on both sides of it with no error.
   - **A BGZF file truncated exactly at a block boundary cannot be detected by reading it.** htslib and samtools both return the short count and only warn that the EOF marker is absent; `samtools quickcheck` catches it.
 
-### minimap2 (v2.30)
+### minimap2 (v2.31)
 - **Location:** `ext/minimap2/` (git submodule; version captured via `git describe` at configure time → `MINIMAP2_GIT_VERSION`)
 - **Purpose:** Long-read / spliced alignment
 - **Build:** Makefile; produces `libminimap2.a` with `HAVE_KALLOC`

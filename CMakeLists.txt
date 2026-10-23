@@ -848,7 +848,7 @@ else()
     STATUS "DuckDB jemalloc not detected — minimap2 will use system allocator")
 endif()
 
-# Build minimap2 from source (v2.30)
+# Build minimap2 from source (v2.31)
 ExternalProject_Add(
   minimap2_build
   SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/ext/minimap2
