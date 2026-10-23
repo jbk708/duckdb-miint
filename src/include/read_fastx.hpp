@@ -56,8 +56,8 @@ public:
 		std::vector<std::string> sequence2_filepaths;
 		size_t next_file_idx; // Next file available for claiming
 		bool uses_stdin;
-		// Each local file is read ahead on threads of its own, when they fit in DuckDB's threads
-		// beside the scan's (SequenceReader::ReadAheadFits).
+		// Each local regular file is read ahead on threads of its own, when they fit in DuckDB's
+		// threads beside the scan's (SequenceReader::ReadAheadFits).
 		bool read_ahead;
 		std::vector<uint64_t>
 		    file_sequence_counters; // Per-file sequence counters (no atomic needed - file access is exclusive)

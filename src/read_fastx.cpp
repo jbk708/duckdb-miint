@@ -247,10 +247,10 @@ void ReadFastxTableFunction::Execute(ClientContext &context, TableFunctionInput 
 		//
 		// Destroying the reader here -- rather than leaving it parked in `readers` until the
 		// scan ends -- is what bounds open descriptors and retained buffers by thread count
-		// instead of by file count. Every SequenceReader holds an open gzFile plus kseq++'s
-		// line buffer and zlib's inflate window, none of which DuckDB's memory_limit
-		// accounts for, so a single scan over a large VARCHAR[] otherwise accumulates one of
-		// each per file it finishes. Past RLIMIT_NOFILE the next gzopen fails and the scan
+		// instead of by file count. Everything a SequenceReader holds -- an open gzFile,
+		// kseq++'s line buffer, zlib's inflate window, and any read-ahead's thread and queue --
+		// is outside DuckDB's memory_limit, so a single scan over a large VARCHAR[] otherwise
+		// accumulates all of it per file it finishes. Past RLIMIT_NOFILE the next gzopen fails and the scan
 		// dies naming a file that is perfectly readable (issue #260).
 		//
 		// Safe without the lock, and it rests on two things. File indices are handed out once
