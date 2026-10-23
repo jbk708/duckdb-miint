@@ -126,23 +126,21 @@ unique_ptr<GlobalTableFunctionState> RypeClassifyTableFunction::InitGlobal(Clien
 	// Step 1: Load RYpe index
 	gstate->index = rype_index_load(bind_data.index_path.c_str());
 	if (!gstate->index) {
-		const char *err = rype_get_last_error();
-		throw IOException("Failed to load RYpe index '%s': %s", bind_data.index_path, err ? err : "unknown error");
+		throw IOException("Failed to load RYpe index '%s': %s", bind_data.index_path,
+		                  RypeErrorText(rype_get_last_error()));
 	}
 
 	// Step 2: Load negative set if specified
 	if (!bind_data.negative_index_path.empty()) {
 		RypeIndex *neg_index = rype_index_load(bind_data.negative_index_path.c_str());
 		if (!neg_index) {
-			const char *err = rype_get_last_error();
 			throw IOException("Failed to load negative index '%s': %s", bind_data.negative_index_path,
-			                  err ? err : "unknown error");
+			                  RypeErrorText(rype_get_last_error()));
 		}
 		gstate->negative_set = rype_negative_set_create(neg_index);
 		rype_index_free(neg_index);
 		if (!gstate->negative_set) {
-			const char *err = rype_get_last_error();
-			throw IOException("Failed to create negative set: %s", err ? err : "unknown error");
+			throw IOException("Failed to create negative set: %s", RypeErrorText(rype_get_last_error()));
 		}
 	}
 
@@ -206,14 +204,13 @@ unique_ptr<GlobalTableFunctionState> RypeClassifyTableFunction::InitGlobal(Clien
 	                                    bind_data.threshold, batch_size, &gstate->output_stream);
 
 	if (result != 0) {
-		const char *err = rype_get_last_error();
-		throw IOException("RYpe classification failed: %s", err ? err : "unknown error");
+		throw IOException("RYpe classification failed: %s", RypeErrorText(rype_get_last_error()));
 	}
 
 	// Step 6: Get output schema
 	if (gstate->output_stream.get_schema(&gstate->output_stream, &gstate->output_schema) != 0) {
-		const char *err = gstate->output_stream.get_last_error(&gstate->output_stream);
-		throw IOException("Failed to get RYpe output schema: %s", err ? err : "unknown error");
+		throw IOException("Failed to get RYpe output schema: %s",
+		                  RypeErrorText(gstate->output_stream.get_last_error(&gstate->output_stream)));
 	}
 
 	// Step 7: Parse Arrow schema for conversion
@@ -260,8 +257,8 @@ void RypeClassifyTableFunction::Execute(ClientContext &context, TableFunctionInp
 		// Get next batch from RYpe
 		auto wrapper = make_shared_ptr<ArrowArrayWrapper>();
 		if (gstate.output_stream.get_next(&gstate.output_stream, &wrapper->arrow_array) != 0) {
-			const char *err = gstate.output_stream.get_last_error(&gstate.output_stream);
-			throw IOException("Error getting next batch from RYpe: %s", err ? err : "unknown error");
+			throw IOException("Error getting next batch from RYpe: %s",
+			                  RypeErrorText(gstate.output_stream.get_last_error(&gstate.output_stream)));
 		}
 
 		// Check if stream is exhausted
