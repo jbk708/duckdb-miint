@@ -26,7 +26,7 @@ All table functions follow a similar structure:
 4. **InitGlobal()**: Opens files, creates readers
 5. **Execute()**: Reads records in chunks, populates DataChunk output
 
-`MaxThreads()` controls parallelism per function (e.g. `read_fastx` uses 1 for stdin / 8 for files; `read_alignments` uses 4).
+`MaxThreads()` controls parallelism per function (e.g. `read_fastx` uses 1 for stdin and one per file otherwise).
 
 ### Record Abstraction
 Each file format has a record struct (SAMRecord, SequenceRecord, etc.) that:
