@@ -506,7 +506,9 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 	MappedHits hits[2];
 	map_pair(sequence1, sequence2, read_id.c_str(), hits);
 
-	// Find primary alignments for each segment (with bounds checking)
+	// Find each segment's primary record, the one written without 0x100 or 0x800. Pairing can make
+	// a hit other than the first listed the primary (mm_pair, pe.c), so it is found by sam_pri, as
+	// minimap2 finds it (get_sam_pri, format.c).
 	mm_reg1_t *primary[2] = {nullptr, nullptr};
 	for (int seg = 0; seg < 2; seg++) {
 		for (int j = 0; j < hits[seg].n; j++) {
@@ -515,7 +517,7 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 			if (reg->rid < 0 || static_cast<size_t>(reg->rid) >= active_subject_names().size()) {
 				continue;
 			}
-			if (reg->parent == reg->id) { // Primary
+			if (reg->sam_pri) {
 				primary[seg] = reg;
 				break;
 			}
@@ -528,25 +530,6 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 	int32_t mate_rid[2] = {primary[1] ? primary[1]->rid : -1, primary[0] ? primary[0]->rid : -1};
 	int32_t mate_pos[2] = {primary[1] ? (primary[1]->rs + 1) : 0, // 1-based
 	                       primary[0] ? (primary[0]->rs + 1) : 0};
-
-	// Calculate template length (only for proper pairs on same reference)
-	int32_t tlen = 0;
-	if (primary[0] && primary[1] && primary[0]->rid == primary[1]->rid) {
-		// tlen = rightmost end - leftmost start, with sign indicating direction
-		int32_t start0 = primary[0]->rs;
-		int32_t end0 = primary[0]->re;
-		int32_t start1 = primary[1]->rs;
-		int32_t end1 = primary[1]->re;
-
-		int32_t leftmost = std::min(start0, start1);
-		int32_t rightmost = std::max(end0, end1);
-		tlen = rightmost - leftmost;
-
-		// Sign: positive for read1 if it's leftmost
-		if (start0 > start1) {
-			tlen = -tlen;
-		}
-	}
 
 	// Process alignments for each segment
 	for (int seg = 0; seg < 2; seg++) {
@@ -572,11 +555,24 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 				secondary_count++;
 			}
 
-			// For paired, tlen has opposite sign for read2
-			int32_t this_tlen = (seg == 0) ? tlen : -tlen;
+			// TLEN per record, as minimap2 writes it (mm_write_sam3, format.c): from this record's 5'
+			// end to the 5' end of its mate's primary record, counting both ends, and 0 when the two
+			// lie on different references
+			const mm_reg1_t *mate = primary[1 - seg];
+			int32_t tlen = 0;
+			if (mate && mate->rid == reg->rid) {
+				const int32_t this_pos5 = reg->rev ? reg->re - 1 : reg->rs;
+				const int32_t mate_pos5 = mate->rev ? mate->re - 1 : mate->rs;
+				tlen = mate_pos5 - this_pos5;
+				if (tlen > 0) {
+					tlen++;
+				} else if (tlen < 0) {
+					tlen--;
+				}
+			}
 
 			reg_to_sam(reg, read_id, query_seq, output, seg, mate_mapped[seg], mate_rev[seg], mate_rid[seg],
-			           mate_pos[seg], this_tlen);
+			           mate_pos[seg], tlen);
 		}
 
 		// Per segment, not per query: R1 can align while R2 does not, and SAM represents that as
@@ -753,6 +749,11 @@ void Minimap2Aligner::reg_to_sam(const mm_reg1_t *reg, const std::string &read_i
 			batch.mate_references.push_back(mate_ref);
 		}
 		batch.mate_positions.push_back(mate_pos);
+	} else if (is_paired && !is_unmapped) {
+		// The mate did not map: minimap2 places it at this record's position, and points this
+		// record there
+		batch.mate_references.push_back("=");
+		batch.mate_positions.push_back(reg->rs + 1);
 	} else {
 		batch.mate_references.push_back("*");
 		batch.mate_positions.push_back(0);
