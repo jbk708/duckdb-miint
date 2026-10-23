@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <climits>
 #include <cstddef>
 #include <memory>
@@ -39,13 +40,23 @@ private:
 
 class SequenceReader {
 public:
-	//! A local file is read ahead of read() on a thread of its own, so that inflating and
-	//! parsing it overlap the caller's work. It stops reading ahead once it holds this many
-	//! bytes of records per file, or read()'s own byte budget if that is smaller.
+	//! With `read_ahead`, each file is read ahead of read() on a thread of its own, so that
+	//! inflating and parsing it overlap the caller's work. It stops reading ahead once it holds
+	//! this many bytes of records per file, or read()'s own byte budget if that is smaller, and
+	//! no poll reads more than that. Only regular files are read ahead: a read from a pipe can
+	//! wait on its writer forever, and the reader could then never be dropped.
 	static constexpr size_t READ_AHEAD_BYTES = 4 * 1024 * 1024;
 
+	//! Whether a scan of `files` files (pairs of them, if `paired`) can read each ahead and stay
+	//! within `threads`: a file being read takes a scan thread, and its read-ahead one more per
+	//! file of the pair.
+	static bool ReadAheadFits(size_t files, bool paired, size_t threads) {
+		const size_t scanning = std::min(files, threads);
+		return scanning * (paired ? 3 : 2) <= threads;
+	}
+
 	explicit SequenceReader(const std::string &path1, const std::optional<std::string> &path2 = std::nullopt,
-	                        bool allow_format_mismatch = false);
+	                        bool allow_format_mismatch = false, bool read_ahead = false);
 	~SequenceReader();
 
 #ifdef MIINT_STATIC_BUILD
@@ -78,6 +89,11 @@ public:
 	// Test seam: the bytes of records read ahead of read() and not yet taken, for sequence1
 	// (segment 0) or sequence2 (segment 1).
 	size_t ReadAheadBytes(int segment) const;
+
+	// Test seam: whether the read-ahead of `segment` has stopped, and only taking records from
+	// it will start it again: it holds its bytes, or it reached the end of the file. A segment
+	// that reads nothing ahead is idle.
+	bool ReadAheadIdle(int segment) const;
 
 private:
 	using SeqStreamIn = CheckedSeqStreamIn;

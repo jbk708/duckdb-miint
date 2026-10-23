@@ -18,6 +18,7 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -672,14 +673,31 @@ TEST_CASE("SequenceReader byte budget default (SIZE_MAX) unchanged behavior", "[
 	REQUIRE((batch.size() == 50));
 }
 
-// A local file is read on a thread of its own, ahead of the reads that take its records, so
-// that inflating and parsing it overlap whatever the caller does with each batch. What has to
-// hold: the read-ahead runs while nothing is pulled, and again as soon as records are taken; it
-// stops at its bytes, or at read()'s byte budget if that is smaller, which memory is counted
-// against; a read still gets every record it asks for when they take more bytes than that;
-// records come out as they would without it, in order and with mates in step; and a reader
-// dropped while reading ahead goes at once. A build without threads reads nothing ahead.
-#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
+// Reading ahead: with `read_ahead`, a regular file is read on a thread of its own, ahead of the
+// reads that take its records, so that inflating and parsing it overlap whatever the caller does
+// with each batch. What has to hold: the read-ahead runs while nothing is pulled, and again as
+// soon as records are taken; it stops at its bytes, or at read()'s byte budget if that is
+// smaller, and no poll reads far past them, since that memory is counted against nothing; a
+// read still gets every record it asks for when they take more bytes than that; records come
+// out as they would without it, in order and with mates in step; a pipe, whose read can wait
+// on its writer forever, is never read ahead; and a reader dropped while reading ahead goes at
+// once. read_fastx reads ahead only while the threads it takes fit in DuckDB's. A wasm build
+// reads nothing ahead.
+
+TEST_CASE("SequenceReader reads ahead only while its threads fit beside the scan's", "[SequenceReader][read_ahead]") {
+	// One file being read takes a scan thread, and its read-ahead one more per file of the pair.
+	REQUIRE(miint::SequenceReader::ReadAheadFits(1, false, 2));
+	REQUIRE_FALSE(miint::SequenceReader::ReadAheadFits(1, true, 2));
+	REQUIRE(miint::SequenceReader::ReadAheadFits(1, true, 3));
+	REQUIRE_FALSE(miint::SequenceReader::ReadAheadFits(1, false, 1));
+	// Files beyond the threads wait their turn, so only as many are read at once as there are
+	// threads: eight files on eight threads leave none to read ahead with.
+	REQUIRE_FALSE(miint::SequenceReader::ReadAheadFits(8, false, 8));
+	REQUIRE(miint::SequenceReader::ReadAheadFits(2, true, 8));
+	REQUIRE_FALSE(miint::SequenceReader::ReadAheadFits(3, true, 8));
+}
+
+#ifndef __EMSCRIPTEN__
 
 namespace {
 
@@ -692,10 +710,10 @@ std::vector<std::string> ReadAheadRecords(TempFileFixture &fixture, const std::s
 	return records;
 }
 
-//! Waits up to five seconds for the read-ahead of `segment` to hold at least `bytes`.
-bool ReadAheadReaches(const miint::SequenceReader &reader, int segment, size_t bytes) {
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-	while (reader.ReadAheadBytes(segment) < bytes) {
+//! Waits up to thirty seconds for the read-ahead of `segment` to stop (ReadAheadIdle).
+bool WaitIdle(const miint::SequenceReader &reader, int segment) {
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+	while (!reader.ReadAheadIdle(segment)) {
 		if (std::chrono::steady_clock::now() > deadline) {
 			return false;
 		}
@@ -708,8 +726,8 @@ bool ReadAheadReaches(const miint::SequenceReader &reader, int segment, size_t b
 //! still waits then, holding the reader, so nothing can be torn down: the run aborts.
 miint::SequenceRecordBatch ReadWithin(miint::SequenceReader &reader, int n) {
 	auto read = std::async(std::launch::async, [&reader, n]() { return reader.read(n); });
-	if (read.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
-		FAIL_CHECK("read(" << n << ") has not returned after ten seconds");
+	if (read.wait_for(std::chrono::seconds(30)) != std::future_status::ready) {
+		FAIL_CHECK("read(" << n << ") has not returned after thirty seconds");
 		std::abort();
 	}
 	return read.get();
@@ -717,29 +735,39 @@ miint::SequenceRecordBatch ReadWithin(miint::SequenceReader &reader, int n) {
 
 } // namespace
 
-TEST_CASE("SequenceReader reads a local file ahead of its reads, up to its bytes", "[SequenceReader][read_ahead]") {
+TEST_CASE("SequenceReader reads nothing ahead unless asked to", "[SequenceReader][read_ahead]") {
+	TempFileFixture fixture;
+	auto path = "read_ahead_off.fq";
+	fixture.write_temp_fastq(path, ReadAheadRecords(fixture, "1", 1000));
+	miint::SequenceReader reader(path);
+	REQUIRE((reader.read(10).size() == 10));
+	REQUIRE((reader.ReadAheadBytes(0) == 0));
+}
+
+TEST_CASE("SequenceReader reads a file ahead of its reads, up to its bytes", "[SequenceReader][read_ahead]") {
 	TempFileFixture fixture;
 	auto path = "read_ahead_se.fq";
 	// About 12 MB of records: three times what the read-ahead holds.
 	const int count = 40000;
 	fixture.write_temp_fastq(path, ReadAheadRecords(fixture, "1", count));
-	miint::SequenceReader reader(path);
+	miint::SequenceReader reader(path, std::nullopt, false, true);
 
 	// Nothing is read ahead before the first read, which sets the byte budget it works within.
 	REQUIRE((reader.ReadAheadBytes(0) == 0));
 	auto first = reader.read(10);
 	REQUIRE((first.size() == 10));
-	// Then the file is read on while nothing is pulled, up to the read-ahead's bytes...
+	// Then the file is read on while nothing is pulled, up to the read-ahead's bytes, and no
+	// further than the poll that reached them.
 	const size_t record = 3 + 150 + 150;
-	REQUIRE(ReadAheadReaches(reader, 0, miint::SequenceReader::READ_AHEAD_BYTES - 16 * (record + 6)));
-	std::this_thread::sleep_for(std::chrono::milliseconds(50));
-	// ...and no further than one more poll past them.
-	REQUIRE((reader.ReadAheadBytes(0) <= miint::SequenceReader::READ_AHEAD_BYTES + 16 * (record + 6)));
+	REQUIRE(WaitIdle(reader, 0));
+	REQUIRE((reader.ReadAheadBytes(0) >= miint::SequenceReader::READ_AHEAD_BYTES));
+	REQUIRE((reader.ReadAheadBytes(0) < miint::SequenceReader::READ_AHEAD_BYTES + 16 * (record + 6)));
 	// Taking one poll's records leaves it short of its bytes, and it reads on at once, not at the
 	// next read.
 	auto second = reader.read(16);
 	REQUIRE((second.size() == 16));
-	REQUIRE(ReadAheadReaches(reader, 0, miint::SequenceReader::READ_AHEAD_BYTES));
+	REQUIRE(WaitIdle(reader, 0));
+	REQUIRE((reader.ReadAheadBytes(0) >= miint::SequenceReader::READ_AHEAD_BYTES));
 
 	// Every record comes out once, in order.
 	size_t total = first.size() + second.size();
@@ -762,12 +790,14 @@ TEST_CASE("SequenceReader reads both files of a pair ahead and keeps the mates i
 	const int count = 40000;
 	fixture.write_temp_fastq(path1, ReadAheadRecords(fixture, "1", count));
 	fixture.write_temp_fastq(path2, ReadAheadRecords(fixture, "2", count));
-	miint::SequenceReader reader(path1, std::string(path2));
+	miint::SequenceReader reader(path1, std::string(path2), false, true);
 
 	auto first = reader.read(10);
 	REQUIRE((first.size() == 10));
-	REQUIRE(ReadAheadReaches(reader, 0, miint::SequenceReader::READ_AHEAD_BYTES / 2));
-	REQUIRE(ReadAheadReaches(reader, 1, miint::SequenceReader::READ_AHEAD_BYTES / 2));
+	REQUIRE(WaitIdle(reader, 0));
+	REQUIRE(WaitIdle(reader, 1));
+	REQUIRE((reader.ReadAheadBytes(0) >= miint::SequenceReader::READ_AHEAD_BYTES));
+	REQUIRE((reader.ReadAheadBytes(1) >= miint::SequenceReader::READ_AHEAD_BYTES));
 
 	size_t total = first.size();
 	while (true) {
@@ -788,32 +818,50 @@ TEST_CASE("SequenceReader reads ahead no more than read()'s byte budget", "[Sequ
 	TempFileFixture fixture;
 	auto path = "read_ahead_budget.fq";
 	fixture.write_temp_fastq(path, ReadAheadRecords(fixture, "1", 40000));
-	miint::SequenceReader reader(path);
+	miint::SequenceReader reader(path, std::nullopt, false, true);
 	// A budget far below the read-ahead's own bytes.
 	const size_t budget = 32 * 1024;
 	const size_t record = 3 + 150 + 150;
 
 	auto first = reader.read(10, budget);
 	REQUIRE((first.size() == 10));
-	REQUIRE(ReadAheadReaches(reader, 0, budget - 16 * (record + 6)));
-	std::this_thread::sleep_for(std::chrono::milliseconds(50));
-	REQUIRE((reader.ReadAheadBytes(0) <= budget + 16 * (record + 6)));
+	REQUIRE(WaitIdle(reader, 0));
+	REQUIRE((reader.ReadAheadBytes(0) >= budget));
+	REQUIRE((reader.ReadAheadBytes(0) < budget + 16 * (record + 6)));
 
 	auto next = reader.read(2048, budget);
 	REQUIRE((next.read_ids[0] == "r10"));
 }
 
+TEST_CASE("SequenceReader reads long records ahead a few at a time", "[SequenceReader][read_ahead]") {
+	// A poll is sized by the read-ahead's bytes, not by read()'s far larger default budget, so
+	// records of a mebibyte are read no more than four at a time, not sixteen.
+	TempFileFixture fixture;
+	auto path = "read_ahead_long.fa";
+	const size_t length = 1024 * 1024;
+	std::vector<std::string> records;
+	for (int i = 0; i < 9; i++) {
+		records.push_back(fixture.simple_fasta("r" + std::to_string(i), std::string(length, 'G')));
+	}
+	fixture.write_temp_fastq(path, records);
+	miint::SequenceReader reader(path, std::nullopt, false, true);
+
+	REQUIRE((reader.read(2).size() == 2));
+	REQUIRE(WaitIdle(reader, 0));
+	REQUIRE((reader.MaxPollCount() <= miint::SequenceReader::READ_AHEAD_BYTES / length));
+	REQUIRE((reader.ReadAheadBytes(0) < 2 * miint::SequenceReader::READ_AHEAD_BYTES));
+}
+
 TEST_CASE("SequenceReader gets a read every record it asks for, more than the read-ahead holds",
           "[SequenceReader][read_ahead]") {
-	// Mate 2's records are long: fifteen of them fill the read-ahead, which then stops short of
-	// the sixteen a read asks each file for, and must read on for that read. Mate 1's are short,
-	// so its read-ahead holds plenty.
+	// Mate 2's records are a mebibyte long: its read-ahead stops holding a few of them, short
+	// of the sixteen a read asks each file for, and must read on for that read. Mate 1's are
+	// short, so its read-ahead holds plenty.
 	TempFileFixture fixture;
 	auto path1 = "read_ahead_long_r1.fq";
 	auto path2 = "read_ahead_long_r2.fq";
-	const int count = 20;
-	const size_t length = 150000;
-	REQUIRE((14 * 2 * length >= miint::SequenceReader::READ_AHEAD_BYTES));
+	const int count = 12;
+	const size_t length = 512 * 1024;
 	std::vector<std::string> mates1;
 	std::vector<std::string> mates2;
 	for (int i = 0; i < count; i++) {
@@ -823,27 +871,59 @@ TEST_CASE("SequenceReader gets a read every record it asks for, more than the re
 	}
 	fixture.write_temp_fastq(path1, mates1);
 	fixture.write_temp_fastq(path2, mates2);
-	miint::SequenceReader reader(path1, std::string(path2));
+	miint::SequenceReader reader(path1, std::string(path2), false, true);
 
 	// The first record of each file was read when the reader opened; the second is the first
-	// a read-ahead hands out, after reading sixteen in one poll. Mate 2's keeps fifteen.
+	// a read-ahead hands out.
 	REQUIRE((reader.read(2).size() == 2));
+	REQUIRE(WaitIdle(reader, 1));
+	REQUIRE((reader.ReadAheadBytes(1) < 16 * 2 * length));
 	auto batch = ReadWithin(reader, 16);
-	REQUIRE((batch.size() == 16));
+	REQUIRE((batch.size() == static_cast<size_t>(count - 2)));
 	for (size_t i = 0; i < batch.size(); i++) {
 		REQUIRE((batch.read_ids[i] == "r" + std::to_string(2 + i)));
 		REQUIRE((batch.sequences2[i].size() == length));
 	}
-	REQUIRE((ReadWithin(reader, 16).size() == 2));
+	REQUIRE(ReadWithin(reader, 16).empty());
 }
+
+#ifndef _WIN32
+TEST_CASE("SequenceReader reads a pipe as it is asked to, never ahead", "[SequenceReader][read_ahead]") {
+	// Reading a pipe ahead would block on its writer, and a reader whose writer stays open
+	// could then never be dropped.
+	const std::string fifo = "read_ahead.fifo";
+	std::filesystem::remove(fifo);
+	REQUIRE((mkfifo(fifo.c_str(), 0600) == 0));
+	TempFileFixture fixture;
+	const auto records = ReadAheadRecords(fixture, "1", 40);
+	std::thread writer([&]() {
+		std::ofstream out(fifo);
+		for (const auto &record : records) {
+			out << record;
+		}
+	});
+	{
+		miint::SequenceReader reader(fifo, std::nullopt, false, true);
+		REQUIRE((reader.read(2).size() == 2));
+		writer.join();
+		REQUIRE(WaitIdle(reader, 0));
+		REQUIRE((reader.ReadAheadBytes(0) == 0));
+		REQUIRE((reader.read(100).size() == 38));
+	}
+	std::filesystem::remove(fifo);
+}
+#endif
 
 TEST_CASE("SequenceReader dropped while reading ahead goes at once", "[SequenceReader][read_ahead]") {
 	TempFileFixture fixture;
 	auto path = "read_ahead_drop.fq";
 	fixture.write_temp_fastq(path, ReadAheadRecords(fixture, "1", 40000));
 	for (int i = 0; i < 20; i++) {
-		miint::SequenceReader reader(path);
-		REQUIRE((reader.read(1).size() == 1));
+		miint::SequenceReader reader(path, std::nullopt, false, true);
+		// The record read when the reader opened, then one from the read-ahead, which is
+		// reading on when the reader goes.
+		REQUIRE((reader.read(2).size() == 2));
+		REQUIRE((reader.ReadAheadBytes(0) > 0));
 	}
 }
 
