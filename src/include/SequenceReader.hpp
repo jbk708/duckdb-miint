@@ -38,8 +38,31 @@ private:
 
 class SequenceReader {
 public:
+	//! With `read_ahead`, each file is read ahead of read() on a thread of its own, so that
+	//! inflating and parsing it overlap the caller's work. It stops reading ahead once it holds
+	//! this many bytes of records per file, or read()'s own byte budget if that is smaller. Each
+	//! poll asks for as many records as the last one read says fit in the room left (at least
+	//! one, at most sixteen), so a poll passes it by about a record, or by up to sixteen where
+	//! record lengths jump. Only regular files are read ahead: a read from a pipe can wait on
+	//! its writer forever, and the reader could then never be dropped.
+	static constexpr size_t READ_AHEAD_BYTES = 4 * 1024 * 1024;
+
+	//! Whether a scan of `files` files (pairs of them, if `paired`), all read at once, can read
+	//! each ahead and stay within `threads`: a file being read takes one thread, and its
+	//! read-ahead one more per file of the pair.
+	static bool ReadAheadFits(size_t files, bool paired, size_t threads) {
+		return files * (paired ? 3 : 2) <= threads;
+	}
+
 	explicit SequenceReader(const std::string &path1, const std::optional<std::string> &path2 = std::nullopt,
-	                        bool allow_format_mismatch = false);
+	                        bool allow_format_mismatch = false, bool read_ahead = false);
+	~SequenceReader();
+	// A read-ahead holds a reference to the stream it reads, which lives in this object: a copy
+	// or a move would leave it reading the old one.
+	SequenceReader(const SequenceReader &) = delete;
+	SequenceReader &operator=(const SequenceReader &) = delete;
+	SequenceReader(SequenceReader &&) = delete;
+	SequenceReader &operator=(SequenceReader &&) = delete;
 
 #ifdef MIINT_STATIC_BUILD
 	// Streaming constructor for remote files via DuckDB FileHandle. Ownership of
@@ -64,11 +87,19 @@ public:
 	SequenceRecordBatch read(const int n, const size_t max_bytes = SIZE_MAX);
 
 	// Test seam: the largest number of records materialized by any single underlying stream
-	// poll over this reader's lifetime. Lets tests assert that large records do not trigger
-	// oversized prefetches (see dynamic poll sizing in read_se/read_pe).
-	size_t MaxPollCount() const {
-		return max_poll_count_;
-	}
+	// poll over this reader's lifetime, by read() or by a read-ahead. Lets tests assert that
+	// large records do not trigger oversized prefetches (see dynamic poll sizing in
+	// read_se/read_pe and in ReadAhead::ReadUntilStopped).
+	size_t MaxPollCount() const;
+
+	// Test seam: the bytes of records read ahead of read() and not yet taken, for sequence1
+	// (segment 0) or sequence2 (segment 1).
+	size_t ReadAheadBytes(int segment) const;
+
+	// Test seam: whether the read-ahead of `segment` has stopped, and only taking records from
+	// it will start it again: it holds READ_AHEAD_BYTES (or read()'s budget), or it reached the
+	// end of the file or failed. A segment that reads nothing ahead is idle.
+	bool ReadAheadIdle(int segment) const;
 
 private:
 	using SeqStreamIn = CheckedSeqStreamIn;
@@ -84,8 +115,15 @@ private:
 
 	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n);
 
+	class ReadAhead;
+
 	StreamVar sequence1_reader_;
 	std::optional<StreamVar> sequence2_reader_;
+	// Declared after the streams they read, so they stop before the streams close.
+	bool read_ahead_enabled_ = false;
+	size_t peeked_record_bytes_[2] = {0, 0};
+	bool read_ahead_unavailable_[2] = {false, false}; // its thread could not be started
+	std::unique_ptr<ReadAhead> read_ahead_[2];
 
 	bool paired_;
 	bool first_read_; // Track if we need to return buffered data
@@ -100,5 +138,8 @@ private:
 
 	SequenceRecordBatch read_se(const int n, const size_t max_bytes);
 	SequenceRecordBatch read_pe(const int n, const size_t max_bytes);
+	// Up to `n` records of `segment`, fewer only at its end: read here, or taken from its
+	// read-ahead, which the first poll starts.
+	std::vector<klibpp::KSeq> poll(int segment, int n, size_t max_bytes);
 };
 }; // namespace miint

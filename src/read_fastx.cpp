@@ -6,6 +6,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/vector_size.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/storage/statistics/node_statistics.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include <filesystem>
@@ -192,7 +193,10 @@ unique_ptr<GlobalTableFunctionState> ReadFastxTableFunction::InitGlobal(ClientCo
                                                                         TableFunctionInitInput &input) {
 	auto &data = input.bind_data->Cast<Data>();
 	auto &fs = FileSystem::GetFileSystem(context);
-	return duckdb::make_uniq<GlobalState>(fs, data.sequence1_paths, data.sequence2_paths, data.uses_stdin);
+	const auto threads = NumericCast<size_t>(TaskScheduler::GetScheduler(context).NumberOfThreads());
+	const bool read_ahead =
+	    miint::SequenceReader::ReadAheadFits(data.sequence1_paths.size(), data.sequence2_paths.has_value(), threads);
+	return duckdb::make_uniq<GlobalState>(fs, data.sequence1_paths, data.sequence2_paths, data.uses_stdin, read_ahead);
 }
 
 unique_ptr<LocalTableFunctionState> ReadFastxTableFunction::InitLocal(ExecutionContext &context,
@@ -243,10 +247,10 @@ void ReadFastxTableFunction::Execute(ClientContext &context, TableFunctionInput 
 		//
 		// Destroying the reader here -- rather than leaving it parked in `readers` until the
 		// scan ends -- is what bounds open descriptors and retained buffers by thread count
-		// instead of by file count. Every SequenceReader holds an open gzFile plus kseq++'s
-		// line buffer and zlib's inflate window, none of which DuckDB's memory_limit
-		// accounts for, so a single scan over a large VARCHAR[] otherwise accumulates one of
-		// each per file it finishes. Past RLIMIT_NOFILE the next gzopen fails and the scan
+		// instead of by file count. Everything a SequenceReader holds -- an open gzFile,
+		// kseq++'s line buffer, zlib's inflate window, and any read-ahead's thread and queue --
+		// is outside DuckDB's memory_limit, so a single scan over a large VARCHAR[] otherwise
+		// accumulates all of it per file it finishes. Past RLIMIT_NOFILE the next gzopen fails and the scan
 		// dies naming a file that is perfectly readable (issue #260).
 		//
 		// Safe without the lock, and it rests on two things. File indices are handed out once

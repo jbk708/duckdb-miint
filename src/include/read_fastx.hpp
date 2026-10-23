@@ -56,6 +56,9 @@ public:
 		std::vector<std::string> sequence2_filepaths;
 		size_t next_file_idx; // Next file available for claiming
 		bool uses_stdin;
+		// Each local regular file is read ahead on threads of its own, when they fit in DuckDB's
+		// threads beside the scan's (SequenceReader::ReadAheadFits).
+		bool read_ahead;
 		std::vector<uint64_t>
 		    file_sequence_counters; // Per-file sequence counters (no atomic needed - file access is exclusive)
 		FileSystem &fs;
@@ -71,8 +74,8 @@ public:
 		};
 
 		GlobalState(FileSystem &fs, const std::vector<std::string> &sequence1_paths,
-		            const std::optional<std::vector<std::string>> &sequence2_paths, bool stdin_used)
-		    : next_file_idx(0), uses_stdin(stdin_used), fs(fs) {
+		            const std::optional<std::vector<std::string>> &sequence2_paths, bool stdin_used, bool read_ahead)
+		    : next_file_idx(0), uses_stdin(stdin_used), read_ahead(read_ahead), fs(fs) {
 			sequence1_filepaths = sequence1_paths;
 			if (sequence2_paths.has_value()) {
 				sequence2_filepaths = sequence2_paths.value();
@@ -102,10 +105,11 @@ public:
 				    miint::duckdb_seq_close);
 				readers[file_idx] = std::make_unique<miint::SequenceReader>(std::move(s1), std::move(s2));
 			} else if (!sequence2_filepaths.empty()) {
-				readers[file_idx] = std::make_unique<miint::SequenceReader>(sequence1_filepaths[file_idx],
-				                                                            sequence2_filepaths[file_idx]);
+				readers[file_idx] = std::make_unique<miint::SequenceReader>(
+				    sequence1_filepaths[file_idx], sequence2_filepaths[file_idx], false, read_ahead);
 			} else {
-				readers[file_idx] = std::make_unique<miint::SequenceReader>(sequence1_filepaths[file_idx]);
+				readers[file_idx] = std::make_unique<miint::SequenceReader>(sequence1_filepaths[file_idx], std::nullopt,
+				                                                            false, read_ahead);
 			}
 		}
 	};
