@@ -57,6 +57,34 @@ fi
 mapfile -t wf_versions < <(grep -oE '^[[:space:]]*duckdb_version:[[:space:]]*v?[0-9]+\.[0-9]+\.[0-9]+' "$WORKFLOW" \
                            | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+')
 
+# The commit a duckdb release tag names, or empty: the local submodule clone first, then
+# ls-remote, which resolves a tag without cloning. ^{} dereferences an annotated tag.
+resolve_tag() {
+    local tag="$1" sha="" url ls_out
+    if [[ -e duckdb/.git ]]; then
+        sha=$(git -C duckdb rev-parse -q --verify "refs/tags/${tag}^{commit}" 2>/dev/null || true)
+    fi
+    if [[ -z "$sha" ]] && [[ "${MIINT_VERSION_CHECK_OFFLINE:-0}" != "1" ]]; then
+        url=$(git config -f .gitmodules --get submodule.duckdb.url || printf 'https://github.com/duckdb/duckdb')
+        ls_out=$(git ls-remote "$url" "refs/tags/${tag}" "refs/tags/${tag}^{}" 2>/dev/null || true)
+        sha=$(awk -v t="refs/tags/${tag}^{}" '$2==t {print $1; exit}' <<<"$ls_out")
+        [[ -z "$sha" ]] && sha=$(awk -v t="refs/tags/${tag}" '$2==t {print $1; exit}' <<<"$ls_out")
+    fi
+    printf '%s' "$sha"
+}
+
+# test-with-bowtie2 builds DuckDB as DUCKDB_VERSION (DuckDB v2 takes its version from it, not
+# from git tags), and run_tests.sh installs that release's httpfs. It must name the tag the
+# duckdb submodule is pinned at, in the pre-release mode below too.
+pinned_sha=$(git ls-tree HEAD duckdb 2>/dev/null | awk '{print $3}')
+test_job_version=$(grep -oE '^[[:space:]]*DUCKDB_VERSION:[[:space:]]*v[0-9]+\.[0-9]+\.[0-9]+' "$WORKFLOW" \
+                   | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+if [[ -z "$test_job_version" ]]; then
+    fail "$WORKFLOW: no DUCKDB_VERSION for test-with-bowtie2's build"
+elif [[ "$(resolve_tag "$test_job_version")" != "$pinned_sha" ]]; then
+    fail "$WORKFLOW: test-with-bowtie2 builds DuckDB as $test_job_version, but the duckdb submodule is pinned at ${pinned_sha:0:10}, not that tag"
+fi
+
 # Pre-release: before the target DuckDB is tagged, both jobs take duckdb_version from
 # extension-ci-tools' _submodule_version.yml (the duckdb submodule pin) instead of a
 # literal. There is then no release version to hold the other spellings to, so report
@@ -68,6 +96,10 @@ if (( ${#wf_versions[@]} == 0 && n_pin == 2 )); then
     msg="PRE-RELEASE: $WORKFLOW builds the duckdb submodule pin (${pinned_sha:0:10}), not a release tag. The Dockerfile, publish cron, Python CLI pin and wasm artifact name are NOT checked until literal duckdb_version inputs are restored on release day."
     printf '%s\n' "$msg"
     [[ "${GITHUB_ACTIONS:-}" == true ]] && printf '::warning::%s\n' "$msg"
+    if (( ${#problems[@]} > 0 )); then
+        for p in "${problems[@]}"; do printf 'FAIL: %s\n' "$p" >&2; done
+        exit 1
+    fi
     exit 0
 fi
 
@@ -144,32 +176,12 @@ check_one "wasm artifact name (commented verify-wasm job)" \
 
 say ""
 
-# The recorded gitlink is readable straight out of the tree, so this works even
-# when the submodule was never initialised (the usual CI case).
-pinned_sha=$(git ls-tree HEAD duckdb 2>/dev/null | awk '{print $3}')
 
 if [[ -z "$pinned_sha" ]]; then
     fail "could not read the duckdb gitlink from HEAD (not a git checkout?)"
 else
-    # Prefer the local submodule clone; fall back to ls-remote, which resolves a
-    # tag without cloning. ^{} dereferences annotated tags to their commit.
-    tag_sha=""
-    source_desc=""
-    if [[ -e duckdb/.git ]]; then
-        tag_sha=$(git -C duckdb rev-parse -q --verify "refs/tags/${CANON}^{commit}" 2>/dev/null || true)
-        [[ -n "$tag_sha" ]] && source_desc="local submodule"
-    fi
-    if [[ -z "$tag_sha" ]] && [[ "${MIINT_VERSION_CHECK_OFFLINE:-0}" != "1" ]]; then
-        url=$(git config -f .gitmodules --get submodule.duckdb.url || printf 'https://github.com/duckdb/duckdb')
-        # Ask for both the tag ref and its peeled form: DuckDB's release tags are
-        # lightweight (no ^{} entry exists), but an annotated tag would need the
-        # peeled SHA to compare against a commit. Prefer peeled when present.
-        ls_out=$(git ls-remote "$url" "refs/tags/${CANON}" "refs/tags/${CANON}^{}" 2>/dev/null || true)
-        tag_sha=$(awk -v t="refs/tags/${CANON}^{}" '$2==t {print $1; exit}' <<<"$ls_out")
-        [[ -z "$tag_sha" ]] && tag_sha=$(awk -v t="refs/tags/${CANON}" '$2==t {print $1; exit}' <<<"$ls_out")
-        [[ -n "$tag_sha" ]] && source_desc="ls-remote"
-    fi
-
+    tag_sha=$(resolve_tag "$CANON")
+    source_desc="local submodule or ls-remote"
     if [[ -z "$tag_sha" ]]; then
         fail "could not resolve duckdb tag $CANON (no local clone with tags, and ls-remote unavailable or MIINT_VERSION_CHECK_OFFLINE=1); pinned gitlink is ${pinned_sha:0:10}"
     elif [[ "$pinned_sha" == "$tag_sha" ]]; then

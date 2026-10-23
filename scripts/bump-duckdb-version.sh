@@ -137,6 +137,12 @@ edit must "$WORKFLOW" \
     "\${1}${VER}" \
     "$WORKFLOW duckdb_version"
 
+# The version test-with-bowtie2 builds DuckDB as (DuckDB v2 reads it from the environment)
+edit must "$WORKFLOW" \
+    '(DUCKDB_VERSION:\s*)v[0-9]+\.[0-9]+\.[0-9]+' \
+    "\${1}${VER}" \
+    "$WORKFLOW test-with-bowtie2 DUCKDB_VERSION"
+
 # Artifact name in the commented-out verify-wasm job
 edit must "$WORKFLOW" \
     'miint-v[0-9]+\.[0-9]+\.[0-9]+-extension-' \

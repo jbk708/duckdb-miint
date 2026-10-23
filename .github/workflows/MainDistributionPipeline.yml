@@ -184,6 +184,11 @@ jobs:
         # NB: duckdb's public HTTP read cache was tried here and measured 0 hits
         # (run 28135833867) — ubuntu-latest's gcc ABI doesn't match duckdb's
         # manylinux-docker toolchain, so its prebuilt zips never match. Dropped.
+        # DuckDB v2 takes its version from DUCKDB_VERSION, not git tags: without it this build
+        # is v2.0.0-devN even on the v2.0.0 tag, run_tests.sh cannot INSTALL httpfs for it, and
+        # the tutorials skip. scripts/check-duckdb-version.sh holds it to the pinned tag.
+        env:
+          DUCKDB_VERSION: v2.0.0
         run: |
           VCPKG_BINARY_SOURCES="clear;files,${{ github.workspace }}/vcpkg_bincache,readwrite" \
             make release
