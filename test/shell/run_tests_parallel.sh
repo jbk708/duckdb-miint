@@ -149,7 +149,7 @@ report "a job past the timeout is killed and fails the run with its output, and 
     "a deadlocked test otherwise stalls the run before the summary and every failure's output, and a job left running keeps a worker busy" "$ok"
 
 root spill_dir
-printf "query I\nSELECT current_setting('temp_directory') = '__TEST_DIR__/spill';\n----\ntrue\n" \
+printf "query I\nSELECT current_setting('temp_directory') = '{TEST_DIR}/spill';\n----\ntrue\n" \
     > "$ROOT/test/sql/spill.test"
 invoke "$CPP_OK"
 ok=0

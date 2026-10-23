@@ -110,6 +110,9 @@ public:
 	// end of the file or failed. A segment that reads nothing ahead is idle.
 	bool ReadAheadIdle(int segment) const;
 
+	// Test seam: whether `segment` is read ahead, on the thread its first poll started.
+	bool ReadAheadStarted(int segment) const;
+
 private:
 	using SeqStreamIn = CheckedSeqStreamIn;
 

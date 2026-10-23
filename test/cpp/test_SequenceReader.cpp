@@ -1166,18 +1166,20 @@ TEST_CASE("SequenceReader raises a read-ahead's error after the records read bef
 	// The record read when the reader opened, then one from the read-ahead, which starts it.
 	REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r0"}));
 	REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r1"}));
+	REQUIRE(reader.ReadAheadStarted(0));
 	REQUIRE(WaitIdle(reader, 0));
 
 	// The thread polls from r1 on, sixteen records at a time, and the poll holding the damaged
 	// record loses those it read before it.
 	const size_t before_failed_poll = 1 + (damaged - 1) / SHORT_RECORDS_PER_POLL * SHORT_RECORDS_PER_POLL;
+	std::vector<std::string> expected;
 	for (size_t i = 2; i < before_failed_poll; i++) {
-		CAPTURE(i);
-		REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r" + std::to_string(i)}));
+		expected.push_back("r" + std::to_string(i));
 	}
+	REQUIRE((ReadWithin(reader, static_cast<int>(expected.size())).read_ids == expected));
 	// "record 1001": the thread parsed on from where the reader's own first read stopped.
 	REQUIRE_THROWS_WITH(
-	    reader.read(1),
+	    ReadWithin(reader, 1),
 	    "read_ahead_damaged.fq: record 'r1000/1' (record 1001): sequence length 150 does not match quality length 149");
 }
 
@@ -1192,6 +1194,8 @@ TEST_CASE("SequenceReader allow_empty reads an empty file as no records with rea
 	miint::SequenceReader reader(path, std::nullopt, false, true, true);
 	REQUIRE(ReadWithin(reader, 10).empty());
 	REQUIRE(ReadWithin(reader, 10).empty());
+	// Nothing to read ahead, and no first record to size its polls by.
+	REQUIRE_FALSE(reader.ReadAheadStarted(0));
 }
 
 #endif

@@ -662,6 +662,10 @@ bool SequenceReader::ReadAheadIdle(int segment) const {
 	return read_ahead_[segment] ? read_ahead_[segment]->Idle() : true;
 }
 
+bool SequenceReader::ReadAheadStarted(int segment) const {
+	return read_ahead_[segment] != nullptr;
+}
+
 // Strip whitespace from a sequence in place. Nearly every sequence has none, so look first
 // with a branch-free pass the compiler can vectorize and rewrite only when one turns up.
 // The accumulator is unsigned char, not bool: GCC 14 leaves a bool |= reduction scalar.

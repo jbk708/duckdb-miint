@@ -4,7 +4,7 @@
 `MIINT_TEST_JOBS=N bash run_tests.sh` runs this in place of `make test` followed by the
 C++ test binary. The SQL files are the ones `make test` runs: unittest lists them from
 the spec `make test` passes it, test/*, this script's default. Each runs in its own
-unittest process, and so gets its own __TEST_DIR__, which unittest names by process id.
+unittest process, and so gets a {TEST_DIR} of its own.
 The C++ binary is one more job, queued first because it is the longest.
 
 One job's failure does not stop the others, and a job still running after --timeout seconds
@@ -91,13 +91,13 @@ def main():
 
     # Every worker shares the working directory, and so the .tmp an in-memory database spills
     # to, where processes corrupt each other's spill files (docs/internals/duckdb-engine-notes.md,
-    # "Storage"). unittest runs on_init whenever it opens a database, with __TEST_DIR__
+    # "Storage"). unittest runs on_init whenever it opens a database, with {TEST_DIR}
     # expanded to the process's own directory; temp_directory is database-wide. It also runs
     # it on `reconnect`, so a test that spills and then reconnects fails here alone: DuckDB
     # refuses to move a temp directory in use.
     sql_env = dict(os.environ)
     sql_env["DUCKDB_TEST_ON_INIT"] = ";".join(
-        filter(None, [os.environ.get("DUCKDB_TEST_ON_INIT"), "SET temp_directory='__TEST_DIR__/spill'"])
+        filter(None, [os.environ.get("DUCKDB_TEST_ON_INIT"), "SET temp_directory='{TEST_DIR}/spill'"])
     )
     # The load these workers make can overflow rype's rayon stacks (docs/testing.md,
     # the-miint/RYpe#28). A caller's own value wins. Drop this once RYpe#28 is fixed.
