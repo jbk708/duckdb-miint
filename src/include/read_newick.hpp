@@ -9,7 +9,6 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include <mutex>
-#include <thread>
 #include <vector>
 
 namespace duckdb {
@@ -51,7 +50,7 @@ public:
 			if (uses_stdin) {
 				return 1;
 			}
-			return std::min<idx_t>(file_paths.size(), std::thread::hardware_concurrency());
+			return file_paths.size();
 		}
 
 		GlobalState(const std::vector<std::string> &paths, bool stdin_used, FileSystem &fs)

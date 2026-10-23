@@ -185,7 +185,7 @@ SELECT * FROM read_alignments('some_alignments.sam')
 - Auto-detects file format from content
 - Supports gzip-compressed SAM files
 - Supports stdin input using `-` or `/dev/stdin` (single file only, not in arrays)
-- Supports parallel processing (4 threads for files, single-threaded for stdin)
+- Reads files in parallel, one thread per file, up to DuckDB's `threads` setting; stdin is read on one thread
 - For headerless SAM files, provide reference information via `reference_lengths` parameter
 
 **Examples:**
@@ -800,7 +800,7 @@ SELECT * FROM read_biom('some_file.biom');
 **Behavior:**
 - Reads BIOM format v2.1 files (HDF5-based)
 - Returns data in sparse COO (coordinate) format: one row per non-zero (sample, feature, value) entry
-- Supports parallel processing for faster reads of large files
+- Reads up to 4 files at a time, one thread per file
 - Zero values are not returned (sparse representation)
 - Supports reading multiple files which are concatenated in the output
 

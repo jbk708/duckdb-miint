@@ -11,7 +11,6 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include <optional>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -93,11 +92,7 @@ public:
 		bool include_seq_qual;
 
 		idx_t MaxThreads() const override {
-			auto hw = std::thread::hardware_concurrency();
-			if (hw == 0) {
-				hw = 1;
-			}
-			return std::min<idx_t>(filepaths.size(), hw);
+			return filepaths.size();
 		}
 
 		GlobalState(const std::vector<std::string> &paths, FileSystem &fs,

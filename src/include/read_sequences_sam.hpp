@@ -50,11 +50,7 @@ public:
 			if (uses_stdin) {
 				return 1;
 			}
-			auto hw_threads = std::thread::hardware_concurrency();
-			if (hw_threads == 0) {
-				hw_threads = 1;
-			}
-			return std::min<idx_t>(readers.size(), std::min<idx_t>(8, hw_threads));
+			return std::min<idx_t>(readers.size(), 8);
 		}
 
 		GlobalState(const std::vector<std::string> &paths, FileSystem &fs, bool stdin_used)

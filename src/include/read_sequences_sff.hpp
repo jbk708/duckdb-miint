@@ -9,7 +9,6 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
-#include <thread>
 #include <vector>
 
 namespace duckdb {
@@ -48,11 +47,7 @@ public:
 		    file_sequence_counters; // Per-file sequence counters (no atomic needed - file access is exclusive)
 
 		idx_t MaxThreads() const override {
-			auto hw_threads = std::thread::hardware_concurrency();
-			if (hw_threads == 0) {
-				hw_threads = 1;
-			}
-			return std::min<idx_t>(filepaths.size(), std::min<idx_t>(8, hw_threads));
+			return std::min<idx_t>(filepaths.size(), 8);
 		}
 
 		GlobalState(const std::vector<std::string> &original_paths, miint::ResolvedFileSet resolved, bool do_trim)

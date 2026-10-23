@@ -26,7 +26,7 @@ All table functions follow a similar structure:
 4. **InitGlobal()**: Opens files, creates readers
 5. **Execute()**: Reads records in chunks, populates DataChunk output
 
-`MaxThreads()` controls parallelism per function (e.g. `read_fastx` uses 1 for stdin and one per file otherwise).
+`MaxThreads()` controls parallelism per function (e.g. `read_fastx` uses 1 for stdin and one per file otherwise). It returns the most threads the scan can use, and DuckDB's `threads` setting bounds it. A file reader therefore returns its file count, or a fixed cap below that, and does not cap it at `std::thread::hardware_concurrency()`: that can return 0, and it would hold the scan below a `threads` setting larger than the core count.
 
 ### Record Abstraction
 Each file format has a record struct (SAMRecord, SequenceRecord, etc.) that:
