@@ -50,6 +50,7 @@ SELECT * FROM read_fastx('some_file.fasta');
 - Supports stdin input using `-` or `/dev/stdin` (single file only, no paired-end)
 - Quality scores converted to integers using specified offset (Phred+33 or Phred+64)
 - Supports parallel processing (8 threads for files, 1 thread for stdin)
+- A local file, stdin included, is decompressed and parsed on a thread of its own, ahead of the scan: one such thread per file being read, two for a pair. Each stops reading ahead once it holds 4 MiB of records, or `max_batch_bytes` if that is smaller. Remote files are read in the scan's own thread
 - For paired-end data, reads are matched by position in files (not by ID)
 
 **Examples:**

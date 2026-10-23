@@ -1,6 +1,7 @@
 #pragma once
 #include <climits>
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -38,8 +39,14 @@ private:
 
 class SequenceReader {
 public:
+	//! A local file is read ahead of read() on a thread of its own, so that inflating and
+	//! parsing it overlap the caller's work. It stops reading ahead once it holds this many
+	//! bytes of records per file, or read()'s own byte budget if that is smaller.
+	static constexpr size_t READ_AHEAD_BYTES = 4 * 1024 * 1024;
+
 	explicit SequenceReader(const std::string &path1, const std::optional<std::string> &path2 = std::nullopt,
 	                        bool allow_format_mismatch = false);
+	~SequenceReader();
 
 #ifdef MIINT_STATIC_BUILD
 	// Streaming constructor for remote files via DuckDB FileHandle. Ownership of
@@ -66,9 +73,11 @@ public:
 	// Test seam: the largest number of records materialized by any single underlying stream
 	// poll over this reader's lifetime. Lets tests assert that large records do not trigger
 	// oversized prefetches (see dynamic poll sizing in read_se/read_pe).
-	size_t MaxPollCount() const {
-		return max_poll_count_;
-	}
+	size_t MaxPollCount() const;
+
+	// Test seam: the bytes of records read ahead of read() and not yet taken, for sequence1
+	// (segment 0) or sequence2 (segment 1).
+	size_t ReadAheadBytes(int segment) const;
 
 private:
 	using SeqStreamIn = CheckedSeqStreamIn;
@@ -84,8 +93,14 @@ private:
 
 	static std::vector<klibpp::KSeq> read_stream(StreamVar &var, int n);
 
+	class ReadAhead;
+
 	StreamVar sequence1_reader_;
 	std::optional<StreamVar> sequence2_reader_;
+	// Declared after the streams they read, so they stop before the streams close.
+	bool read_ahead_enabled_ = false;
+	size_t peeked_record_bytes_[2] = {0, 0};
+	std::unique_ptr<ReadAhead> read_ahead_[2];
 
 	bool paired_;
 	bool first_read_; // Track if we need to return buffered data
@@ -100,5 +115,8 @@ private:
 
 	SequenceRecordBatch read_se(const int n, const size_t max_bytes);
 	SequenceRecordBatch read_pe(const int n, const size_t max_bytes);
+	// Up to `n` records of `segment`, fewer only at its end: read here, or taken from its
+	// read-ahead, which the first poll starts.
+	std::vector<klibpp::KSeq> poll(int segment, int n, size_t max_bytes);
 };
 }; // namespace miint
