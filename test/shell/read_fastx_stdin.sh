@@ -39,6 +39,11 @@ run_test "Single-end FASTQ stdin with dash" \
     "│            2 │" \
     "cat data/fastq/small_a.fq | $DUCKDB -c \"SELECT COUNT(*) FROM read_fastx('-');\""
 
+# stdin redirected from a regular file is read ahead on a thread of its own (a pipe never is)
+run_test "Single-end FASTQ stdin redirected from a file" \
+    "│            2 │ read_a1      │ read_a2      │" \
+    "$DUCKDB -c \"SET threads=4; SELECT COUNT(*), min(read_id), max(read_id) FROM read_fastx('/dev/stdin');\" < data/fastq/small_a.fq"
+
 # Test 3: stdin with FASTA format
 run_test "FASTA stdin" \
     "│            2 │" \

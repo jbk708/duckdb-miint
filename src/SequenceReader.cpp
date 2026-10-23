@@ -31,8 +31,6 @@ gzFile CheckedSeqStreamIn::OpenOrThrow(const std::string &path) {
 	return handle;
 }
 
-static size_t record_bytes(const klibpp::KSeq &rec);
-
 // Helper function to extract base read ID by stripping /[1-9] suffix and comments
 static std::string base_read_id(const std::string &id) {
 	// First, strip comments (everything after first space)
@@ -97,6 +95,172 @@ std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n) {
 #endif
 	return result;
 }
+
+// Records polled per stream call. Larger values amortize per-call overhead (vector
+// allocation) across more records; smaller values cap the transient memory overshoot
+// when a single poll pulls in records that together exceed max_bytes. 16 is a
+// compromise: for short-read FASTQ a 2048-record chunk needs ~128 polls instead of
+// 2048 (cuts ~94% of per-record allocation overhead), while for bacterial genomes
+// (~5 MB/record) the worst-case overshoot is 16 * 5 MB = 80 MB -- negligible next to
+// a 512 MB default budget. Any tail records beyond the stop point are pushed back
+// into buffered_read1_ / buffered_read2_ for the next call, so nothing is dropped.
+static constexpr int POLL_CHUNK_SIZE = 16;
+
+// Bytes contributed by a single record. Counted against the per-chunk budget so that
+// FASTQ quality (and paired mates) are accounted for alongside the sequence itself.
+static size_t record_bytes(const klibpp::KSeq &rec) {
+	return rec.name.size() + rec.comment.size() + rec.seq.size() + rec.qual.size();
+}
+
+// Size the next poll so a single read_stream call materializes at most ~max_bytes worth of
+// records, rather than a fixed POLL_CHUNK_SIZE that ignores record size. Without a byte budget
+// (SIZE_MAX) or before any record is observed, fall back to POLL_CHUNK_SIZE -- preserving the
+// short-read fast path. Never exceeds POLL_CHUNK_SIZE and never returns less than 1. Capped at
+// `remaining` by the caller's batch limit.
+static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int remaining) {
+	int poll_n = POLL_CHUNK_SIZE;
+	if (observed_record_bytes > 0 && max_bytes != SIZE_MAX) {
+		const size_t by_budget = max_bytes / observed_record_bytes;
+		if (by_budget < static_cast<size_t>(POLL_CHUNK_SIZE)) {
+			poll_n = by_budget < 1 ? 1 : static_cast<int>(by_budget);
+		}
+	}
+	return remaining < poll_n ? remaining : poll_n;
+}
+
+// Reads one stream ahead of read(), on a thread of its own, into a queue of records. Take(n)
+// hands records out as read_stream(n) would return them: in order, and n of them, fewer only at
+// the end of the stream. The thread stops while the queue holds READ_AHEAD_BYTES, or read()'s
+// budget if that is smaller, unless read() is waiting on more records than that. It sizes each
+// poll by that same cap and the last record read, as read() sizes its polls by its budget: a
+// poll passes the cap by about a record, or by more where records suddenly grow. An error
+// the stream raises is raised by the first Take the records before it cannot satisfy. As with
+// read_stream, a poll that fails loses the records it read before the error, and since the
+// thread's polls are not read()'s, read() can fail a few records sooner than without it.
+class SequenceReader::ReadAhead {
+public:
+	ReadAhead(StreamVar &stream, size_t peeked_record_bytes, size_t max_bytes)
+	    : stream_(stream), observed_record_bytes_(peeked_record_bytes), budget_(max_bytes) {
+		thread_ = std::thread([this]() { Run(); });
+	}
+
+	~ReadAhead() {
+		{
+			std::lock_guard<std::mutex> guard(lock_);
+			stopping_ = true;
+		}
+		progress_.notify_all();
+		// A poll in flight finishes first: a regular file's read returns.
+		thread_.join();
+	}
+
+	std::vector<klibpp::KSeq> Take(int n, size_t max_bytes) {
+		std::unique_lock<std::mutex> guard(lock_);
+		budget_ = max_bytes;
+		wanted_ = static_cast<size_t>(n);
+		progress_.notify_all();
+		progress_.wait(guard, [&]() { return queue_.size() >= wanted_ || ended_; });
+		wanted_ = 0;
+		if (queue_.size() < static_cast<size_t>(n) && error_) {
+			std::rethrow_exception(error_);
+		}
+		const size_t count = std::min(queue_.size(), static_cast<size_t>(n));
+		std::vector<klibpp::KSeq> taken;
+		taken.reserve(count);
+		for (size_t i = 0; i < count; i++) {
+			queued_bytes_ -= record_bytes(queue_.front());
+			taken.push_back(std::move(queue_.front()));
+			queue_.pop_front();
+		}
+		progress_.notify_all();
+		return taken;
+	}
+
+	size_t QueuedBytes() {
+		std::lock_guard<std::mutex> guard(lock_);
+		return queued_bytes_;
+	}
+
+	size_t MaxPollCount() {
+		std::lock_guard<std::mutex> guard(lock_);
+		return max_poll_count_;
+	}
+
+	bool Idle() {
+		std::lock_guard<std::mutex> guard(lock_);
+		return ended_ || (waiting_ && !WantsMoreLocked());
+	}
+
+private:
+	size_t CapLocked() const {
+		return std::min(READ_AHEAD_BYTES, budget_);
+	}
+
+	bool WantsMoreLocked() const {
+		return queue_.size() < wanted_ || queued_bytes_ < CapLocked();
+	}
+
+	void Run() {
+		// Whatever is thrown here goes to read(): escaping the thread would end the process.
+		try {
+			ReadUntilStopped();
+		} catch (...) {
+			std::lock_guard<std::mutex> guard(lock_);
+			error_ = std::current_exception();
+			ended_ = true;
+			progress_.notify_all();
+		}
+	}
+
+	void ReadUntilStopped() {
+		for (;;) {
+			int poll_n;
+			{
+				std::unique_lock<std::mutex> guard(lock_);
+				waiting_ = true;
+				progress_.wait(guard, [&]() { return stopping_ || WantsMoreLocked(); });
+				waiting_ = false;
+				if (stopping_) {
+					return;
+				}
+				poll_n = dynamic_poll_n(observed_record_bytes_, CapLocked(), POLL_CHUNK_SIZE);
+			}
+			auto chunk = read_stream(stream_, poll_n);
+			std::lock_guard<std::mutex> guard(lock_);
+			max_poll_count_ = std::max(max_poll_count_, chunk.size());
+			if (chunk.empty()) {
+				ended_ = true;
+				progress_.notify_all();
+				return;
+			}
+			for (auto &rec : chunk) {
+				observed_record_bytes_ = record_bytes(rec);
+				queued_bytes_ += observed_record_bytes_;
+				queue_.push_back(std::move(rec));
+			}
+			progress_.notify_all();
+		}
+	}
+
+	StreamVar &stream_;
+	std::mutex lock_;
+	std::condition_variable progress_;
+	// Guarded by lock_.
+	std::deque<klibpp::KSeq> queue_;
+	size_t queued_bytes_ = 0;
+	size_t observed_record_bytes_;
+	size_t budget_;
+	//! Records read() is waiting on; the queue fills to at least this many.
+	size_t wanted_ = 0;
+	//! The thread is waiting for the queue to want more records.
+	bool waiting_ = false;
+	bool ended_ = false;
+	bool stopping_ = false;
+	std::exception_ptr error_;
+	size_t max_poll_count_ = 0;
+	// Started last, once everything it reads is initialized.
+	std::thread thread_;
+};
 
 SequenceReader::SequenceReader(const std::string &path1, const std::optional<std::string> &path2,
                                bool allow_format_mismatch, bool read_ahead)
@@ -228,184 +392,25 @@ SequenceReader::SequenceReader(AsperaSeqStreamHandle stream1, AsperaSeqStreamHan
 #endif // MIINT_ASPERA_SUPPORTED
 #endif // MIINT_STATIC_BUILD
 
-// Records polled per stream call. Larger values amortize per-call overhead (vector
-// allocation) across more records; smaller values cap the transient memory overshoot
-// when a single poll pulls in records that together exceed max_bytes. 16 is a
-// compromise: for short-read FASTQ a 2048-record chunk needs ~128 polls instead of
-// 2048 (cuts ~94% of per-record allocation overhead), while for bacterial genomes
-// (~5 MB/record) the worst-case overshoot is 16 * 5 MB = 80 MB -- negligible next to
-// a 512 MB default budget. Any tail records beyond the stop point are pushed back
-// into buffered_read1_ / buffered_read2_ for the next call, so nothing is dropped.
-static constexpr int POLL_CHUNK_SIZE = 16;
-
-// Bytes contributed by a single record. Counted against the per-chunk budget so that
-// FASTQ quality (and paired mates) are accounted for alongside the sequence itself.
-static size_t record_bytes(const klibpp::KSeq &rec) {
-	return rec.name.size() + rec.comment.size() + rec.seq.size() + rec.qual.size();
-}
-
-// Size the next poll so a single read_stream call materializes at most ~max_bytes worth of
-// records, rather than a fixed POLL_CHUNK_SIZE that ignores record size. Without a byte budget
-// (SIZE_MAX) or before any record is observed, fall back to POLL_CHUNK_SIZE -- preserving the
-// short-read fast path. Never exceeds POLL_CHUNK_SIZE and never returns less than 1. Capped at
-// `remaining` by the caller's batch limit.
-static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int remaining) {
-	int poll_n = POLL_CHUNK_SIZE;
-	if (observed_record_bytes > 0 && max_bytes != SIZE_MAX) {
-		const size_t by_budget = max_bytes / observed_record_bytes;
-		if (by_budget < static_cast<size_t>(POLL_CHUNK_SIZE)) {
-			poll_n = by_budget < 1 ? 1 : static_cast<int>(by_budget);
-		}
-	}
-	return remaining < poll_n ? remaining : poll_n;
-}
-
-// Reads one stream ahead of read(), on a thread of its own, into a queue of records. Take(n)
-// hands records out as read_stream(n) would return them: in order, and n of them, fewer only at
-// the end of the stream. The thread stops while the queue holds READ_AHEAD_BYTES, or read()'s
-// budget if that is smaller, unless read() is waiting on more records than that; and it sizes
-// each poll by that same cap, so that a poll of long records cannot run far past it. An error
-// the stream raises is raised by the first Take the records before it cannot satisfy. As with
-// read_stream, a poll that fails loses the records it read before the error, and since the
-// thread's polls are not read()'s, read() can fail a few records sooner than without it.
-class SequenceReader::ReadAhead {
-public:
-	ReadAhead(StreamVar &stream, size_t peeked_record_bytes, size_t max_bytes)
-	    : stream_(stream), observed_record_bytes_(peeked_record_bytes), budget_(max_bytes) {
-		thread_ = std::thread([this]() { Run(); });
-	}
-
-	~ReadAhead() {
-		{
-			std::lock_guard<std::mutex> guard(lock_);
-			stopping_ = true;
-		}
-		progress_.notify_all();
-		// A poll in flight finishes first: a regular file's read returns.
-		thread_.join();
-	}
-
-	std::vector<klibpp::KSeq> Take(int n, size_t max_bytes) {
-		std::unique_lock<std::mutex> guard(lock_);
-		budget_ = max_bytes;
-		wanted_ = static_cast<size_t>(n);
-		progress_.notify_all();
-		progress_.wait(guard, [&]() { return queue_.size() >= wanted_ || ended_; });
-		wanted_ = 0;
-		if (queue_.size() < static_cast<size_t>(n) && error_) {
-			std::rethrow_exception(error_);
-		}
-		const size_t count = std::min(queue_.size(), static_cast<size_t>(n));
-		std::vector<klibpp::KSeq> taken;
-		taken.reserve(count);
-		for (size_t i = 0; i < count; i++) {
-			queued_bytes_ -= record_bytes(queue_.front());
-			taken.push_back(std::move(queue_.front()));
-			queue_.pop_front();
-		}
-		progress_.notify_all();
-		return taken;
-	}
-
-	size_t QueuedBytes() {
-		std::lock_guard<std::mutex> guard(lock_);
-		return queued_bytes_;
-	}
-
-	size_t MaxPollCount() {
-		std::lock_guard<std::mutex> guard(lock_);
-		return max_poll_count_;
-	}
-
-	bool Idle() {
-		std::lock_guard<std::mutex> guard(lock_);
-		return ended_ || (waiting_ && !WantsMoreLocked());
-	}
-
-private:
-	size_t CapLocked() const {
-		return std::min(READ_AHEAD_BYTES, budget_);
-	}
-
-	bool WantsMoreLocked() const {
-		return queue_.size() < wanted_ || queued_bytes_ < CapLocked();
-	}
-
-	void Run() {
-		// Whatever is thrown here goes to read(): escaping the thread would end the process.
-		try {
-			ReadUntilStopped();
-		} catch (...) {
-			std::lock_guard<std::mutex> guard(lock_);
-			error_ = std::current_exception();
-			ended_ = true;
-			progress_.notify_all();
-		}
-	}
-
-	void ReadUntilStopped() {
-		for (;;) {
-			int poll_n;
-			{
-				std::unique_lock<std::mutex> guard(lock_);
-				waiting_ = true;
-				progress_.wait(guard, [&]() { return stopping_ || WantsMoreLocked(); });
-				waiting_ = false;
-				if (stopping_) {
-					return;
-				}
-				poll_n = dynamic_poll_n(observed_record_bytes_, CapLocked(), POLL_CHUNK_SIZE);
-			}
-			auto chunk = read_stream(stream_, poll_n);
-			std::lock_guard<std::mutex> guard(lock_);
-			max_poll_count_ = std::max(max_poll_count_, chunk.size());
-			if (chunk.empty()) {
-				ended_ = true;
-				progress_.notify_all();
-				return;
-			}
-			for (auto &rec : chunk) {
-				observed_record_bytes_ = record_bytes(rec);
-				queued_bytes_ += observed_record_bytes_;
-				queue_.push_back(std::move(rec));
-			}
-			progress_.notify_all();
-		}
-	}
-
-	StreamVar &stream_;
-	std::mutex lock_;
-	std::condition_variable progress_;
-	// Guarded by lock_.
-	std::deque<klibpp::KSeq> queue_;
-	size_t queued_bytes_ = 0;
-	size_t observed_record_bytes_;
-	size_t budget_;
-	//! Records read() is waiting on; the queue fills to at least this many.
-	size_t wanted_ = 0;
-	//! The thread is waiting for the queue to want more records.
-	bool waiting_ = false;
-	bool ended_ = false;
-	bool stopping_ = false;
-	std::exception_ptr error_;
-	size_t max_poll_count_ = 0;
-	// Started last, once everything it reads is initialized.
-	std::thread thread_;
-};
-
 SequenceReader::~SequenceReader() = default;
 
 std::vector<klibpp::KSeq> SequenceReader::poll(int segment, int n, size_t max_bytes) {
 	StreamVar &stream = segment == 0 ? sequence1_reader_ : sequence2_reader_.value();
-	if (!read_ahead_enabled_) {
+	auto &ahead = read_ahead_[segment];
+	if (read_ahead_enabled_ && !ahead && !read_ahead_unavailable_[segment]) {
+		// Started here rather than at construction: the first poll brings read()'s budget.
+		try {
+			ahead = std::make_unique<ReadAhead>(stream, peeked_record_bytes_[segment], max_bytes);
+		} catch (const std::system_error &) {
+			// No thread to be had (a process or thread limit): this segment is read here, as
+			// without read-ahead. The other segment's read-ahead, if it started, carries on.
+			read_ahead_unavailable_[segment] = true;
+		}
+	}
+	if (!ahead) {
 		auto chunk = read_stream(stream, n);
 		max_poll_count_ = std::max(max_poll_count_, chunk.size());
 		return chunk;
-	}
-	auto &ahead = read_ahead_[segment];
-	if (!ahead) {
-		// Started here rather than at construction: the first poll brings read()'s budget.
-		ahead = std::make_unique<ReadAhead>(stream, peeked_record_bytes_[segment], max_bytes);
 	}
 	return ahead->Take(n, max_bytes);
 }
