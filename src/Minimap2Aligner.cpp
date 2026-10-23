@@ -1,4 +1,5 @@
 #include "Minimap2Aligner.hpp"
+#include <minimap2/bseq.h>
 #include <minimap2/minimap.h>
 #include <minimap2/mmpriv.h>
 #include <cstdlib>
@@ -492,17 +493,9 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 		return; // No alignments for empty queries
 	}
 
-	// Setup for paired-end
-	int qlens[2] = {static_cast<int>(sequence1.length()), static_cast<int>(sequence2.length())};
-	const char *seqs[2] = {sequence1.c_str(), sequence2.c_str()};
 	int n_regs[2] = {0, 0};
 	mm_reg1_t *regs[2] = {nullptr, nullptr};
-
-	// Enable fragment mode for paired-end
-	mm_mapopt_t mopt_copy = *active_mapopt();
-	mopt_copy.flag |= MM_F_FRAG_MODE;
-
-	mm_map_frag(active_index(), 2, qlens, seqs, n_regs, regs, tbuf_.get(), &mopt_copy, read_id.c_str());
+	map_pair(sequence1, sequence2, read_id.c_str(), n_regs, regs);
 
 	// Find primary alignments for each segment (with bounds checking)
 	mm_reg1_t *primary[2] = {nullptr, nullptr};
@@ -625,13 +618,9 @@ bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view se
 		return mapped;
 	}
 
-	int qlens[2] = {static_cast<int>(sequence1.size()), static_cast<int>(sequence2.size())};
-	const char *seqs[2] = {sequence1.data(), sequence2.data()};
 	int n_regs[2] = {0, 0};
 	mm_reg1_t *regs[2] = {nullptr, nullptr};
-	mm_mapopt_t mopt_copy = *active_mapopt();
-	mopt_copy.flag |= MM_F_FRAG_MODE;
-	mm_map_frag(active_index(), 2, qlens, seqs, n_regs, regs, tbuf_.get(), &mopt_copy, qname);
+	map_pair(sequence1, sequence2, qname, n_regs, regs);
 	const bool mapped = any_valid(regs[0], n_regs[0]) || any_valid(regs[1], n_regs[1]);
 	for (int seg = 0; seg < 2; seg++) {
 		for (int j = 0; j < n_regs[seg]; j++) {
@@ -640,6 +629,63 @@ bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view se
 		MM_FREE(regs[seg]);
 	}
 	return mapped;
+}
+
+void Minimap2Aligner::map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname,
+                               int n_regs[2], mm_reg1_t *regs[2]) {
+	mm_mapopt_t mopt = *active_mapopt();
+	mopt.flag |= MM_F_FRAG_MODE;
+
+	// minimap2 wants both segments of a pair on one strand: it pairs their hits by strand
+	// (mm_pair, pe.c), and unless the preset sets MM_F_WEAK_PAIRING (splice:sr), which
+	// maps each alone first (mm_map_frag, map.c), it also chains the seeds of both as one
+	// fragment. pe_ori names the segments read from the other
+	// strand (the second, for the presets that pair forward-reverse: sr, short and
+	// splice:sr); minimap2 reverse-complements those before mapping, and flips their hits
+	// back after (worker_for, map.c).
+	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
+	const std::string_view given[2] = {sequence1, sequence2};
+	int qlens[2];
+	const char *seqs[2];
+	for (int seg = 0; seg < 2; seg++) {
+		const std::string_view seq = given[seg];
+		qlens[seg] = static_cast<int>(seq.length());
+		seqs[seg] = seq.data();
+		if (flip[seg]) {
+			// Complemented with minimap2's own table (bseq.h), as minimap2 complements
+			// it. Every byte is indexed unsigned, so a byte above 0x7F reads inside the
+			// table; mm_revcomp_bseq indexes some bytes signed.
+			auto &flipped = flipped_[seg];
+			flipped.resize(seq.length());
+			for (size_t i = 0; i < seq.length(); i++) {
+				flipped[seq.length() - 1 - i] = static_cast<char>(seq_comp_table[static_cast<uint8_t>(seq[i])]);
+			}
+			seqs[seg] = flipped.c_str();
+		}
+	}
+
+	mm_map_frag(active_index(), 2, qlens, seqs, n_regs, regs, tbuf_.get(), &mopt, qname);
+
+	for (int seg = 0; seg < 2; seg++) {
+		if (!flip[seg]) {
+			continue;
+		}
+		for (int j = 0; j < n_regs[seg]; j++) {
+			mm_reg1_t *reg = &regs[seg][j];
+			const int32_t qs = reg->qs;
+			reg->qs = qlens[seg] - reg->qe;
+			reg->qe = qlens[seg] - qs;
+			reg->rev = !reg->rev;
+			// As worker_for does; nothing in miint reads trans_strand.
+			if (reg->p) {
+				if (reg->p->trans_strand == 1) {
+					reg->p->trans_strand = 2;
+				} else if (reg->p->trans_strand == 2) {
+					reg->p->trans_strand = 1;
+				}
+			}
+		}
+	}
 }
 
 void Minimap2Aligner::append_unmapped(const std::string &read_id, int segment_idx, bool mate_mapped, bool mate_rev,

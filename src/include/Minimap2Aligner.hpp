@@ -214,6 +214,7 @@ private:
 	std::shared_ptr<SharedMinimap2Index> shared_index_; // Shared index (mutually exclusive with index_)
 	char *md_buf_ = nullptr;                            // Pooled buffer for mm_gen_MD (Opt 5)
 	int md_max_len_ = 0;                                // Current capacity of md_buf_
+	std::string flipped_[2];                            // Reused by map_pair for a reverse-complemented mate
 
 	// Build raw mm_idx_t* from subjects (shared by build_index and BuildSharedIndex)
 	static mm_idx_t *BuildRawIndex(const std::vector<AlignmentSubject> &subjects, const mm_idxopt_t &iopt,
@@ -228,6 +229,11 @@ private:
 	void align_single(const std::string &read_id, const std::string &sequence, SAMRecordBatch &output);
 	void align_paired(const std::string &read_id, const std::string &sequence1, const std::string &sequence2,
 	                  SAMRecordBatch &output);
+	// Map a pair as minimap2 does: the hits of each segment come back
+	// against that segment as given. The caller frees regs as minimap2 allocated them:
+	// MM_FREE each regs[seg][j].p, then regs[seg].
+	void map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname, int n_regs[2],
+	              mm_reg1_t *regs[2]);
 
 	// Convert minimap2 result to SAM fields
 	void reg_to_sam(const mm_reg1_t *reg, const std::string &read_id, const std::string &query_seq,
