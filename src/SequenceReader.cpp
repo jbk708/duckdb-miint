@@ -6,6 +6,8 @@
 #include <exception>
 #include <filesystem>
 #include <mutex>
+#include <string_view>
+#include <type_traits>
 #include <system_error>
 #include <thread>
 
@@ -31,11 +33,26 @@ gzFile CheckedSeqStreamIn::OpenOrThrow(const std::string &path) {
 	return handle;
 }
 
-// Helper function to extract base read ID by stripping /[1-9] suffix and comments
-static std::string base_read_id(const std::string &id) {
+std::string CheckedSeqStreamIn::EndOfInputError() const {
+	int errnum = Z_OK;
+	const char *msg = gzerror(this->f, &errnum);
+	if (errnum == Z_OK) {
+		return std::string();
+	}
+	std::string error = msg != nullptr ? msg : "zlib error " + std::to_string(errnum);
+	// gzerror() leads with the path the file was opened with; the caller names the file itself.
+	const std::string prefix = path_ + ": ";
+	if (error.compare(0, prefix.size(), prefix) == 0) {
+		error.erase(0, prefix.size());
+	}
+	return error;
+}
+
+// Helper function to extract base read ID by stripping /[1-9] suffix and comments.
+// Returns a view into `id`, so comparing two IDs allocates nothing.
+static std::string_view base_read_id(std::string_view id) {
 	// First, strip comments (everything after first space)
-	size_t space_pos = id.find(' ');
-	std::string base = (space_pos == std::string::npos) ? id : id.substr(0, space_pos);
+	std::string_view base = id.substr(0, id.find(' '));
 
 	// Check if it ends with /[1-9] (single digit 1-9 only)
 	// Need at least 3 chars for pattern "x/1"
@@ -46,7 +63,7 @@ static std::string base_read_id(const std::string &id) {
 
 		// If ends with /[1-9], strip that suffix
 		if (second_last == '/' && last_char >= '1' && last_char <= '9') {
-			base = base.substr(0, len - 2);
+			base.remove_suffix(2);
 		}
 	}
 
@@ -55,10 +72,7 @@ static std::string base_read_id(const std::string &id) {
 
 // Helper function to check if two read IDs match after normalization
 static void check_ids(const std::string &name1, const std::string &name2) {
-	std::string base_id1 = base_read_id(name1);
-	std::string base_id2 = base_read_id(name2);
-
-	if (base_id1 != base_id2) {
+	if (base_read_id(name1) != base_read_id(name2)) {
 		throw std::runtime_error("Mismatched read IDs: " + name1 + " vs " + name2);
 	}
 }
@@ -72,23 +86,202 @@ static void validate_format_consistency(bool is_fasta1, bool is_fasta2, bool all
 	}
 }
 
-// Read from whichever stream variant is active.
+// The bytes std::isspace accepts in the "C" locale: ' ' and '\t' through '\r'. Spelled out
+// rather than calling std::isspace, which is an out-of-line, locale-dependent call per byte,
+// and branch-free, so the loops over a whole sequence that use it vectorize.
+static inline bool is_ascii_space(unsigned char c) {
+	return (c == ' ') | (static_cast<unsigned char>(c - '\t') <= '\r' - '\t');
+}
+
+// kseq++'s KStream separators, protected there: split at any whitespace, or read to the end
+// of the line (dropping a trailing '\r').
+static constexpr char SEP_SPACE = 0;
+static constexpr char SEP_LINE = 2;
+
+// The first byte of a FASTA header line, of a FASTQ header line, and of the FASTQ line between
+// the sequence and the quality.
+static constexpr char FASTA_HEADER = '>';
+static constexpr char FASTQ_HEADER = '@';
+static constexpr char FASTQ_SEPARATOR = '+';
+
+// Parse one record over kseq++'s buffered getc/getuntil. A FASTA record is read as kseq++'s own
+// parser reads it, wrapped sequence lines included. A record whose header starts with '@' is
+// FASTQ and is exactly four lines: header, one sequence line, '+', and one quality line as long
+// as the sequence. kseq++'s parser differs: it appends quality lines until the quality is long
+// enough, so a short quality line takes the next header as quality, and it skips any text
+// before a header. For FASTQ each of those is MALFORMED here, since each loses or misreads a
+// record; FASTA keeps the skip before its first header.
+template <class Stream>
+SequenceReader::ParseResult SequenceReader::parse_record(Stream &stream, klibpp::KSeq &rec, StreamState &state,
+                                                         std::string &problem) {
+	char c = state.pending_header;
+	state.pending_header = 0;
+	if (!c) {
+		if (state.at_start) {
+			// Skip to the first header: old FASTA files can open with ';' comments. FASTQ has no
+			// such preamble, so text before a first '@' is a record that has lost its '@'.
+			bool skipped_text = false;
+			while ((c = stream.getc()) && c != FASTA_HEADER && c != FASTQ_HEADER) {
+				skipped_text |= !is_ascii_space(c);
+			}
+			if (c == FASTQ_HEADER && skipped_text) {
+				problem = "text before the first record; FASTQ files must start with a '@' header line";
+				return ParseResult::MALFORMED;
+			}
+		} else {
+			// The previous record did not end at the next header: it was FASTQ, or it ended at a
+			// NUL or the end of the input. The next line must be a header, though blank lines,
+			// and lines of nothing but whitespace, may come first.
+			while (true) {
+				while ((c = stream.getc()) && (c == '\n' || c == '\r')) {
+				}
+				if (!c || c == FASTA_HEADER || c == FASTQ_HEADER) {
+					break;
+				}
+				std::string line(1, c);
+				stream.getuntil(SEP_LINE, line, nullptr, true);
+				if (!std::all_of(line.begin(), line.end(), is_ascii_space)) {
+					problem = "the line after record " + std::to_string(state.records_read) +
+					          " is not a record header: '" + line.substr(0, 40) + "'";
+					return ParseResult::MALFORMED;
+				}
+			}
+		}
+		state.at_start = false;
+		if (!c) {
+			return ParseResult::END;
+		}
+	}
+	const bool fastq = c == FASTQ_HEADER;
+	auto record = [&]() {
+		return "record '" + rec.name + "' (record " + std::to_string(state.records_read + 1) + "): ";
+	};
+	rec.clear();
+	if (!stream.getuntil(SEP_SPACE, rec.name, &c)) {
+		if (fastq) {
+			problem = "record " + std::to_string(state.records_read + 1) + ": the input ends inside its header";
+			return ParseResult::MALFORMED;
+		}
+		return ParseResult::END;
+	}
+	if (c != '\n') {
+		stream.getuntil(SEP_LINE, rec.comment, nullptr);
+	}
+	size_t sequence_lines = 0;
+	while ((c = stream.getc()) && c != FASTA_HEADER && c != FASTQ_HEADER && c != FASTQ_SEPARATOR) {
+		if (c == '\n' || c == '\r') {
+			continue; // skip empty lines, LF or CRLF
+		}
+		rec.seq += c;
+		stream.getuntil(SEP_LINE, rec.seq, nullptr, true); // the rest of the line
+		sequence_lines++;
+	}
+	if (c == FASTA_HEADER || c == FASTQ_HEADER) {
+		state.pending_header = c; // the next record's header character is already read
+	}
+	if (c != FASTQ_SEPARATOR) {
+		if (fastq) {
+			if (!c && !stream.eof()) {
+				problem = record() + "unexpected NUL byte before the record's '+' line";
+			} else {
+				problem = record() +
+				          (c ? "no '+' line before the next record" : "the input ends before the record's '+' line") +
+				          "; FASTQ records must be four lines";
+			}
+			return ParseResult::MALFORMED;
+		}
+		return ParseResult::RECORD; // FASTA
+	}
+	while ((c = stream.getc()) && c != '\n') {
+	} // the rest of the '+' line
+	if (sequence_lines > 1) {
+		problem = record() + "the sequence spans " + std::to_string(sequence_lines) +
+		          " lines; FASTQ records must be four lines (wrapped FASTQ is not supported)";
+		return ParseResult::MALFORMED;
+	}
+	stream.getuntil(SEP_LINE, rec.qual, nullptr);
+	if (rec.qual.size() != rec.seq.size()) {
+		problem = record() + "sequence length " + std::to_string(rec.seq.size()) + " does not match quality length " +
+		          std::to_string(rec.qual.size());
+		return ParseResult::MALFORMED;
+	}
+	return ParseResult::RECORD;
+}
+
+// How a failed read is reported, whichever stream it came from: the source, how many records
+// were read before it, and why it failed.
+static std::string read_failure(const std::string &source, uint64_t records_read, const std::string &why) {
+	return source + ": read failed after record " + std::to_string(records_read) + ": " + why;
+}
+
+// Read from whichever stream variant is active, one record at a time, asking the input why it
+// stopped whenever a record fails or ends with the input.
 //
 // Errors that originate in our kseq++ read callbacks (duckdb_seq_read /
 // aspera_seq_read) are reported via the thread-local g_seq_read_error
-// channel: the callback writes a message and returns -1, kseq++ surfaces -1
-// as err()/empty-result, and we raise IOException from here. This keeps the
-// throw out of kseq++'s template-instantiated frames, which previously caused
-// a recursive-terminate abort on the aspera path under some failure modes.
-std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n) {
+// channel: the callback writes a message and returns -1, which getc() reads
+// as the end of the input, and we raise IOException from here. This keeps the
+// throw out of kseq++'s template-instantiated frames: a throw from inside them
+// can end in a recursive terminate on the aspera path.
+std::vector<klibpp::KSeq> SequenceReader::read_stream(StreamVar &var, int n, const std::string &source,
+                                                      StreamState &state) {
 #ifdef MIINT_STATIC_BUILD
 	g_seq_read_error.clear();
 #endif
-	auto result = std::visit(
-	    [n](auto &reader) { return reader->read(static_cast<std::vector<klibpp::KSeq>::size_type>(n)); }, var);
+	std::vector<klibpp::KSeq> result;
+	result.reserve(static_cast<size_t>(n));
+	std::visit(
+	    [&](auto &reader) {
+		    for (int i = 0; i < n; i++) {
+			    std::string problem;
+			    const auto parsed = parse_record(*reader, result.emplace_back(), state, problem);
+			    if (parsed == ParseResult::RECORD && !reader->eof()) {
+				    state.records_read++;
+				    continue;
+			    }
+			// The record is malformed, or the input has stopped. A record that ends with the
+			// input is kept only once the input says it ended cleanly: a FASTA record has no
+			// terminator, so one that a truncation or a read error cut short looks complete.
+#ifdef MIINT_STATIC_BUILD
+			    if (!g_seq_read_error.empty()) {
+				    result.pop_back();
+				    return; // the callback's own message is raised below
+			    }
+#endif
+			    // The input itself failing outranks the record: a file cut off mid-record also
+			    // leaves that record malformed, and the truncation is the cause to report.
+			    std::string input_error;
+			    if constexpr (std::is_same_v<std::decay_t<decltype(*reader)>, CheckedSeqStreamIn>) {
+				    input_error = reader->EndOfInputError();
+			    }
+			    if (input_error.empty() && reader->err()) {
+				    input_error = "the input reported a read error";
+			    }
+			    if (!input_error.empty()) {
+				    throw std::runtime_error(read_failure(source, state.records_read, input_error));
+			    }
+			    if (parsed == ParseResult::RECORD) {
+				    state.records_read++;
+				    continue; // the input ended cleanly just after it
+			    }
+			    result.pop_back();
+			    if (parsed == ParseResult::MALFORMED) {
+				    throw std::runtime_error(source + ": " + problem);
+			    }
+			    // getc() returns 0 for a NUL byte as well as at the end of the input, and only eof()
+			    // tells them apart. A NUL where a record should start is damage, such as the
+			    // zero-filled block a crash can leave, not the end of the file.
+			    if (!reader->eof()) {
+				    throw std::runtime_error(source + ": unexpected NUL byte after record " +
+				                             std::to_string(state.records_read));
+			    }
+			    return; // end of input
+		    }
+	    },
+	    var);
 #ifdef MIINT_STATIC_BUILD
 	if (!g_seq_read_error.empty()) {
-		std::string msg = std::move(g_seq_read_error);
+		std::string msg = read_failure(source, state.records_read, g_seq_read_error);
 		g_seq_read_error.clear();
 		throw duckdb::IOException(msg);
 	}
@@ -136,11 +329,14 @@ static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int re
 // about a record, or by up to sixteen where record lengths jump. An error the stream raises is
 // raised by the first Take the records before it cannot satisfy. As with read_stream, a poll
 // that fails loses the records it read before the error, and since the thread's polls are not
-// read()'s, read() can fail a few records sooner than without it.
+// read()'s, read() can fail a few records sooner than without it. From its first poll the thread
+// is the only one to parse the stream, so it alone touches the stream's parser state.
 class SequenceReader::ReadAhead {
 public:
-	ReadAhead(StreamVar &stream, size_t peeked_record_bytes, size_t max_bytes)
-	    : stream_(stream), observed_record_bytes_(peeked_record_bytes), budget_(max_bytes) {
+	ReadAhead(StreamVar &stream, const std::string &source, StreamState &state, size_t peeked_record_bytes,
+	          size_t max_bytes)
+	    : stream_(stream), source_(source), state_(state), observed_record_bytes_(peeked_record_bytes),
+	      budget_(max_bytes) {
 		thread_ = std::thread([this]() { Run(); });
 	}
 
@@ -230,7 +426,7 @@ private:
 				const size_t room = queued_bytes_ < cap ? cap - queued_bytes_ : 0;
 				poll_n = dynamic_poll_n(observed_record_bytes_, room, POLL_CHUNK_SIZE);
 			}
-			auto chunk = read_stream(stream_, poll_n);
+			auto chunk = read_stream(stream_, poll_n, source_, state_);
 			std::lock_guard<std::mutex> guard(lock_);
 			max_poll_count_ = std::max(max_poll_count_, chunk.size());
 			if (chunk.empty()) {
@@ -248,6 +444,8 @@ private:
 	}
 
 	StreamVar &stream_;
+	const std::string &source_;
+	StreamState &state_;
 	std::mutex lock_;
 	std::condition_variable progress_;
 	// Guarded by lock_.
@@ -268,16 +466,17 @@ private:
 };
 
 SequenceReader::SequenceReader(const std::string &path1, const std::optional<std::string> &path2,
-                               bool allow_format_mismatch, bool read_ahead)
+                               bool allow_format_mismatch, bool allow_empty, bool read_ahead)
     : first_read_(true) {
+	source1_ = path1;
 	sequence1_reader_ = std::make_unique<SeqStreamIn>(path1);
 
 	// Check if first file is empty by attempting to peek at first record
-	buffered_read1_ = read_stream(sequence1_reader_, 1);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, state1_);
 	bool is_empty1 = buffered_read1_.empty();
 	bool is_fasta1 = !is_empty1 && buffered_read1_[0].qual.empty();
 
-	if (is_empty1) {
+	if (is_empty1 && !allow_empty) {
 		throw std::runtime_error("Empty file: " + path1);
 	}
 
@@ -285,15 +484,19 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 
 	paired_ = path2.has_value() && (path2->length() > 0);
 	if (paired_) {
+		source2_ = path2.value();
 		sequence2_reader_.emplace(std::make_unique<SeqStreamIn>(path2.value()));
 
 		// Check if second file is empty and detect format
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, state2_);
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
-		if (is_empty2) {
-			throw std::runtime_error("Empty file: " + path2.value());
+		if (is_empty1 != is_empty2) { // both empty only gets here with allow_empty
+			throw std::runtime_error("Empty file: " + (is_empty1 ? path1 : path2.value()));
+		}
+		if (is_empty1) {
+			return; // Both mates empty and allowed: no records, and no format to compare.
 		}
 
 		validate_format_consistency(is_fasta1, is_fasta2, allow_format_mismatch);
@@ -308,17 +511,21 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 		std::error_code ec;
 		return std::filesystem::is_regular_file(path, ec);
 	};
-	read_ahead_enabled_ = read_ahead && regular(path1) && (!paired_ || regular(path2.value()));
-	peeked_record_bytes_[0] = record_bytes(buffered_read1_[0]);
-	if (paired_) {
-		peeked_record_bytes_[1] = record_bytes(buffered_read2_[0]);
+	// An empty file (allow_empty) has nothing to read ahead, and no record to size polls by.
+	read_ahead_enabled_ =
+	    read_ahead && !buffered_read1_.empty() && regular(path1) && (!paired_ || regular(path2.value()));
+	if (read_ahead_enabled_) {
+		peeked_record_bytes_[0] = record_bytes(buffered_read1_[0]);
+		if (paired_) {
+			peeked_record_bytes_[1] = record_bytes(buffered_read2_[0]);
+		}
 	}
 #endif
 }
 
 #ifdef MIINT_STATIC_BUILD
 SequenceReader::SequenceReader(DuckDBSeqStreamHandle stream1, DuckDBSeqStreamHandle stream2_or_null,
-                               bool allow_format_mismatch)
+                               bool allow_format_mismatch, bool allow_empty)
     : first_read_(true) {
 	// Ownership protocol: each input handle owns its raw pointer until the
 	// matching make_unique<KStreamIn>() succeeds. Holding the kstream in a
@@ -328,30 +535,39 @@ SequenceReader::SequenceReader(DuckDBSeqStreamHandle stream1, DuckDBSeqStreamHan
 	// `release()` runs before any variant op, and the variant move-assign
 	// from rvalue unique_ptr is noexcept. On any later peek throwing, the
 	// kstream wrapper (now inside the variant) is the sole owner.
+	if (stream1 && stream1->handle) {
+		source1_ = stream1->handle->GetPath();
+	}
 	auto kstream1 = std::make_unique<DuckDBSeqStreamIn>(stream1.get(), duckdb_seq_read, duckdb_seq_close);
 	stream1.release();
 	sequence1_reader_ = std::move(kstream1);
 
-	buffered_read1_ = read_stream(sequence1_reader_, 1);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, state1_);
 	bool is_empty1 = buffered_read1_.empty();
 	bool is_fasta1 = !is_empty1 && buffered_read1_[0].qual.empty();
 
-	if (is_empty1) {
+	if (is_empty1 && !allow_empty) {
 		throw std::runtime_error("Empty stream");
 	}
 
 	paired_ = (stream2_or_null.get() != nullptr);
 	if (paired_) {
+		if (stream2_or_null->handle) {
+			source2_ = stream2_or_null->handle->GetPath();
+		}
 		auto kstream2 = std::make_unique<DuckDBSeqStreamIn>(stream2_or_null.get(), duckdb_seq_read, duckdb_seq_close);
 		stream2_or_null.release();
 		sequence2_reader_.emplace(std::move(kstream2));
 
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, state2_);
 		bool is_empty2 = buffered_read2_.empty();
 		bool is_fasta2 = !is_empty2 && buffered_read2_[0].qual.empty();
 
-		if (is_empty2) {
-			throw std::runtime_error("Empty stream (sequence2)");
+		if (is_empty1 != is_empty2) { // both empty only gets here with allow_empty
+			throw std::runtime_error(is_empty1 ? "Empty stream" : "Empty stream (sequence2)");
+		}
+		if (is_empty1) {
+			return; // Both mates empty and allowed: no records, and no format to compare.
 		}
 
 		validate_format_consistency(is_fasta1, is_fasta2, allow_format_mismatch);
@@ -367,25 +583,31 @@ SequenceReader::SequenceReader(AsperaSeqStreamHandle stream1, AsperaSeqStreamHan
 	// peek: Aspera streams are backed by live ascp pipes, and ordering the
 	// transfers/peeks per-stream would interleave reads from the two
 	// processes in ways the original (pre-handle) code took care to avoid.
+	if (stream1 && !stream1->source.empty()) {
+		source1_ = stream1->source;
+	}
 	auto kstream1 = std::make_unique<AsperaSeqStreamIn>(stream1.get(), aspera_seq_read, aspera_seq_close);
 	stream1.release();
 	sequence1_reader_ = std::move(kstream1);
 
 	paired_ = (stream2_or_null.get() != nullptr);
 	if (paired_) {
+		if (!stream2_or_null->source.empty()) {
+			source2_ = stream2_or_null->source;
+		}
 		auto kstream2 = std::make_unique<AsperaSeqStreamIn>(stream2_or_null.get(), aspera_seq_read, aspera_seq_close);
 		stream2_or_null.release();
 		sequence2_reader_.emplace(std::move(kstream2));
 	}
 
-	buffered_read1_ = read_stream(sequence1_reader_, 1);
+	buffered_read1_ = read_stream(sequence1_reader_, 1, source1_, state1_);
 	if (buffered_read1_.empty()) {
 		throw std::runtime_error("Empty stream");
 	}
 	bool is_fasta1 = buffered_read1_[0].qual.empty();
 
 	if (paired_) {
-		buffered_read2_ = read_stream(sequence2_reader_.value(), 1);
+		buffered_read2_ = read_stream(sequence2_reader_.value(), 1, source2_, state2_);
 		if (buffered_read2_.empty()) {
 			throw std::runtime_error("Empty stream (sequence2)");
 		}
@@ -401,11 +623,13 @@ SequenceReader::~SequenceReader() = default;
 
 std::vector<klibpp::KSeq> SequenceReader::poll(int segment, int n, size_t max_bytes) {
 	StreamVar &stream = segment == 0 ? sequence1_reader_ : sequence2_reader_.value();
+	const std::string &source = segment == 0 ? source1_ : source2_;
+	StreamState &state = segment == 0 ? state1_ : state2_;
 	auto &ahead = read_ahead_[segment];
 	if (read_ahead_enabled_ && !ahead && !read_ahead_unavailable_[segment]) {
 		// Started here rather than at construction: the first poll brings read()'s budget.
 		try {
-			ahead = std::make_unique<ReadAhead>(stream, peeked_record_bytes_[segment], max_bytes);
+			ahead = std::make_unique<ReadAhead>(stream, source, state, peeked_record_bytes_[segment], max_bytes);
 		} catch (const std::system_error &) {
 			// No thread to be had (a process or thread limit): this segment is read here, as
 			// without read-ahead. The other segment's read-ahead, if it started, carries on.
@@ -413,7 +637,7 @@ std::vector<klibpp::KSeq> SequenceReader::poll(int segment, int n, size_t max_by
 		}
 	}
 	if (!ahead) {
-		auto chunk = read_stream(stream, n);
+		auto chunk = read_stream(stream, n, source, state);
 		max_poll_count_ = std::max(max_poll_count_, chunk.size());
 		return chunk;
 	}
@@ -438,14 +662,30 @@ bool SequenceReader::ReadAheadIdle(int segment) const {
 	return read_ahead_[segment] ? read_ahead_[segment]->Idle() : true;
 }
 
+bool SequenceReader::ReadAheadStarted(int segment) const {
+	return read_ahead_[segment] != nullptr;
+}
+
+// Strip whitespace from a sequence in place. Nearly every sequence has none, so look first
+// with a branch-free pass the compiler can vectorize and rewrite only when one turns up.
+// The accumulator is unsigned char, not bool: GCC 14 leaves a bool |= reduction scalar.
+static void strip_whitespace(std::string &seq) {
+	unsigned char any = 0;
+	for (unsigned char c : seq) {
+		any |= is_ascii_space(c);
+	}
+	if (any) {
+		seq.erase(std::remove_if(seq.begin(), seq.end(), is_ascii_space), seq.end());
+	}
+}
+
 // Append a KSeq into an SE batch, stripping sequence whitespace in place.
 static void append_se(SequenceRecordBatch &batch, klibpp::KSeq &rec) {
-	rec.seq.erase(std::remove_if(rec.seq.begin(), rec.seq.end(), [](unsigned char c) { return std::isspace(c); }),
-	              rec.seq.end());
+	strip_whitespace(rec.seq);
 	batch.read_ids.emplace_back(base_read_id(rec.name));
-	batch.comments.emplace_back(rec.comment);
+	batch.comments.emplace_back(std::move(rec.comment));
 	batch.sequences1.emplace_back(std::move(rec.seq));
-	batch.quals1.emplace_back(rec.qual);
+	batch.quals1.emplace_back(std::move(rec.qual));
 }
 
 SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes) {
@@ -519,17 +759,15 @@ SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes)
 
 // Append a paired KSeq into a PE batch, stripping sequence whitespace on both mates.
 static void append_pe(SequenceRecordBatch &batch, klibpp::KSeq &rec1, klibpp::KSeq &rec2) {
-	rec1.seq.erase(std::remove_if(rec1.seq.begin(), rec1.seq.end(), [](unsigned char c) { return std::isspace(c); }),
-	               rec1.seq.end());
-	rec2.seq.erase(std::remove_if(rec2.seq.begin(), rec2.seq.end(), [](unsigned char c) { return std::isspace(c); }),
-	               rec2.seq.end());
+	strip_whitespace(rec1.seq);
+	strip_whitespace(rec2.seq);
 
 	batch.read_ids.emplace_back(base_read_id(rec1.name));
-	batch.comments.emplace_back(rec1.comment);
+	batch.comments.emplace_back(std::move(rec1.comment));
 	batch.sequences1.emplace_back(std::move(rec1.seq));
 	batch.sequences2.emplace_back(std::move(rec2.seq));
-	batch.quals1.emplace_back(rec1.qual);
-	batch.quals2.emplace_back(rec2.qual);
+	batch.quals1.emplace_back(std::move(rec1.qual));
+	batch.quals2.emplace_back(std::move(rec2.qual));
 }
 
 SequenceRecordBatch SequenceReader::read_pe(const int n, const size_t max_bytes) {

@@ -28,14 +28,15 @@ public:
 		bool uses_stdin;
 		uint8_t qual_offset;
 		uint64_t max_batch_bytes;
+		bool allow_empty; // read an empty file as no records instead of failing
 
 		std::vector<std::string> names; // field names
 		std::vector<LogicalType> types; // field types
 
 		Data(const std::vector<std::string> &r1_paths, const std::optional<std::vector<std::string>> &r2_paths,
-		     bool include_fp, bool stdin_used, uint8_t offset, uint64_t max_bytes)
+		     bool include_fp, bool stdin_used, uint8_t offset, uint64_t max_bytes, bool allow_empty_p)
 		    : sequence1_paths(r1_paths), sequence2_paths(r2_paths), include_filepath(include_fp),
-		      uses_stdin(stdin_used), qual_offset(offset), max_batch_bytes(max_bytes),
+		      uses_stdin(stdin_used), qual_offset(offset), max_batch_bytes(max_bytes), allow_empty(allow_empty_p),
 		      names({"sequence_index", "read_id", "comment", "sequence1", "sequence2", "qual1", "qual2"}),
 		      types({LogicalType::BIGINT, LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::VARCHAR,
 		             LogicalType::VARCHAR, LogicalType::LIST(LogicalType::UTINYINT),
@@ -56,6 +57,7 @@ public:
 		std::vector<std::string> sequence2_filepaths;
 		size_t next_file_idx; // Next file available for claiming
 		bool uses_stdin;
+		bool allow_empty;
 		// Each local regular file is read ahead on threads of its own, when they fit in DuckDB's
 		// threads beside the scan's (SequenceReader::ReadAheadFits).
 		bool read_ahead;
@@ -74,8 +76,9 @@ public:
 		};
 
 		GlobalState(FileSystem &fs, const std::vector<std::string> &sequence1_paths,
-		            const std::optional<std::vector<std::string>> &sequence2_paths, bool stdin_used, bool read_ahead)
-		    : next_file_idx(0), uses_stdin(stdin_used), read_ahead(read_ahead), fs(fs) {
+		            const std::optional<std::vector<std::string>> &sequence2_paths, bool stdin_used, bool allow_empty_p,
+		            bool read_ahead)
+		    : next_file_idx(0), uses_stdin(stdin_used), allow_empty(allow_empty_p), read_ahead(read_ahead), fs(fs) {
 			sequence1_filepaths = sequence1_paths;
 			if (sequence2_paths.has_value()) {
 				sequence2_filepaths = sequence2_paths.value();
@@ -103,13 +106,14 @@ public:
 				miint::DuckDBSeqStreamHandle s2(
 				    !sequence2_filepaths.empty() ? CreateDuckDBSeqStream(fs, sequence2_filepaths[file_idx]) : nullptr,
 				    miint::duckdb_seq_close);
-				readers[file_idx] = std::make_unique<miint::SequenceReader>(std::move(s1), std::move(s2));
+				readers[file_idx] =
+				    std::make_unique<miint::SequenceReader>(std::move(s1), std::move(s2), false, allow_empty);
 			} else if (!sequence2_filepaths.empty()) {
 				readers[file_idx] = std::make_unique<miint::SequenceReader>(
-				    sequence1_filepaths[file_idx], sequence2_filepaths[file_idx], false, read_ahead);
+				    sequence1_filepaths[file_idx], sequence2_filepaths[file_idx], false, allow_empty, read_ahead);
 			} else {
 				readers[file_idx] = std::make_unique<miint::SequenceReader>(sequence1_filepaths[file_idx], std::nullopt,
-				                                                            false, read_ahead);
+				                                                            false, allow_empty, read_ahead);
 			}
 		}
 	};

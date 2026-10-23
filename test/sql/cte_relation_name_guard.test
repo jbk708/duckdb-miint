@@ -313,9 +313,54 @@ WITH c AS (SELECT 1 AS x) SELECT * FROM compute_pileup('nope', 'c');
 compute_pileup: 'c' is a common table expression
 
 statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM cross_validate_classifier('c', 'nope');
+----
+cross_validate_classifier: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM cross_validate_classifier('nope', 'c');
+----
+cross_validate_classifier: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM cross_validate_regressor('c', 'nope');
+----
+cross_validate_regressor: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM cross_validate_regressor('nope', 'c');
+----
+cross_validate_regressor: 'c' is a common table expression
+
+statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM ena_upload_reads(relation := 'c');
 ----
 ena_upload_reads: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM feature_importances('c');
+----
+feature_importances: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM fit_classifier('c', 'nope');
+----
+fit_classifier: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM fit_classifier('nope', 'c');
+----
+fit_classifier: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM fit_regressor('c', 'nope');
+----
+fit_regressor: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM fit_regressor('nope', 'c');
+----
+fit_regressor: 'c' is a common table expression
 
 statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM massql('QUERY scaninfo(MS1DATA)', 'c');
@@ -380,6 +425,11 @@ WITH c AS (SELECT 1 AS x) SELECT * FROM mmvec_score('nope', 'nope', 'c');
 mmvec_score: 'c' is a common table expression
 
 statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM model_features('c');
+----
+model_features: 'c' is a common table expression
+
+statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM mzml_peak_pair('c', 'C6H12O6');
 ----
 mzml_peak_pair: 'c' is a common table expression
@@ -433,6 +483,26 @@ statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM pick_anchors('c');
 ----
 pick_anchors: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM predict('c', 'nope');
+----
+predict: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM predict('nope', 'c');
+----
+predict: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM predict_proba('c', 'nope');
+----
+predict_proba: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM predict_proba('nope', 'c');
+----
+predict_proba: 'c' is a common table expression
 
 statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM procrustes('c', 'nope');
@@ -503,6 +573,16 @@ statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM save_minimap2_index('c', 'nope_dir/out.mmi');
 ----
 save_minimap2_index: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM shap('c', 'nope');
+----
+shap: 'c' is a common table expression
+
+statement error
+WITH c AS (SELECT 1 AS x) SELECT * FROM shap('nope', 'c');
+----
+shap: 'c' is a common table expression
 
 statement error
 WITH c AS (SELECT 1 AS x) SELECT * FROM shear_tree('c', 'nope');

@@ -2,8 +2,8 @@
 # description: Test read_fastx from HTTP URL
 # group: [sql]
 
-# NOTE: Skipped in CI because httpfs is disabled at build time.
-# Active coverage is in test/shell/read_https.sh (uses LOAD httpfs at runtime).
+# `make test` skips this file because httpfs is not linked into unittest;
+# run_tests.sh runs it in its httpfs pass.
 
 require miint
 
@@ -13,28 +13,47 @@ require-env MIINT_HTTPS_TEST_URL
 
 # Uncompressed FASTQ via HTTP
 query I
-SELECT COUNT(*) FROM read_fastx(getenv('MIINT_HTTPS_TEST_URL') || '/fastq/small_a.fq');
+SELECT COUNT(*) FROM read_fastx('{MIINT_HTTPS_TEST_URL}/fastq/small_a.fq');
 ----
 2
 
 # FASTA via HTTP
 query I
-SELECT COUNT(*) FROM read_fastx(getenv('MIINT_HTTPS_TEST_URL') || '/fastq/test.fa');
+SELECT COUNT(*) FROM read_fastx('{MIINT_HTTPS_TEST_URL}/fastq/test.fa');
 ----
 2
 
 # Gzipped FASTQ via HTTP
 query I
-SELECT COUNT(*) FROM read_fastx(getenv('MIINT_HTTPS_TEST_URL') || '/fastq/foo.r1.fastq.gz');
+SELECT COUNT(*) FROM read_fastx('{MIINT_HTTPS_TEST_URL}/fastq/foo.r1.fastq.gz');
 ----
 2
 
 # Paired-end gzipped FASTQ via HTTP
 query III
 SELECT COUNT(*), COUNT(sequence1), COUNT(sequence2) FROM read_fastx(
-    getenv('MIINT_HTTPS_TEST_URL') || '/fastq/foo.r1.fastq.gz',
-    sequence2=getenv('MIINT_HTTPS_TEST_URL') || '/fastq/foo.r2.fastq.gz'
+    '{MIINT_HTTPS_TEST_URL}/fastq/foo.r1.fastq.gz',
+    sequence2='{MIINT_HTTPS_TEST_URL}/fastq/foo.r2.fastq.gz'
 );
 ----
 2	2	2
 
+# allow_empty reads an empty remote file as no records
+query I
+SELECT COUNT(*) FROM read_fastx('{MIINT_HTTPS_TEST_URL}/fastq/empty.fq', allow_empty := true);
+----
+0
+
+# A malformed record over HTTP fails naming the file and the record, as it does locally.
+statement error
+SELECT COUNT(*) FROM read_fastx('{MIINT_HTTPS_TEST_URL}/fastq/malformed_qual_longer.fq');
+----
+/fastq/malformed_qual_longer.fq: record 'b' (record 2): sequence length 3 does not match quality length 5
+
+# A gzip download cut short fails naming the file and how far the read got. The count is not
+# pinned: the stream inflates in blocks and the block holding the cut is lost with the error,
+# so the read stops short of the file's 496 complete records by an amount set by block size.
+statement error
+SELECT COUNT(*) FROM read_fastx('{MIINT_HTTPS_TEST_URL}/fastq/truncated.fq.gz');
+----
+<REGEX>:.*/fastq/truncated\.fq\.gz: read failed after record [0-9]+: duckdb_seq_read: gzip stream truncated before end marker.*

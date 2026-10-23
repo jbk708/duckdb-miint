@@ -6,7 +6,7 @@
 
 #include "ena_reports_client.hpp"
 
-#include "ena_parser.hpp" // PercentEncodeQueryValue
+#include "ena_parser.hpp" // PercentEncodeQueryValue, TrimTrailingSlash
 
 #include <cstdlib>
 #include <stdexcept>
@@ -15,17 +15,6 @@
 namespace miint {
 
 namespace {
-
-// Strip a single trailing slash from a base URL so callers passing
-// "https://.../report" and "https://.../report/" produce identical URLs.
-// Mirrors `TrimTrailingSlash` in ena_alias_check.cpp; not extracted because
-// the two TUs don't currently share a header for misc helpers.
-std::string TrimTrailingSlash(std::string s) {
-	if (!s.empty() && s.back() == '/') {
-		s.pop_back();
-	}
-	return s;
-}
 
 // Path segment per kind. STUDY → "projects" (returns id=PRJEB, the primary
 // accession lifecycle ops target). NOT "studies" (which returns id=ERP, the

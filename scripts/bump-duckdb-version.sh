@@ -137,6 +137,12 @@ edit must "$WORKFLOW" \
     "\${1}${VER}" \
     "$WORKFLOW duckdb_version"
 
+# The version test-with-bowtie2 builds DuckDB as (DuckDB v2 reads it from the environment)
+edit must "$WORKFLOW" \
+    '(DUCKDB_VERSION:\s*)v[0-9]+\.[0-9]+\.[0-9]+' \
+    "\${1}${VER}" \
+    "$WORKFLOW test-with-bowtie2 DUCKDB_VERSION"
+
 # Artifact name in the commented-out verify-wasm job
 edit must "$WORKFLOW" \
     'miint-v[0-9]+\.[0-9]+\.[0-9]+-extension-' \
@@ -191,6 +197,9 @@ Next:
   5. WASM is only built by CI on tag pushes, so verify it locally:
        bash scripts/build_wasm.sh        # build + unresolved-import check
        bash scripts/test_wasm_load.sh    # true ABI load test
+       bash scripts/test_wasm_browser.sh # the playground's runtime; first bump the
+                                         # @duckdb/duckdb-wasm pin in
+                                         # scripts/wasm_browser/index.html (docs/UPDATING.md)
      If build/wasm_shell/ is left over from an older DuckDB, test_wasm_load.sh
      reuses it and fails with a version-lock error that looks like a real
      incompatibility but is not. Clear it first.

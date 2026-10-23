@@ -9,25 +9,11 @@ require httpfs
 
 require miint
 
-# Skip when ENA Portal API is not reachable (offline CI, blocked network).
+# Live ENA: runs only under MIINT_ENA_LIVE_TEST=1, when ENA's Portal answers;
+# run_tests.sh sets ENA_AVAILABLE only then. CI runs it nightly.
 require-env ENA_AVAILABLE
 
-# ---- Error handling (no network needed) ----
-
-statement error
-SELECT * FROM read_ena('');
-----
-read_ena: accession cannot be empty
-
-statement error
-SELECT * FROM read_ena([]);
-----
-read_ena: at least one accession must be provided
-
-statement error
-SELECT * FROM read_ena('ERR1074767', result='invalid_type');
-----
-read_ena: result must be one of: read_run, sample, study
+# Input errors, which need no request: read_ena_input_errors.test.
 
 # ---- Single run accession with custom fields ----
 

@@ -105,20 +105,23 @@ SELECT count(*) FROM (SELECT * FROM prog_ord EXCEPT SELECT * FROM prog_ord2);
 #    Why this is a TOLERANCE and not EXCEPT, deliberately: `threads` is not a pure
 #    scheduling knob. It also sets the OpenMP width of the anchor block's reference
 #    PCoA, and skbb's centering is an OpenMP `reduction(+:)` whose summation order
-#    depends on that width — so the reference FRAME itself shifts in its last bits
-#    and every coordinate inherits the shift. Measured 3.1e-06 max abs on this
-#    fixture. Separately, concurrent FIRST calls race on libssu/skbb's non-atomic
-#    CPU/accelerator detection caches (upstream README, "Detection caches"), which
-#    perturbs the first parallel run in a process by ~1.6e-06 and nothing after it.
-#    1e-5 is the tolerance the rest of this repo's fp32 PCoA reproducibility tests
-#    already use, and it has 3x headroom on THIS fixture. Do not read it as a
-#    universal bound: the drift is amplified by a randomized SVD and a procrustes
-#    fit, so it grows with the table — measured 2.4e-05 on 23,814 real EMP samples,
-#    which would fail this threshold. What stays invariant at that scale is the
-#    ORDINATION (procrustes M^2 vs a full unifrac_pcoa was identical to five
-#    decimals across thread counts), not the coordinates. A bigger fixture here
-#    would therefore need a procrustes comparison instead of a coordinate diff.
-#    Asserting exact equality would be asserting something untrue either way.
+#    depends on that width — so the reference FRAME itself can shift in its last bits
+#    and every coordinate inherits the shift. Separately, concurrent FIRST calls
+#    race on libssu/skbb's non-atomic CPU/accelerator detection caches (upstream
+#    README, "Detection caches"), which perturbs the first parallel run in a process
+#    and nothing after it. Measured on this fixture (2026-10-22, this pair alone, 10
+#    runs): threads := 4 differed from threads := 1 by 0 in 7 runs and by 7.5e-06 in
+#    3. The bound is 1e-4, not the 1e-5 the rest of this repo's fp32 PCoA
+#    reproducibility tests use: 7.5e-06 left 1e-5 only 1.3x headroom, and c3 below
+#    measured 1.28e-05 at the default width. Do not read 1e-4 as a universal bound
+#    either: the drift is amplified by a randomized SVD and a procrustes fit, so it
+#    grows with the table — threads := 1 vs threads := 14 reached 9.92e-06 on this
+#    fixture in 10 runs and 2.4e-05 on 23,814 real EMP samples. What stays
+#    invariant at that scale is the ORDINATION (procrustes M^2 vs a full
+#    unifrac_pcoa was identical to five decimals across thread counts), not the
+#    coordinates. A bigger fixture here would therefore need a procrustes comparison
+#    instead of a coordinate diff. Asserting exact equality would be asserting
+#    something untrue either way.
 #
 #    What IS exact is checked exactly, because these are the things concurrency
 #    could actually corrupt rather than perturb: every sample appears, and each
@@ -126,7 +129,9 @@ SELECT count(*) FROM (SELECT * FROM prog_ord EXCEPT SELECT * FROM prog_ord2);
 #    This is also the guard on the shared AnchorFeatureRowCache — its anchor rows
 #    are loaded eagerly before fan-out, and if anyone reinstates the lazy fill,
 #    workers would write that vector while others read it. That corrupts a block's
-#    anchor rows outright, which moves coordinates far beyond 1e-5. ──
+#    anchor rows outright. The count and batch checks cannot see that; the coordinate
+#    checks see it only if it moves a coordinate by 1e-4 or more, which has not been
+#    measured. ──
 statement ok
 CREATE TABLE prog_serial AS
 SELECT sample_id, axis, coordinate, batch
@@ -149,10 +154,10 @@ SELECT count(*) FROM prog_serial s JOIN prog_parallel p USING (sample_id, axis) 
 ----
 0
 
-# coordinates agree to fp32 PCoA tolerance
+# coordinates agree to 1e-4 (see the note above for why not 1e-5)
 query I
 SELECT count(*) FROM prog_serial s JOIN prog_parallel p USING (sample_id, axis)
-WHERE abs(s.coordinate - p.coordinate) >= 1e-5;
+WHERE abs(s.coordinate - p.coordinate) >= 1e-4;
 ----
 0
 
@@ -192,8 +197,8 @@ SELECT count(*) FROM progressive_pcoa_from_unifrac('ft', 'tree', n_dims := 3, n_
 # `seed := 42` is REQUIRED even though the anchors are explicit: the seed no longer
 # selects anchors, but it still seeds every block's skbb fsvd, so an unseeded
 # explicitly-anchored run is NOT reproducible. Omitting it here made all 120 rows
-# differ. `threads := 1` is pinned for the separate reason above (concurrent blocks
-# shift coordinates at ~1e-6).
+# differ. `threads := 1` is pinned for the separate reason above (a width above 1
+# can shift coordinates; see the worker-count note).
 statement ok
 CREATE TABLE prog_expl2 AS
 SELECT sample_id, axis, coordinate
@@ -396,11 +401,18 @@ SELECT (SELECT count(*) FROM (SELECT * FROM a EXCEPT ALL SELECT * FROM b))
 0
 
 # ── ...and the same guarantee at the DEFAULT thread count, where the reference
-#    frame may shift in its last bits but the ANSWER may not. Three of these are
-#    exact because nothing fp32 can perturb them, and the fourth is frame-invariant:
+#    frame may shift in its last bits but the ANSWER may not. Two of these are exact
+#    because nothing fp32 can perturb them, one is a tolerance, and one is
+#    frame-invariant:
 #      c1  batch assignment — integers, decided by an ORDER BY sample_id enumeration
 #      c2  the UniFrac distances themselves (pinned width, so exactly comparable)
-#      c3  coordinates to 1e-5, the fp32 tolerance used elsewhere in this file
+#      c3  coordinates to 1e-4, the bound the worker-count check above uses. At the
+#          default width the frame can shift between runs. On this fixture
+#          (2026-10-22) 3 runs at each of 4, 8, 16 and 32 threads, one process at a
+#          time, gave 0, 7.5e-06 or 1.28e-05, the largest at 8 and 16, and 24 runs at
+#          32 threads with 8 processes at once gave at most 9.92e-06. An axis that
+#          flipped sign moves coordinates by 0.2 to 0.6 here and two that swapped by
+#          0.08 or more, so both still fail it; procrustes (c4) is blind to both.
 #      c4  procrustes M^2 ~ 0 — immune to a frame shift by construction, which is
 #          why docs/diversity.md tells users to compare ordinations and not
 #          coordinates. This is the assertion that actually backs the doc advice. ──
@@ -429,7 +441,7 @@ WITH a AS (SELECT sample_id, axis, coordinate, batch
              USING (sample_a, sample_b))
 SELECT count(*) FILTER (WHERE ba IS DISTINCT FROM bb) = 0,
        (SELECT dd FROM d) = 0.0,
-       max(abs(ca - cb)) < 1e-5,
+       max(abs(ca - cb)) < 1e-4,
        (SELECT max(m2) < 1e-9 FROM procrustes('dg_ord_sorted', 'dg_ord_shuffled', permutations := 0))
 FROM j;
 ----

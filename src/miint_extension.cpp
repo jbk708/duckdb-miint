@@ -17,6 +17,8 @@
 #include <copy_ubam.hpp>
 #include <read_jplace_newick.hpp>
 #include <read_newick.hpp>
+#include <read_paf.hpp>
+#include <read_gfa.hpp>
 #include <phylo_independent_contrasts.hpp>
 #include <phylo_ancestral_states.hpp>
 #include <phylo_ancestral_parsimony.hpp>
@@ -101,6 +103,13 @@
 #include <rype_filter.hpp>
 #include <rype_index_create.hpp>
 #include <rype_log_ratio.hpp>
+#include <sc_fit_function.hpp>
+#include <sc_feature_importances_function.hpp>
+#include <sc_predict_function.hpp>
+#include <sc_model_features_function.hpp>
+#include <sc_predict_proba_function.hpp>
+#include <sc_shap_function.hpp>
+#include <sc_cross_validate_function.hpp>
 #ifdef MIINT_HAS_VSEARCH
 #include <uchime_ref.hpp>
 #include <uchime_denovo.hpp>
@@ -116,6 +125,9 @@
 #ifdef MIINT_HAS_SYLPH
 #include <sylph_index_create.hpp>
 #include <sylph_profile.hpp>
+#endif
+#ifdef MIINT_HAS_ST3
+#include <sourcetracker_function.hpp>
 #endif
 #include <duckdb/parser/parsed_data/create_scalar_function_info.hpp>
 #include <duckdb/main/config.hpp>
@@ -147,6 +159,9 @@
 #endif
 
 namespace fs = std::filesystem;
+
+// ext/miint-rust-glue/src/lib.rs: seeds rayon's global pool under Emscripten.
+extern "C" void miint_rust_glue_init();
 
 namespace duckdb {
 
@@ -222,6 +237,7 @@ static unique_ptr<FunctionData> MiintVersionsBind(ClientContext &context, TableF
 	data->versions.emplace_back("libcurl", miint::GetCurlVersion());
 #endif
 	data->versions.emplace_back("rype", RYPE_GIT_VERSION);
+	data->versions.emplace_back("sc", SC_GIT_VERSION);
 #ifdef MIINT_HAS_VSEARCH
 	data->versions.emplace_back("vsearch", VSEARCH_GIT_VERSION);
 #endif
@@ -233,6 +249,9 @@ static unique_ptr<FunctionData> MiintVersionsBind(ClientContext &context, TableF
 #endif
 #ifdef MIINT_HAS_SYLPH
 	data->versions.emplace_back("sylph", SYLPH_GIT_VERSION);
+#endif
+#ifdef MIINT_HAS_ST3
+	data->versions.emplace_back("st3", ST3_GIT_VERSION);
 #endif
 #ifdef MIINT_HAS_KREPP
 	data->versions.emplace_back("krepp", KREPP_GIT_VERSION);
@@ -271,6 +290,10 @@ static void MiintVersionsExecute(ClientContext &context, TableFunctionInput &dat
 static void LoadInternal(ExtensionLoader &loader) {
 	// TODO: use [[nodiscard]] throughout in headers
 	// TODO: //! comment on headers
+
+	// Before anything can reach rype or sc: on DuckDB-Wasm this gives rayon a
+	// pool it can actually run (the calling thread); elsewhere it does nothing.
+	miint_rust_glue_init();
 
 	miint::RegisterMiintLogType(loader.GetDatabaseInstance());
 	miint::RegisterENASecretType(loader);
@@ -326,6 +349,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	ReadBIOMTableFunction::Register(loader);
 #endif
 	ReadNewickTableFunction::Register(loader);
+	ReadPafTableFunction::Register(loader);
+	ReadGfaTableFunction::Register(loader);
 	ReadJplaceNewickTableFunction::Register(loader);
 	TreeResolvePlacementTableFunction::Register(loader);
 	ShearTreeTableFunction::Register(loader);
@@ -447,6 +472,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	SylphProfileTableFunction::Register(loader);
 	SylphIndexCreateTableFunction::Register(loader);
 #endif
+#ifdef MIINT_HAS_ST3
+	RegisterSourcetracker(loader);
+#endif
 #ifdef MIINT_HAS_GPL_BOUNDARY
 	PhylogenyFastTreeTableFunction::Register(loader);
 	PhylogenyFastTreeAvailableScalar::Register(loader);
@@ -545,6 +573,14 @@ static void LoadInternal(ExtensionLoader &loader) {
 	RypeExtractStrandMinimizersTableFunction::Register(loader);
 	RypeLogRatioTableFunction::Register(loader);
 	RypeIndexCreateTableFunction::Register(loader);
+
+	ScFitFunction::Register(loader);
+	ScFeatureImportancesFunction::Register(loader);
+	ScPredictFunction::Register(loader);
+	ScModelFeaturesFunction::Register(loader);
+	ScPredictProbaFunction::Register(loader);
+	ScShapFunction::Register(loader);
+	ScCrossValidateFunction::Register(loader);
 #ifdef MIINT_HAS_VSEARCH
 	UchimeRefTableFunction::Register(loader);
 	UchimeDenovoTableFunction::Register(loader);

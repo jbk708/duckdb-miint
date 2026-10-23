@@ -1470,7 +1470,8 @@ void WarnIfFeatureTableUnsorted(ClientContext &context, const char *caller, cons
 }
 
 // Read the feature rows of exactly the requested samples (all their features) into
-// COO form, applying ReadFeatureTable's NULL/zero/NaN drops.
+// COO form, dropping NULL, zero and NaN cells (ReadFeatureTable refuses a NaN
+// instead).
 std::vector<miint::unifrac::CooRow> QueryFeatureRows(ClientContext &context, const char *caller,
                                                      const std::string &qname,
                                                      const std::vector<std::string> &requested,

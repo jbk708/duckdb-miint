@@ -1,0 +1,60 @@
+#pragma once
+
+#include "duckdb/main/extension/extension_loader.hpp"
+
+namespace duckdb {
+
+//! cross_validate_classifier / cross_validate_regressor(data, metadata[,
+//!   target_column, n_folds, parameter_tuning, random_state, ... forest params])
+//!   -> (sample_id, prediction, actual, [probabilities, classes,] metric,
+//!       mean_score, std_score, fold_scores)
+//!
+//! How well does this recipe -- these forest parameters on this data --
+//! generalise to samples it has never seen?
+//!
+//! The samples are shuffled once and cut into `n_folds` folds. Each fold is
+//! held out in turn while a forest is fit on the rest and used to predict it, so
+//! every sample ends up with exactly one prediction from a model that never saw
+//! it -- an out-of-fold (OOF) prediction. Folds are stratified for a classifier
+//! (each fold keeps the class proportions, so no fold can miss a class) and
+//! plain for a regressor, matching q2 and scikit-learn.
+//!
+//! `actual` is the target the fold was scored against, carried through so the
+//! result scores itself: a confusion matrix, a residual, or an accuracy needs no
+//! join back to the metadata relation.
+//!
+//! The per-fold forests are scored and discarded: this measures the recipe, not
+//! a model. Fit the model you will use with fit_* on all the data.
+//!
+//! `probabilities` is the OOF probability of each class, and `classes` names
+//! them: both are lists in the same order on every row, so `probabilities[i]` is
+//! the probability of `classes[i]`, and the class with the highest probability
+//! is the one in `prediction`. Positional lists rather than a map keep the class
+//! order sc reported, and keep one row per sample -- a (sample, class) grain
+//! would multiply every score column too. A regressor has no classes to be
+//! probable, and the task is fixed by which function was called, so the two
+//! columns are absent from its schema rather than present and always NULL.
+//!
+//! `metric` is 'accuracy' (classifier) or 'mse' (regressor). `mean_score` and
+//! `std_score` are over the per-fold scores -- the same mean and population
+//! standard deviation q2 prints -- and `fold_scores` holds each fold's score, so
+//! `unnest(fold_scores)` shows the spread. All four are properties of the whole
+//! run, so they repeat on every row; `SELECT DISTINCT` collapses them. Two grains
+//! in one result because cross-validation fits `n_folds` forests: asking for the
+//! scores and the predictions separately would pay that cost twice.
+//!
+//! Scoring is the mean of the per-fold scores, not a pooled score over all
+//! predictions. They differ whenever folds are unequal in size, and the
+//! fold-mean is what scikit-learn's cross_val_score reports.
+//!
+//! `parameter_tuning := true` searches the built-in hyperparameter grid inside
+//! each training fold and refits with the winner (q2's `parameter_tuning`). The
+//! search never sees the held-out fold, so the score is not fit to it. Each
+//! training fold scores 20 candidates by an inner `n_folds`-fold CV, so tuning
+//! adds about 20 x n_folds^2 fits.
+class ScCrossValidateFunction {
+public:
+	static void Register(ExtensionLoader &loader);
+};
+
+} // namespace duckdb

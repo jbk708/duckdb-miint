@@ -122,11 +122,14 @@ If a test produces an **incorrect expected value**: DO NOT change the expected v
 
 ```bash
 bash run_tests.sh                                                 # all SQL tests
+MIINT_TEST_JOBS=8 bash run_tests.sh                               # the same, SQL and C++ tests on 8 workers
 ./build/release/extension/miint/tests                             # C++ unit tests
 ./build/release/extension/miint/tests_duckdb                      # C++ tests that need a running DuckDB
+export DUCKDB_TEST_CONFIG=$PWD/test/configs/no_skipped_errors.json  # as run_tests.sh does
 ./build/release/test/unittest "test/sql/read_alignments.test"     # single SQL test
 ./build/release/test/unittest "[alignment]"                       # tests matching a pattern
 ```
+Without `DUCKDB_TEST_CONFIG`, `unittest` skips a test whose error contains "HTTP" or "Unable to connect" instead of failing it. A `require httpfs` file always skips under plain `unittest`; `docs/testing.md`, "Guards and skipped tests", gives the command that runs one.
 
 ### Python CLI smoke tests
 ```bash
@@ -140,14 +143,23 @@ Full manual smoke test procedure: `localdocs/cli-smoke-tests.md`.
 ### Optional-dependency guards in SQL tests
 SQL tests use `require-env VAR_NAME` (after `require miint`) to skip gracefully when a dependency isn't present. If the env var isn't set, the test file is skipped, not failed.
 
-`run_tests.sh` is the authoritative source for what gets detected and exported. It covers three kinds of guards:
-- **Runtime binaries** detected via `command -v` (e.g., `BOWTIE2_AVAILABLE`, `ASPERA_AVAILABLE`, `MASSQL_PYTHON_AVAILABLE`, `GPL_BOUNDARY_AVAILABLE` for the FastTree process-isolation host, `FASTTREE_AVAILABLE` for the bioconda parity oracle binary)
-- **Compile-time features** detected by querying the built extension (e.g., `HDF5_AVAILABLE`, `VSEARCH_AVAILABLE`, `MAFFT_AVAILABLE` — each checks for a registered function or library entry)
+`run_tests.sh` is the authoritative source for what gets detected and exported. It covers these kinds of guards:
+- **Runtime binaries** detected via `command -v` (e.g., `ASPERA_AVAILABLE`, `MASSQL_PYTHON_AVAILABLE`, `GPL_BOUNDARY_AVAILABLE` for the FastTree process-isolation host)
+- **Compile-time features** detected by querying the built extension (e.g., `HDF5_AVAILABLE`, `VSEARCH_AVAILABLE`, `MAFFT_AVAILABLE`, `ST3_AVAILABLE` — each checks for a registered function or library entry)
+- **Live network services**, exported when a probe gets an answer (e.g., `NCBI_AVAILABLE`, `MIINT_TAXDUMP_REMOTE`). `ENA_AVAILABLE` and `BLAST_LIVE_AVAILABLE` are also opt-in (`MIINT_ENA_LIVE_TEST=1`, `MIINT_BLAST_LIVE_TEST=1`): EBI fails often enough to fail runs that no change caused (`docs/testing.md`, "Guards and skipped tests"), and NCBI's queue can outlast the run.
 - **Downloaded / served test data** (e.g., `MIINT_HTTPS_TEST_URL`, `MASSQL_TEST_DATA`, `MASSQL_GNPS_DATA`, `MZXML_REAL_DATA`)
-- **SHA-pinned parity oracles** (e.g., `SORTMERNA_REAL_ORACLE`, `MIINT_FASTTREE_TINY_PARITY_OK`, `MIINT_FASTTREE_MODERATE_PARITY_OK`) — exported only when the oracle file's SHA matches the recorded sidecar. To regenerate stale oracles: `MIINT_SORTMERNA_REAL_DATA=1` or `MIINT_FASTTREE_REGENERATE=1` and rerun `run_tests.sh`.
-- **Process state the main pass cannot provide** (currently `MIINT_LOW_FD_TEST`, guarding `test/sql/read_fastx_fd_release.test`) — not an availability check. `make test` has no way to set `RLIMIT_NOFILE`, so the file opts out of that pass and `run_tests.sh` reruns it in a subshell with the limit lowered. Reach for this only when the test needs process state, never to work around missing data.
+- **An oracle pinned to a submodule commit** (`SORTMERNA_REAL_ORACLE`) — exported only when the `ext/sortmerna` commit recorded with the committed oracle matches the submodule's HEAD; regenerate with `MIINT_SORTMERNA_REAL_DATA=1`. Every other committed golden fails its parity test when stale instead of skipping (`docs/testing.md`, "Guards and skipped tests").
+- **Process state the main pass cannot provide** (currently `MIINT_LOW_FD_TEST`, guarding `test/sql/read_fastx_fd_release.test`) — not an availability check. The main pass has no way to set `RLIMIT_NOFILE`, so the file opts out of it and `run_tests.sh` reruns it in a subshell with the limit lowered. Reach for this only when the test needs process state, never to work around missing data.
 
 When adding a new guard: detect in `run_tests.sh`, add `require-env` to the test file(s), and leave availability-check tests (that only verify the scalar/feature-flag query itself) unguarded so they always run.
+
+The httpfs pass in `run_tests.sh` fails when a file skips on a guard missing from its `HTTPFS_ALLOWED_SKIPS`. A new guard on a `require httpfs` file for something a machine can lack (a service, credentials, a binary, an optional library) goes on that list; a guard on something `run_tests.sh` itself provides, such as a mock server's URL, does not.
+
+## Reviewing a branch
+
+Every PR runs the review loop on its own changes before it is opened. The `miint-review` skill (`.claude/skills/miint-review/`) owns the loop: one `/code-review` pass, then fresh `miint-reviewer` rounds until a stop rule holds; the rules live in `.claude/agents/miint-reviewer.md`. The loop ends by printing a `## Reviewer loop` block for the PR description, and the `review-loop-check` workflow fails a PR whose block is missing or names a commit that is not one of the PR's own. A PR that cannot run the loop carries the `no-agent-review` label and says why under that heading. The check shows that the block is present, not that the loop ran.
+
+When a human review turns up a pattern the reviewer missed, add it to the agent file in the PR that fixes the instance: a bullet under the rule that owns it and a Trigger-map row so it can fire, with no names, quotes or PR numbers.
 
 ## Architecture and Patterns (detailed docs)
 
@@ -156,7 +168,7 @@ The entry point is `src/miint_extension.cpp` — `LoadInternal()` registers ever
 Developer-facing deep dives live under `docs/internals/`:
 
 - **[`docs/internals/architecture.md`](docs/internals/architecture.md)** — design patterns (file reading, record abstraction, reference table), code style, testing strategy, cross-cutting impl details (thread safety, headerless SAM, stop-position math, quality scores, compression), and how to add new table/COPY/scalar/aggregate functions — including **[why the work goes in `InitGlobal`/`Execute` and never in `Bind`](docs/internals/architecture.md#no-work-in-bind)**, which is easy to get wrong because it appears to work.
-- **[`docs/internals/embedded-tools.md`](docs/internals/embedded-tools.md)** — how every external library/tool is embedded: static libraries from source (HTSlib, minimap2, WFA2, vsearch, MAFFT, rype), header-only (kseq++), vcpkg/system (zlib, zstd, expat, HDF5, Catch2), and runtime binaries (bowtie2, Aspera). Platform-specific gotchas and feature flags.
+- **[`docs/internals/embedded-tools.md`](docs/internals/embedded-tools.md)** — how every external library/tool is embedded: static libraries from source (HTSlib, minimap2, WFA2, vsearch, MAFFT, rype, sylph, sc), header-only (kseq++), vcpkg/system (zlib, zstd, expat, HDF5, Catch2), and runtime binaries (bowtie2, Aspera). Platform-specific gotchas and feature flags.
 - **[`docs/internals/reading-tables-views.md`](docs/internals/reading-tables-views.md)** — the separate-connection recipe for reading user-specified tables/views from extension code (avoids the `context.Query()` deadlock). Covers both data reads and schema validation.
 - **[`docs/internals/arrow-zero-copy.md`](docs/internals/arrow-zero-copy.md)** — zero-copy Arrow C Data Interface → DuckDB Vector conversion, with lifetime management and reference implementations.
 - **[`docs/internals/per-sample-pattern.md`](docs/internals/per-sample-pattern.md)** — the `sample_id` named parameter that partitions an input relation and runs a function's pipeline once per distinct sample, prepending a sample column. Covers `src/include/per_sample_table_function.hpp` (bind-time discovery, exec-time atomic claim) and which functions use it.
