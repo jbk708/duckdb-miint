@@ -589,9 +589,10 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 	mopt.flag |= MM_F_FRAG_MODE;
 
 	// minimap2 chains the seeds of both segments as one fragment, so it wants them
-	// on one strand. pe_ori names the segments read from the other strand (the sr
-	// preset's forward-reverse pairs: the second); minimap2 reverse-complements
-	// those before mapping, and flips their hits back after (worker_for, map.c).
+	// on one strand. pe_ori names the segments read from the other strand (the second,
+	// for the presets that pair forward-reverse: sr, short and splice:sr); minimap2
+	// reverse-complements those before mapping, and flips their hits back after
+	// (worker_for, map.c).
 	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
 	const std::string *given[2] = {&sequence1, &sequence2};
 	int qlens[2];
@@ -601,9 +602,9 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 		qlens[seg] = static_cast<int>(seq.length());
 		seqs[seg] = seq.c_str();
 		if (flip[seg]) {
-			// minimap2's own complement (bseq.h), so every byte a read holds is
-			// complemented as minimap2 complements it; indexed unsigned, which
-			// mm_revcomp_bseq does not do for the bytes it swaps.
+			// Complemented with minimap2's own table (bseq.h), as minimap2 complements
+			// it. Every byte is indexed unsigned, so a byte above 0x7F reads inside the
+			// table; mm_revcomp_bseq indexes some bytes signed.
 			auto &flipped = flipped_[seg];
 			flipped.resize(seq.length());
 			for (size_t i = 0; i < seq.length(); i++) {
@@ -625,6 +626,7 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 			reg->qs = qlens[seg] - reg->qe;
 			reg->qe = qlens[seg] - qs;
 			reg->rev = !reg->rev;
+			// As worker_for does; nothing in miint reads trans_strand.
 			if (reg->p) {
 				if (reg->p->trans_strand == 1) {
 					reg->p->trans_strand = 2;

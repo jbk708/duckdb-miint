@@ -220,7 +220,8 @@ private:
 	void align_paired(const std::string &read_id, const std::string &sequence1, const std::string &sequence2,
 	                  SAMRecordBatch &output);
 	// Map a pair as one fragment, as minimap2 does: the hits of each segment come back
-	// against that segment as given. regs are minimap2's, freed by the caller.
+	// against that segment as given. The caller frees regs as minimap2 allocated them:
+	// MM_FREE each regs[seg][j].p, then regs[seg].
 	void map_pair(const std::string &sequence1, const std::string &sequence2, const char *qname, int n_regs[2],
 	              mm_reg1_t *regs[2]);
 
