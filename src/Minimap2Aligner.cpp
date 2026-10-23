@@ -588,11 +588,12 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 	mm_mapopt_t mopt = *active_mapopt();
 	mopt.flag |= MM_F_FRAG_MODE;
 
-	// minimap2 chains the seeds of both segments as one fragment, so it wants them
-	// on one strand. pe_ori names the segments read from the other strand (the second,
-	// for the presets that pair forward-reverse: sr, short and splice:sr); minimap2
-	// reverse-complements those before mapping, and flips their hits back after
-	// (worker_for, map.c).
+	// minimap2 wants both segments of a pair on one strand: it pairs their hits by strand
+	// (mm_pair, pe.c), and every preset but splice:sr, which maps each alone first, also
+	// chains the seeds of both as one fragment. pe_ori names the segments read from the other
+	// strand (the second, for the presets that pair forward-reverse: sr, short and
+	// splice:sr); minimap2 reverse-complements those before mapping, and flips their hits
+	// back after (worker_for, map.c).
 	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
 	const std::string *given[2] = {&sequence1, &sequence2};
 	int qlens[2];

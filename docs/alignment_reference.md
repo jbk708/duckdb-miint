@@ -573,7 +573,7 @@ Returns the same schema as `read_alignments` (21 columns):
 **Behavior:**
 - Subject sequences are loaded into memory at bind time (must fit in RAM)
 - Query sequences are processed in batches for memory efficiency
-- Supports both single-end and paired-end query sequences. A pair is mapped as one fragment, as minimap2 maps it, so a pair can map when neither of its mates maps alone. The presets for forward-reverse pairs (`sr`, its alias `short`, and `splice:sr`) flag a pair proper (`0x2`) when its mates face each other on one reference, within the preset's maximum fragment length; every other preset expects both mates read from the same strand. Positions, strands and CIGARs are reported against each mate as given
+- Supports both single-end and paired-end query sequences, and maps a pair as minimap2 does. The presets for forward-reverse pairs (`sr`, its alias `short`, and `splice:sr`) flag a pair proper (`0x2`) when its mates face each other, close together on one reference; every other preset flags a pair proper only when both mates lie on one strand. `sr` and `short` also map a pair as one fragment, so a pair can map when neither of its mates maps alone. Positions, strands and CIGARs are reported against each mate as given
 - Uses minimap2's in-memory indexing for fast alignment
 - Secondary alignments are controlled by `max_secondary` parameter
 
@@ -736,7 +736,7 @@ Returns the same 21-column schema as `align_minimap2` and `read_alignments`.
 - For each shard, only the reads assigned to that shard (via the `read_to_shard` mapping) are queried
 - A read can appear in multiple shards (mapped to multiple shard_name values) and will be aligned against each. A read listed **more than once for the same shard** is aligned against that shard once: membership is a set test, so a duplicated routing row is indistinguishable from a single one. v1.0.0–v1.0.1 joined instead and emitted the alignment once per duplicate row
 - Unmapped reads (flag 0x4) are automatically filtered out of results
-- Supports both single-end and paired-end query sequences. A pair is mapped as one fragment, as in [`align_minimap2`](#single-index-alignment-with-minimap2)
+- Supports both single-end and paired-end query sequences. A pair is mapped as in [`align_minimap2`](#single-index-alignment-with-minimap2)
 - Supports views for both `query_table` and `read_to_shard`
 - **`query_table` is read exactly once**, at the start of the scan, into a per-call TEMP snapshot holding `read_id` and the sequence columns (`qual1`/`qual2` are dropped, since alignment never reads them). Re-reading it once per shard would silently drop reads whenever the relation is not stable across repeated reads (a view using `nextval()` / `random()` / `now()`, a view over a concurrently-written table, or a registered single-pass Arrow stream).
 - **`read_to_shard` is read once by the scan**, into its own TEMP snapshot of `(read_id, shard_id)`, for the same reason: routing is consulted once per shard and index part, so an unstable routing relation would otherwise send a read to one set of shards on part 1 and another on part 2, and reads it stopped naming would never be aligned at all. The snapshot stores an integer shard key rather than the name — DuckDB keeps only the first 8 bytes of a string in its min/max statistics, so shard names sharing a prefix (`GCF_000001405.40`, `shard_0001`) defeat row-group pruning entirely, while integer statistics are exact.

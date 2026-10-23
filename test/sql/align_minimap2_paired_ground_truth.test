@@ -7,12 +7,13 @@
 #       data/minimap2/paired_R1.fasta data/minimap2/paired_R2.fasta
 #   minimap2 -a -x map-ont --frag=yes --eqx --MD data/minimap2/paired_subject.fasta \
 #       data/minimap2/paired_R1.fasta data/minimap2/paired_R2.fasta
+#   and the same as the first with -x short, then with -x splice:sr
 #   minimap2 version: 2.30-r1287
 #
 # Test data (simulated):
-#   data/minimap2/paired_subject.fasta - one random 6,000 bp sequence, so no read has a
-#   second placement, and minimap2's own secondary settings and align_minimap2's
-#   max_secondary give the same rows
+#   data/minimap2/paired_subject.fasta - one random 6,000 bp sequence. The sr and
+#   map-ont runs above report no secondary or supplementary hit even with
+#   -N 50 --secondary=yes, so align_minimap2's max_secondary changes no row here
 #   data/minimap2/paired_R1.fasta, paired_R2.fasta - 150 bp pairs. Mate 2 is read from
 #   the other strand of the fragment, as Illumina pairs are:
 #   - forward_fragment, reverse_fragment: exact pairs from a fragment on each strand
@@ -20,14 +21,15 @@
 #   - mate1_only, mate2_only: the other mate is random
 #   - unmapped: both mates random
 #   - fragment_24, fragment_28, fragment_30: random mates, each holding one exact match
-#     of N bases to the subject, the two in a fragment's orientation. A CIGAR can show
-#     a base more where a random neighbour happens to match too
+#     to the subject as long as the number in its name, the two in a fragment's
+#     orientation. A CIGAR can show a base more where a random neighbour matches too
 #
-# minimap2 maps a pair as one fragment. With a preset for forward-reverse pairs (sr,
-# its alias short, splice:sr) it reverse-complements mate 2 first, so that the seeds of
-# both mates lie on one strand and chain together; that is what makes such a pair
-# proper, and what maps the fragment_* pairs at all, whose mates each hold too few
-# seeds to chain alone.
+# With a preset for forward-reverse pairs (sr, its alias short, splice:sr), minimap2
+# reverse-complements mate 2 before mapping, so that both mates lie on one strand.
+# That is what makes such a pair proper under all three. Under sr and short the seeds
+# of both mates then chain together as one fragment, which is what maps the fragment_*
+# pairs at all, whose mates each hold too few seeds to chain alone; splice:sr maps each
+# mate alone, and maps none of them.
 
 require miint
 
@@ -84,7 +86,7 @@ ORDER BY read_id, flags;
 mate1_only	73	subject	4501	4651	60	150=	300	0	150
 mate2_only	153	subject	5201	5351	60	150=	300	0	150
 
-# short is minimap2's name for sr, and pairs as sr does.
+# short is an alias of sr, and pairs as sr does.
 query II
 SELECT read_id, flags
 FROM align_minimap2('pairs', subject_table := 'subject', preset := 'short', eqx := true)
@@ -96,10 +98,25 @@ forward_fragment	147
 fragment_24	99
 fragment_24	147
 
+# splice:sr pairs forward-reverse too, so the pairs whose mates both map are proper,
+# but it maps each mate alone, so the fragment_* pairs do not map.
+query IIIITIIIIT
+SELECT read_id, flags, position, mapq, cigar, mate_position, template_length, tag_as, tag_nm, tag_md
+FROM align_minimap2('pairs', subject_table := 'subject', preset := 'splice:sr', eqx := true)
+WHERE read_id NOT IN ('mate1_only', 'mate2_only')
+ORDER BY read_id, flags;
+----
+forward_fragment	99	1001	60	150=	1301	450	150	0	150
+forward_fragment	147	1301	60	150=	1001	-450	150	0	150
+mismatched	99	2001	60	20=1X54=1X54=1X19=	2251	400	135	3	20C54A54T19
+mismatched	147	2251	60	10=1X49=1X79=1X9=	2001	-400	135	3	10C49T79G9
+reverse_fragment	83	3301	60	150=	3001	-450	150	0	150
+reverse_fragment	163	3001	60	150=	3301	450	150	0	150
+
 # A preset that does not pair forward-reverse maps both mates as given: map-ont
-# expects both mates read from one strand, so none of these pairs is proper. Its
-# seeds are too sparse to map the fragment_* pairs either way (native minimap2 maps
-# none of them under map-ont, even with mate 2 reverse-complemented beforehand).
+# flags a pair proper only when both mates lie on one strand, so none of these is.
+# None of the fragment_* pairs maps under map-ont (natively neither, with mate 2 as
+# given or reverse-complemented beforehand).
 query IIIIIITTIIIIT
 SELECT read_id, flags, reference, position, stop_position, mapq, cigar,
        mate_reference, mate_position, template_length, tag_as, tag_nm, tag_md
