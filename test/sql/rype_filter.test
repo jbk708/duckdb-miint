@@ -131,6 +131,34 @@ SELECT * FROM rype_filter('reads', 'data/rype/test.ryxdi', threshold := 1.5);
 ----
 threshold must be between 0.0 and 1.0
 
+# NaN is outside the range too, though it compares false with both of its ends.
+statement error
+SELECT * FROM rype_filter('reads', 'data/rype/test.ryxdi', threshold := 'nan'::DOUBLE);
+----
+threshold must be between 0.0 and 1.0
+
+# A NULL argument is named, not read as the table or path 'NULL'; and an empty
+# minimap2 path is refused, where it would quietly have left minimap2 out.
+statement error
+SELECT * FROM rype_filter(NULL, 'data/rype/test.ryxdi');
+----
+rype_filter: sequence_table cannot be NULL
+
+statement error
+SELECT * FROM rype_filter('reads', NULL);
+----
+rype_filter: index_path cannot be NULL
+
+statement error
+SELECT * FROM rype_filter('reads', 'data/rype/test.ryxdi', NULL);
+----
+rype_filter: minimap2_index_path cannot be NULL
+
+statement error
+SELECT * FROM rype_filter('reads', 'data/rype/test.ryxdi', '');
+----
+rype_filter: minimap2_index_path cannot be empty
+
 # Checked where it is read, as miint_rype_arrow_batch_bytes is.
 statement ok
 SET miint_rype_filter_group_rows = -1;

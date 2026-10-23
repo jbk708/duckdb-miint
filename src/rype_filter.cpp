@@ -61,16 +61,12 @@ idx_t GetRypeFilterGroupRows(ClientContext &context) {
 //! Schedule::GroupRows.
 idx_t AutoGroupRows(ClientContext &context, const RypeIndex *index, const RypeInputStream::Sizing &sizing,
                     size_t budget) {
-	const RypeBatchConfig config =
-	    rype_calculate_batch_config(index, sizing.avg_read_length, sizing.is_paired ? 1 : 0, budget, 1);
-	if (config.batch_size == 0) {
-		const char *err = rype_get_last_error();
-		miint::EmitWarning(context,
-		                   "rype_filter: could not size a classification batch (%s); falling back to %llu reads",
-		                   err ? err : "unknown error", static_cast<unsigned long long>(STANDARD_VECTOR_SIZE));
+	const auto config = CalculateRypeBatchConfig(context, "rype_filter", index, sizing.avg_read_length,
+	                                             sizing.is_paired ? 1 : 0, budget);
+	if (!config) {
 		return STANDARD_VECTOR_SIZE;
 	}
-	return RypeFilterTableFunction::Schedule::GroupRows(config.per_batch_memory, config.batch_size,
+	return RypeFilterTableFunction::Schedule::GroupRows(config->per_batch_memory, config->batch_size,
 	                                                    sizing.held_bytes_per_row);
 }
 
@@ -444,20 +440,32 @@ idx_t SelectSurvivors(const Schedule &s, miint::Minimap2Aligner *aligner, const 
 		return count;
 	}
 	// minimap2 reads the sequences where the chunk holds them, and names each read
-	// by its read_id as align_minimap2 does; no name when there is none.
+	// by its read_id as align_minimap2 does; no name when there is none. Other
+	// threads read the chunk meanwhile (the classify job, when two groups share
+	// it), which is safe only because the stream's chunks are flat
+	// (StreamingQuery): ToUnifiedFormat then changes nothing.
 	auto &chunk = *run.chunk;
 	UnifiedVectorFormat sequence1;
 	UnifiedVectorFormat sequence2;
-	std::vector<std::string> names;
-	std::vector<bool> name_is_null;
+	D_ASSERT(chunk.data[s.sequence1_column].GetVectorType() == VectorType::FLAT_VECTOR);
 	chunk.data[s.sequence1_column].ToUnifiedFormat(sequence1);
 	if (s.sequence2_column != DConstants::INVALID_INDEX) {
+		D_ASSERT(chunk.data[s.sequence2_column].GetVectorType() == VectorType::FLAT_VECTOR);
 		chunk.data[s.sequence2_column].ToUnifiedFormat(sequence2);
 	}
+	// The names of the rows RYpe kept, in sel's order.
+	std::vector<std::string> names;
+	std::vector<bool> name_is_null;
 	if (s.read_id_column != DConstants::INVALID_INDEX) {
-		ExtractIdColumnAsStrings(chunk, s.read_id_column, s.read_id_type, names, name_is_null);
+		D_ASSERT(chunk.data[s.read_id_column].GetVectorType() == VectorType::FLAT_VECTOR);
+		DataChunk kept_ids;
+		kept_ids.InitializeEmpty({s.read_id_type});
+		kept_ids.data[0].Slice(chunk.data[s.read_id_column], sel, count);
+		kept_ids.SetCardinality(count);
+		ExtractIdColumnAsStrings(kept_ids, 0, s.read_id_type, names, name_is_null);
 	}
-	const auto maps = [&](idx_t i) {
+	const auto maps = [&](idx_t j) {
+		const auto i = sel.get_index(j);
 		const auto s1_idx = sequence1.sel->get_index(i);
 		// The stream refused a NULL sequence1 before RYpe saw the row.
 		D_ASSERT(sequence1.validity.RowIsValid(s1_idx));
@@ -470,15 +478,14 @@ idx_t SelectSurvivors(const Schedule &s, miint::Minimap2Aligner *aligner, const 
 				mate = std::string_view(s2.GetData(), s2.GetSize());
 			}
 		}
-		const char *name = names.empty() || name_is_null[i] ? nullptr : names[i].c_str();
+		const char *name = names.empty() || name_is_null[j] ? nullptr : names[j].c_str();
 		return aligner->any_mapped(std::string_view(s1.GetData(), s1.GetSize()), mate, name);
 	};
 	// Only what RYpe kept is mapped, and what minimap2 keeps stays in place.
 	idx_t kept = 0;
 	for (idx_t j = 0; j < count; j++) {
-		const auto i = sel.get_index(j);
-		if (!maps(i)) {
-			sel.set_index(kept++, i);
+		if (!maps(j)) {
+			sel.set_index(kept++, sel.get_index(j));
 		}
 	}
 	return kept;
@@ -657,18 +664,29 @@ RypeFilterTableFunction::GlobalState::~GlobalState() {
 // ============================================================================
 unique_ptr<FunctionData> RypeFilterTableFunction::Bind(ClientContext &context, TableFunctionBindInput &input,
                                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
+	static const char *const ARGUMENTS[] = {"sequence_table", "index_path", "minimap2_index_path"};
+	for (idx_t i = 0; i < input.inputs.size(); i++) {
+		if (input.inputs[i].IsNull()) {
+			throw InvalidInputException("rype_filter: %s cannot be NULL", ARGUMENTS[i]);
+		}
+	}
 	auto data = make_uniq<Data>();
 	data->relation = input.inputs[0].ToString();
 	RejectCTERelationName(input, data->relation);
 	data->index_path = input.inputs[1].ToString();
 	if (input.inputs.size() > 2) {
 		data->minimap2_index_path = input.inputs[2].ToString();
+		if (data->minimap2_index_path.empty()) {
+			throw InvalidInputException(
+			    "rype_filter: minimap2_index_path cannot be empty; leave it out to filter with RYpe alone");
+		}
 	}
 
 	auto threshold_param = input.named_parameters.find("threshold");
 	if (threshold_param != input.named_parameters.end() && !threshold_param->second.IsNull()) {
 		data->threshold = threshold_param->second.GetValue<double>();
-		if (data->threshold < 0.0 || data->threshold > 1.0) {
+		// Written so that NaN fails it too.
+		if (!(data->threshold >= 0.0 && data->threshold <= 1.0)) {
 			throw BinderException("threshold must be between 0.0 and 1.0");
 		}
 	}
@@ -825,7 +843,8 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 	if (scheduler.NumberOfAsyncThreads() > 0) {
 		gstate->executor = make_uniq<TaskExecutor>(context, TaskSchedulerType::ASYNC);
 		// minimap2 maps on the async pool too, as many units at once as DuckDB has
-		// threads: a sink that takes rows in order gives this function only one.
+		// threads and the pool can run: a sink that takes rows in order gives this
+		// function only one of DuckDB's.
 		if (s.use_minimap2) {
 			s.max_aligners = gstate->max_threads;
 		}
@@ -842,7 +861,8 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 			}
 		});
 		// Start now, not at the first scan: the minimap2 index takes as long to load
-		// as RYpe takes over several groups, and both can begin at once.
+		// as RYpe takes over several groups, and both can begin at once given two
+		// async threads. With one they take turns, as no job waits on another.
 		RypeFilterJobs jobs;
 		{
 			std::lock_guard<std::mutex> guard(s.lock);

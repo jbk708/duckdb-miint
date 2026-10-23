@@ -22,6 +22,7 @@
 #include "duckdb/storage/buffer_manager.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 #include "miint_named_parameter.hpp"
@@ -154,21 +155,18 @@ inline void AddRypeSharedNamedParameters(TableFunction &tf) {
 	AddNamedParameter(tf, "debug", LogicalType::BOOLEAN);
 }
 
-//! Ask RYpe to size a classification batch, and report the numbers when asked.
+//! Ask RYpe to size a classification batch within `memory_budget`.
 //!
 //! Wraps rype_calculate_batch_config rather than rype_recommend_batch_size
 //! because it returns the same batch_size plus the memory estimates behind it.
-//! Those estimates were the missing signal in #204/#199: shard loading is ~99.9%
-//! of a classify, so batch count is very nearly a direct multiplier on runtime,
-//! and nothing reached the caller. `debug` surfaces them through
-//! miint::EmitWarning, i.e. stderr and miint_warnings().
 //!
 //! `label` names the calling function in the message. `sizing_index` is the
 //! index whose shard sizes bound the estimate — for log-ratio, the larger of the
-//! two. Returns STANDARD_VECTOR_SIZE if RYpe cannot size a batch, warning either
-//! way since that fallback is not a considered choice.
-inline size_t ResolveRypeBatchSize(ClientContext &context, const char *label, const RypeIndex *sizing_index,
-                                   size_t avg_read_length, int is_paired, size_t memory_budget, bool debug) {
+//! two. Returns nothing if RYpe cannot size a batch, after warning that the caller
+//! falls back to STANDARD_VECTOR_SIZE reads, since that is not a considered choice.
+inline std::optional<RypeBatchConfig> CalculateRypeBatchConfig(ClientContext &context, const char *label,
+                                                               const RypeIndex *sizing_index, size_t avg_read_length,
+                                                               int is_paired, size_t memory_budget) {
 	// is_large_binary=1 tells RYpe to skip its 2 GiB batch cap. That is only sound
 	// because ConfigureRypeArrowExport pinned the connection to Arrow LargeBinary
 	// (i64 offsets) — the two must be changed together (#222).
@@ -179,8 +177,26 @@ inline size_t ResolveRypeBatchSize(ClientContext &context, const char *label, co
 		const char *err = rype_get_last_error();
 		miint::EmitWarning(context, "%s: could not size a classification batch (%s); falling back to %llu reads", label,
 		                   err ? err : "unknown error", (unsigned long long)STANDARD_VECTOR_SIZE);
+		return std::nullopt;
+	}
+	return config;
+}
+
+//! The reads in one classification batch, as CalculateRypeBatchConfig sizes it,
+//! reporting the numbers when asked.
+//!
+//! Those estimates were the missing signal in #204/#199: shard loading is ~99.9%
+//! of a classify, so batch count is very nearly a direct multiplier on runtime,
+//! and nothing reached the caller. `debug` surfaces them through
+//! miint::EmitWarning, i.e. stderr and miint_warnings().
+inline size_t ResolveRypeBatchSize(ClientContext &context, const char *label, const RypeIndex *sizing_index,
+                                   size_t avg_read_length, int is_paired, size_t memory_budget, bool debug) {
+	const auto resolved =
+	    CalculateRypeBatchConfig(context, label, sizing_index, avg_read_length, is_paired, memory_budget);
+	if (!resolved) {
 		return STANDARD_VECTOR_SIZE;
 	}
+	const RypeBatchConfig &config = *resolved;
 
 	if (debug) {
 		// batch_count is documented as "always 1, reserved for

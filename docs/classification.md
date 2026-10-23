@@ -166,7 +166,7 @@ but reads `sequence_table` once and stores nothing between the stages, so the re
 - **Short reads only:** minimap2 runs when the mean `sequence1` length over the first chunk of the scan (up to 2,048 rows) is under 300, the reads its short-read preset is for. Otherwise, for long reads or an empty relation, the minimap2 index is never opened, and RYpe alone decides
 - **Rows come out in no fixed order** on more than one thread, as `rype_classify`'s and `align_minimap2`'s do, whatever `preserve_insertion_order` is set to. Add an `ORDER BY` to put them in an order, for instance `read_fastx`'s `sequence_index`
 - **Read once:** the relation is read in a single pass, so a view, including one over files still to be decompressed, or a registered Arrow relation, works
-- **Threads:** RYpe classifies and minimap2 maps on DuckDB's background pool (`async_threads`), RYpe a group of rows ahead of minimap2, and minimap2 on as many threads at once as `SET threads` allows. DuckDB's own threads only write the rows out, so a writer that takes them in order on one thread, as `COPY ... (FORMAT FASTQ)` does, does not hold the mapping to one. With `async_threads` set to 0, both run on DuckDB's own threads instead
+- **Threads:** RYpe classifies and minimap2 maps on DuckDB's background pool (`async_threads`), RYpe a group of rows ahead of minimap2, and minimap2 on as many threads at once as both `SET threads` and `async_threads` allow. DuckDB's own threads only write the rows out, so a writer that takes them in order on one thread, as `COPY ... (FORMAT FASTQ)` does, does not hold the mapping to one. With `async_threads` set to 0, both run on DuckDB's own threads instead
 - **Memory** is sized automatically, with no `max_memory` parameter; see [Memory budget](#memory-budget)
 - The minimap2 index is loaded whole, once. A multi-part index would have to be loaded part by part with every read held meanwhile, so it is refused, by name, once its first part has loaded and before any row is returned; rebuild it as one part (`minimap2 -d` builds one part when `-I` is larger than the reference)
 
@@ -188,10 +188,11 @@ SELECT * FROM rype_filter('reads', 'human.ryxdi', 'human.mmi') ORDER BY sequence
 ```
 
 **Error conditions:**
+- A NULL argument, or an empty `minimap2_index_path` (omit it to filter with RYpe alone)
 - `sequence_table` does not exist, or names a common table expression (a `WITH` name; create a view or table instead)
 - `sequence_table` has no `sequence1`, or a `sequence1` or `sequence2` that is not VARCHAR or BLOB
 - With a minimap2 index, a `read_id` that is not VARCHAR, BIGINT or UUID
-- `threshold` outside the 0.0-1.0 range
+- `threshold` outside the 0.0-1.0 range, or NaN
 - `index_path` does not point to a valid `.ryxdi` index directory
 - For short reads, a minimap2 index that is missing, damaged, or multi-part (for long reads it is never opened, so none of these is an error)
 - A NULL `sequence1`, which names the row it is on (`sequence1 is NULL in 'reads' at row 5`)
