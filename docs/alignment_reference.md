@@ -534,7 +534,7 @@ WHERE reference IS NULL;   -- queries that were measured and did not align
 
 - `reference`, `position`, `stop_position`, `mapq`, `cigar` and the `tag_*` columns are **NULL** (not the SAM `'*'`/`0` text sentinels), so `IS NULL` is the test. The one exception is `tag_yt`, the pair type, which is known regardless of whether the read aligned and is still `'UU'`/`'UP'`.
 - The SAM unmapped flag `0x4` is set, so `flags & 4 != 0` selects the same rows.
-- Queries with an empty `sequence1` also get a row — minimap2 cannot be handed a zero-length query, but the query was still submitted and must be accounted for.
+- Single-end queries with an empty `sequence1` also get a row — minimap2 cannot be handed a zero-length query, but the query was still submitted and must be accounted for.
 - For paired input the accounting is **per segment**: if R1 aligns and R2 does not, you get the R1 alignment plus one unmapped row for R2. Mate flags stay truthful — the unmapped row carries the paired and second-in-pair bits, *not* mate-unmapped, and it carries the mate's `mate_reference`/`mate_position` as SAM requires of a paired record whose mate is mapped.
 - These rows can be written straight out: `COPY (SELECT * FROM align_minimap2(…, include_unmapped := true)) TO 'x.bam' (FORMAT BAM, REFERENCE_LENGTHS 'r')` works, because the writer accepts a NULL `reference`/`position`/`mapq`/`cigar` on a record flagged `0x4`. Note the round-trip asymmetry: NULL is written as the SAM `*` sentinel, so reading the file back with `read_alignments` returns `'*'` rather than NULL.
 - **Not supported by `align_minimap2_sharded`** (the parameter is rejected), and **not supported with `per_subject_database`** (the combination is rejected at bind). Both re-align each query against a different subject set, so a query that finds no chain in one shard or against one subject routinely maps in another — a synthetic row there would assert "did not align" about a query that did. Correct support needs reconciliation across the whole subject set.
@@ -574,6 +574,8 @@ Returns the same schema as `read_alignments` (21 columns):
 - Subject sequences are loaded into memory at bind time (must fit in RAM)
 - Query sequences are processed in batches for memory efficiency
 - Supports both single-end and paired-end query sequences, and maps a pair as minimap2 does. The presets for forward-reverse pairs (`sr`, its alias `short`, and `splice:sr`) flag a pair proper (`0x2`) when its mates face each other, close together on one reference; every other preset flags a pair proper only when both mates lie on one strand. `splice:sr` maps each mate alone and then pairs the hits; every other preset maps a pair as one fragment, and under `sr` and `short` a pair can then map when neither of its mates maps alone. Positions, strands and CIGARs are reported against each mate as given
+- A row whose `sequence2` is NULL or empty is mapped single-end. A row with an empty `sequence1` and a non-empty `sequence2` fails the query, naming the read: a pair needs both mates
+- A read longer than 2,147,483,647 bases, the most minimap2 takes, fails the query, naming the read
 - Uses minimap2's in-memory indexing for fast alignment
 - Secondary alignments are controlled by `max_secondary` parameter
 
