@@ -1446,6 +1446,23 @@ TEST_CASE("SequenceReader reads a multi-member gzip file to the end", "[Sequence
 	REQUIRE(read_all(reader) == 3000);
 }
 
+TEST_CASE("SequenceReader reads a local gzip file by its content, whatever its name", "[SequenceReader][compression]") {
+	// A local file is opened with gzopen, which inflates gzip data and passes any other data
+	// through, so gzip data under a name without .gz reads as the same records as the plain file.
+	TempFileFixture fixture;
+	auto records = varied_reads(fixture, 1000);
+	fixture.write_temp_gz("gzip_without_suffix.fq", records);
+	fixture.write_temp_fastq("plain_control.fq", records);
+
+	miint::SequenceReader gzipped("gzip_without_suffix.fq");
+	miint::SequenceReader plain("plain_control.fq");
+	auto from_gzip = gzipped.read(2000);
+	auto from_plain = plain.read(2000);
+	REQUIRE((from_plain.size() == 1000));
+	REQUIRE((from_gzip.read_ids == from_plain.read_ids));
+	REQUIRE((from_gzip.sequences1 == from_plain.sequences1));
+}
+
 // FASTQ is read as strict four-line records: header, sequence, '+', quality, one line each.
 // Reading wrapped FASTQ, as kseq++ does, appends quality lines until the quality is as long as
 // the sequence, so a quality line that is too short takes the next record's header as quality

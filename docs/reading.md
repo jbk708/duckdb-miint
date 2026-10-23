@@ -59,7 +59,7 @@ SELECT * FROM read_fastx('some_file.fasta');
 
 **Behavior:**
 - Detects FASTA (`>` headers) or FASTQ (`@` headers) from the file's content, whatever its extension. Both files of a pair must be the same format: a FASTA file paired with a FASTQ file fails the query
-- Supports gzip-compressed files (.gz extension)
+- Reads gzip-compressed files. A local file is recognized as gzip by its content, whatever its name; a remote file (`s3://`, `https://`) only by a `.gz` extension
 - Supports stdin input using `-` or `/dev/stdin` (single file only, no paired-end)
 - Quality scores converted to integers using specified offset (Phred+33 or Phred+64)
 - FASTQ records, those whose header starts with `@`, must be four lines each: header, sequence, `+`, quality, with the quality as long as the sequence. Blank lines, including lines of nothing but whitespace, may come before the first record and between records, and are ignored. Wrapped (multi-line) FASTQ is rejected; FASTA sequences may span any number of lines, and text before the first FASTA header (such as `;` comments) is skipped
