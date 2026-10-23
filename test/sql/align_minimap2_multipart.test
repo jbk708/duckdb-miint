@@ -6,8 +6,8 @@ require miint
 
 # The fixture is committed: there is no SQL-level way to build a multi-part
 # .mmi (save_minimap2_index always builds single-part). data/shards/README.md
-# describes it, and its two references, which every query literal below is a
-# prefix of.
+# describes it, and its two references, which the queries meant to match are
+# prefixes of.
 statement ok
 CREATE TABLE multipart_queries AS SELECT * FROM (VALUES
     ('query_part1', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'),

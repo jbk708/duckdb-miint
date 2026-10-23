@@ -392,10 +392,11 @@ unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id
 
 //! Start the single scan for a filter stream: `columns`, the relation's columns
 //! as bind saw them, in their own types, so each group's rows can be handed back
-//! whole. sequence1 must be among them, as VARCHAR or BLOB, and goes to Arrow as
-//! `sequence`; sequence2, when present, goes as `pair_sequence`. A VARCHAR is
-//! reinterpreted as BLOB in place, not cast. Of `options`, only relation_quoted,
-//! source_name, batch_rows and batch_bytes are read. Same lifetime rule as above.
+//! whole. sequence1 must be among them and goes to Arrow as `sequence`;
+//! sequence2, when present, goes as `pair_sequence`. Both must be VARCHAR or
+//! BLOB; a VARCHAR is reinterpreted as BLOB in place, not cast. Of `options`,
+//! only relation_quoted, source_name, batch_rows and batch_bytes are read. Same
+//! lifetime rule as above.
 unique_ptr<RypeInputStream> BuildRypeFilterStream(Connection &conn, const vector<string> &columns,
                                                   RypeInputStreamOptions options);
 

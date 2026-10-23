@@ -59,12 +59,13 @@ statement ok
 DROP TABLE bad_table2;
 
 # Test error: a sequence1 that is not a string, refused at bind with an error
-# naming it. sequence2 is not read here, so its type is not checked
+# naming it: EXPLAIN binds the query without running its scan. sequence2 is not
+# read here, so its type is not checked
 statement ok
 CREATE TABLE int_sequence1 AS SELECT 'seq1' AS read_id, 42 AS sequence1;
 
 statement error
-SELECT * FROM rype_extract_minimizer_set('int_sequence1', 32, 10);
+EXPLAIN SELECT * FROM rype_extract_minimizer_set('int_sequence1', 32, 10);
 ----
 Column 'sequence1' in 'int_sequence1' must be VARCHAR or BLOB, not INTEGER
 

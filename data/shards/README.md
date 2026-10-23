@@ -22,4 +22,4 @@ SELECT success FROM save_minimap2_index('p2', 'data/shards/multipart_fixture_par
 cat data/shards/multipart_fixture_part1.mmi data/shards/multipart_fixture_part2.mmi > data/shards/multipart_fixture.mmi
 ```
 
-The queries in `align_minimap2_multipart.test` are prefixes of these two references. If you rebuild the fixture from other references, change those queries too. Otherwise the test can still pass: a query that no longer matches loses its row, and most of the test's assertions are checking for rows that are absent.
+The queries in `align_minimap2_multipart.test` that are meant to match, such as `query_part1` and `query_part2`, are prefixes of these two references. If you rebuild the fixture from other references, change those queries with it.

@@ -69,10 +69,10 @@ missing required column
 statement ok
 DROP TABLE bad_table2;
 
-# Test error: a sequence column that is not a string is refused, with an error
-# naming it, at bind: no index is there to load. RYpe is handed the column's own
-# bytes, not a cast of them. That includes a column of NULLs typed NULL, as
-# `NULL AS sequence2` makes one; NULL::VARCHAR is accepted (rype_paired_detection)
+# Test error: RYpe is handed a sequence column's own bytes, not a cast of them,
+# so a column that is not a string is refused, with an error naming it, at bind:
+# no index is there to load. A column of NULLs typed NULL, as `NULL AS sequence2`
+# makes one, is refused too; NULL::VARCHAR is accepted (rype_paired_detection)
 statement ok
 CREATE TABLE int_sequence1 AS SELECT 'seq1' AS read_id, 42 AS sequence1;
 
