@@ -1,8 +1,9 @@
-# Minimap2 index fixtures
+# Multi-part minimap2 index fixture
 
-## Multi-part index: `multipart_fixture.mmi`
+`shard_a.mmi` and `shard_b.mmi` are described in `test/sql/align_minimap2_sharded_single_read.test`. This file covers the multi-part fixture:
 
-`align_minimap2_multipart.test` streams this index part by part, and `rype_filter_multipart.test` checks that `rype_filter` refuses it. It is two single-part indexes, `multipart_fixture_part1.mmi` and `multipart_fixture_part2.mmi`, concatenated.
+- `multipart_fixture.mmi` is a two-part minimap2 index: `part1_ref` in its first part, `part2_ref` in its second.
+- `multipart_fixture_part1.mmi` and `multipart_fixture_part2.mmi` are its two parts, each a single-part index on its own, so that a multi-part run can be compared with two single-index runs.
 
 `save_minimap2_index` always builds one part. The minimap2 CLI's `-I <batch>` builds several by writing one `mm_idx_dump` block per part into the same file, and each single-part file is already a complete block, so concatenating two gives the same layout without the CLI:
 
@@ -21,6 +22,4 @@ SELECT success FROM save_minimap2_index('p2', 'data/shards/multipart_fixture_par
 cat data/shards/multipart_fixture_part1.mmi data/shards/multipart_fixture_part2.mmi > data/shards/multipart_fixture.mmi
 ```
 
-The two single-part files are kept beside the multi-part one, so that `align_minimap2_multipart.test` can compare the multi-part run against two single-index runs.
-
-The test's query sequences are prefixes of the two references above. Change a reference without changing the queries and the test does not fail loudly: the read stops matching and its row disappears, which is what most of its assertions look for. Edit the two together.
+The queries in `align_minimap2_multipart.test` are prefixes of these two references. If you rebuild the fixture from other references, change those queries too. Otherwise the test can still pass: a query that no longer matches loses its row, and most of the test's assertions are checking for rows that are absent.

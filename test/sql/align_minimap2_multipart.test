@@ -6,13 +6,8 @@ require miint
 
 # The fixture is committed: there is no SQL-level way to build a multi-part
 # .mmi (save_minimap2_index always builds single-part). data/shards/README.md
-# says how it was built.
-
-# Every query literal below is a prefix of one of the two reference sequences
-# the fixture was built from ('part1_ref' / 'part2_ref', in data/shards/README.md).
-# Changing a reference there without changing the queries here does not fail
-# loudly: the read simply stops matching and its row disappears, which is what
-# most assertions in this file check for. Edit the two together.
+# describes it, and its two references, which every query literal below is a
+# prefix of.
 statement ok
 CREATE TABLE multipart_queries AS SELECT * FROM (VALUES
     ('query_part1', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT'),

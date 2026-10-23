@@ -4,8 +4,7 @@
 
 require miint
 
-# The fixture is align_minimap2_multipart.test's; data/shards/README.md says how
-# it was built.
+# data/shards/README.md describes the multi-part fixture and its two parts.
 
 statement ok
 CREATE TABLE short_reads AS
