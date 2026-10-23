@@ -6,14 +6,16 @@
 #include <fstream>
 #include <filesystem>
 #include <future>
+#include <system_error>
 #include <thread>
 #include "QualScore.hpp"
 #include "SequenceRecord.hpp"
 #include "SequenceReader.hpp"
 #include <vector>
 
-// getrlimit/geteuid and permission bits that actually deny the owner are POSIX-only; the
-// open-failure test below is compiled out elsewhere. Same guard as test_NewickParser.cpp.
+// POSIX-only calls used by tests below (resource limits, geteuid and permission bits that deny
+// the owner, FIFOs, fork); those tests are compiled out elsewhere. Same guard as
+// test_NewickParser.cpp.
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #include <cerrno>
 #include <fcntl.h>
@@ -829,12 +831,11 @@ TEST_CASE("SequenceReader reads a file ahead of its reads, up to its bytes", "[S
 	REQUIRE((reader.ReadAheadBytes(0) == 0));
 	auto first = reader.read(10);
 	REQUIRE((first.size() == 10));
-	// Then the file is read on while nothing is pulled, up to READ_AHEAD_BYTES, and no further
-	// than the poll that reached them.
+	// Then the file is read on while nothing is pulled, up to READ_AHEAD_BYTES, and about a
+	// record past them at most.
 	REQUIRE(WaitIdle(reader, 0));
 	REQUIRE((reader.ReadAheadBytes(0) >= miint::SequenceReader::READ_AHEAD_BYTES));
-	REQUIRE((reader.ReadAheadBytes(0) <
-	         miint::SequenceReader::READ_AHEAD_BYTES + SHORT_RECORDS_PER_POLL * READ_AHEAD_RECORD_BYTES));
+	REQUIRE((reader.ReadAheadBytes(0) < miint::SequenceReader::READ_AHEAD_BYTES + READ_AHEAD_RECORD_BYTES));
 	// Taking one poll's records leaves it short of its bytes, and it reads on at once, not at the
 	// next read.
 	auto second = reader.read(SHORT_RECORDS_PER_POLL);
@@ -900,7 +901,7 @@ TEST_CASE("SequenceReader reads ahead no more than read()'s byte budget", "[Sequ
 	REQUIRE((first.size() == 10));
 	REQUIRE(WaitIdle(reader, 0));
 	REQUIRE((reader.ReadAheadBytes(0) >= budget));
-	REQUIRE((reader.ReadAheadBytes(0) < budget + SHORT_RECORDS_PER_POLL * READ_AHEAD_RECORD_BYTES));
+	REQUIRE((reader.ReadAheadBytes(0) < budget + READ_AHEAD_RECORD_BYTES));
 
 	// Batches the budget ends part-way through a poll: every record still comes out once, in order.
 	size_t total = first.size();
@@ -916,8 +917,9 @@ TEST_CASE("SequenceReader reads ahead no more than read()'s byte budget", "[Sequ
 }
 
 TEST_CASE("SequenceReader reads long records ahead a few at a time", "[SequenceReader][read_ahead]") {
-	// A poll is sized by READ_AHEAD_BYTES, not by read()'s far larger default budget, so records
-	// of a quarter of it are read no more than four at a time, not sixteen.
+	// A poll is sized by the room left under READ_AHEAD_BYTES, not by read()'s far larger default
+	// budget nor by the whole of READ_AHEAD_BYTES: records of a quarter of it are read no more than
+	// four at a time, not sixteen, and the read-ahead holds about four of them, not six or more.
 	TempFileFixture fixture;
 	auto path = "read_ahead_long.fa";
 	const size_t length = miint::SequenceReader::READ_AHEAD_BYTES / 4;
@@ -931,6 +933,7 @@ TEST_CASE("SequenceReader reads long records ahead a few at a time", "[SequenceR
 	REQUIRE((reader.read(2).size() == 2));
 	REQUIRE(WaitIdle(reader, 0));
 	REQUIRE((reader.MaxPollCount() <= 4));
+	REQUIRE((reader.ReadAheadBytes(0) < miint::SequenceReader::READ_AHEAD_BYTES + length));
 }
 
 TEST_CASE("SequenceReader gets a read every record it asks for, more than the read-ahead holds",
@@ -973,7 +976,8 @@ namespace {
 
 //! Writes `text` into the FIFO at `path` on a thread of its own. Leaving scope waits for it,
 //! having first opened the FIFO for reading itself: if no reader ever did, the writer would
-//! otherwise wait in its open forever.
+//! otherwise wait in its open forever. `text` must fit in the pipe's buffer (16 KiB at least),
+//! or a writer blocked on a full pipe would still hang that wait.
 class FifoWriter {
 public:
 	FifoWriter(std::string path, std::string text)
@@ -1001,8 +1005,7 @@ TEST_CASE("SequenceReader reads a file whose read-ahead thread cannot start", "[
 	// A process or thread limit refuses the thread: the file is then read as without read-ahead,
 	// rather than failing a read that would succeed without it.
 	if (geteuid() == 0) {
-		SUCCEED("skipped: running as root, RLIMIT_NPROC is not enforced");
-		return;
+		SKIP("root is not held to RLIMIT_NPROC");
 	}
 	TempFileFixture fixture;
 	auto path = "read_ahead_no_thread.fq";
@@ -1012,10 +1015,21 @@ TEST_CASE("SequenceReader reads a file whose read-ahead thread cannot start", "[
 	const pid_t child = fork();
 	REQUIRE((child >= 0));
 	if (child == 0) {
-		// This user already runs more than one process, so no new thread can start.
+		// This user already runs more than one process, so no new thread should start; a thread
+		// that still does (a capability, or a system that counts only processes) means the
+		// case cannot be tested here.
 		const struct rlimit one = {1, 1};
 		int status = 2;
 		if (setrlimit(RLIMIT_NPROC, &one) == 0) {
+			bool refused = false;
+			try {
+				std::thread([]() {}).join();
+			} catch (const std::system_error &) {
+				refused = true;
+			}
+			if (!refused) {
+				_exit(4);
+			}
 			try {
 				miint::SequenceReader reader(path, std::nullopt, false, true);
 				size_t total = 0;
@@ -1032,6 +1046,9 @@ TEST_CASE("SequenceReader reads a file whose read-ahead thread cannot start", "[
 	int status = 0;
 	REQUIRE((waitpid(child, &status, 0) == child));
 	REQUIRE(WIFEXITED(status));
+	if (WEXITSTATUS(status) == 4) {
+		SKIP("RLIMIT_NPROC does not refuse a thread here");
+	}
 	// 1: records lost; 2: the limit could not be set; 3: the read failed.
 	REQUIRE((WEXITSTATUS(status) == 0));
 }
