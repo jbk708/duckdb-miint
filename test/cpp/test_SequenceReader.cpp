@@ -691,6 +691,68 @@ TEST_CASE("SequenceReader byte budget PE: large pairs do not over-prefetch", "[S
 	REQUIRE((reader.MaxPollCount() == 1));
 }
 
+TEST_CASE("SequenceReader byte budget SE: a poll asks only for the room left in the budget",
+          "[SequenceReader][byte_budget]") {
+	// Records a poll brings in beyond the budget are held until the next read(), outside DuckDB's
+	// memory_limit. A long record fills most of the budget and short ones follow, so the poll that
+	// reaches the budget is sized by a short record: by the room left it asks for 3 of them, by the
+	// whole budget it would ask for POLL_CHUNK_SIZE (16) and hold 13.
+	TempFileFixture fixture;
+	auto path = "budget_room_left.fq";
+	std::vector<std::string> records;
+	records.push_back(fixture.simple_read("long", std::string(4500, 'A'), std::string(4500, 'I')));
+	for (int i = 10; i < 50; i++) {
+		records.push_back(fixture.simple_read("s" + std::to_string(i), std::string(50, 'C'), std::string(50, 'I')));
+	}
+	fixture.write_temp_fastq(path, records);
+
+	// Record bytes are name + seq + qual: 9,004 for the long record, 103 for each short one. After
+	// the long record and the first short one, 9,500 - 9,107 = 393 bytes are left: 3 short records.
+	miint::SequenceReader reader(path);
+	auto batch = reader.read(100, 9500);
+	REQUIRE((batch.size() == 5));
+	INFO("largest poll: " << reader.MaxPollCount() << " records");
+	REQUIRE((reader.MaxPollCount() == 3));
+
+	size_t total = batch.size();
+	for (batch = reader.read(100, 9500); !batch.empty(); batch = reader.read(100, 9500)) {
+		total += batch.size();
+	}
+	REQUIRE((total == records.size()));
+}
+
+TEST_CASE("SequenceReader byte budget PE: a poll asks only for the room left in the budget",
+          "[SequenceReader][byte_budget]") {
+	// As for single-end records above, counting both mates of a pair.
+	TempFileFixture fixture;
+	auto r1 = "budget_room_left_r1.fq";
+	auto r2 = "budget_room_left_r2.fq";
+	std::vector<std::string> recs1, recs2;
+	recs1.push_back(fixture.simple_read("long", std::string(4500, 'A'), std::string(4500, 'I')));
+	recs2.push_back(fixture.simple_read("long", std::string(4500, 'C'), std::string(4500, 'I')));
+	for (int i = 10; i < 50; i++) {
+		const std::string id = "s" + std::to_string(i);
+		recs1.push_back(fixture.simple_read(id, std::string(50, 'A'), std::string(50, 'I')));
+		recs2.push_back(fixture.simple_read(id, std::string(50, 'C'), std::string(50, 'I')));
+	}
+	fixture.write_temp_fastq(r1, recs1);
+	fixture.write_temp_fastq(r2, recs2);
+
+	// Pair bytes: 18,008 for the long pair, 206 for each short one. After the long pair and the
+	// first short one, 19,000 - 18,214 = 786 bytes are left: 3 short pairs.
+	miint::SequenceReader reader(r1, r2);
+	auto batch = reader.read(100, 19000);
+	REQUIRE((batch.size() == 5));
+	INFO("largest poll: " << reader.MaxPollCount() << " pairs");
+	REQUIRE((reader.MaxPollCount() == 3));
+
+	size_t total = batch.size();
+	for (batch = reader.read(100, 19000); !batch.empty(); batch = reader.read(100, 19000)) {
+		total += batch.size();
+	}
+	REQUIRE((total == recs1.size()));
+}
+
 TEST_CASE("SequenceReader byte budget SE: small records still poll in chunks", "[SequenceReader][byte_budget]") {
 	// Guard against the dynamic poll collapsing to 1 for the common short-read case: with a
 	// generous budget and tiny records, the poll must still amortize (reach POLL_CHUNK_SIZE).
