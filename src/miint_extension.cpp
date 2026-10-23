@@ -322,8 +322,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	// reaches the multi-batch path without a quarter-gigabyte fixture.
 	ena_db_config.AddExtensionOption(
 	    "miint_rype_arrow_batch_bytes",
-	    "Byte ceiling on one Arrow record batch's sequence payload in the RYpe table functions. 0 disables the "
-	    "ceiling, restoring a single unbounded batch. Default 256 MiB.",
+	    "Byte ceiling on one Arrow record batch's sequence payload in the RYpe functions that read a relation: "
+	    "rype_classify, rype_filter, rype_log_ratio and rype_extract_*. 0 disables the ceiling, restoring a single "
+	    "unbounded batch. Default 256 MiB.",
 	    LogicalType::BIGINT, Value::BIGINT(NumericCast<int64_t>(RYPE_ARROW_BATCH_BYTES)));
 
 	// Rows per rype_filter group, each group one RYpe call. 0 sizes groups from the

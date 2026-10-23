@@ -568,8 +568,9 @@ public:
 	//! Retired unrun. As the query is torn down, or after another job failed, it is
 	//! settled as interrupted, so nothing waits on a job that will never run; an
 	//! error already recorded is kept. A job that could not be queued records
-	//! nothing: the scheduling error is thrown to whoever scheduled it, which
-	//! records that error instead, and wakes everyone.
+	//! nothing, and the scheduling error is thrown to whoever scheduled it: a job
+	//! records it on the schedule and wakes everyone, and a DuckDB thread throws it
+	//! to DuckDB, which reports it and stops the other threads.
 	void Cancel() override {
 		if (executor.IsCancelled() || executor.HasError()) {
 			Fail(*schedule, ErrorData(InterruptException()));
