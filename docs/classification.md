@@ -4,7 +4,7 @@ Assign sequencing reads to references or taxa by their minimizer/k-mer content a
 
 These functions are powered by [RYpe](https://github.com/biocore/rype), a minimizer-based sequence classification tool that uses RY-space encoding (purine/pyrimidine) for robust sequence matching. They require a RYpe index directory (`.ryxdi`), which contains a Parquet-based inverted index built from reference sequences.
 
-Most of these functions take a `sequence_table` parameter that references a DuckDB table or view containing sequence data. The table must have a `sequence1` column and an identifier column (default `read_id`); `rype_filter` needs only `sequence1`. The exception is `rype_index_create`, which *builds* a `.ryxdi` index from a chunked reference table. Sequence tables are typically produced by the readers in [reading](reading.md). For turning classification hits into per-sample abundance tables, see [profiling](profiling.md). When your buckets are NCBI taxids, resolve them to ranks, names, and full lineages with the [NCBI taxonomy](insdc_ncbi.md#taxonomy) functions.
+Most of these functions take a `sequence_table` parameter that references a DuckDB table or view containing sequence data. The table must have a `sequence1` column (VARCHAR or BLOB, read byte for byte as stored, so a backslash in a VARCHAR is not an escape) and an identifier column (default `read_id`); `rype_filter` needs only `sequence1`. The exception is `rype_index_create`, which *builds* a `.ryxdi` index from a chunked reference table. Sequence tables are typically produced by the readers in [reading](reading.md). For turning classification hits into per-sample abundance tables, see [profiling](profiling.md). When your buckets are NCBI taxids, resolve them to ranks, names, and full lineages with the [NCBI taxonomy](insdc_ncbi.md#taxonomy) functions.
 
 ## Table of Contents
 
@@ -133,7 +133,7 @@ SELECT * FROM rype_classify('my_index.ryxdi', 'paired');
 
 **Error conditions:**
 - `index_path` does not point to a valid `.ryxdi` index directory
-- `sequence_table` does not exist, or is missing the identifier column or `sequence1`
+- `sequence_table` does not exist, or is missing the identifier column or `sequence1`, or has a `sequence1` or `sequence2` that is not VARCHAR or BLOB
 - `threshold` outside the 0.0-1.0 range
 - `negative_index` does not point to a valid index
 
@@ -260,7 +260,7 @@ SELECT * FROM rype_log_ratio('host.ryxdi', 'microbe.ryxdi', 'seqs', id_column :=
 **Error conditions:**
 - Either `numerator_path` or `denominator_path` is not a valid `.ryxdi` index directory
 - Either index is not a single-bucket index (multi-bucket indices are rejected)
-- `sequence_table` does not exist, or is missing the identifier column or `sequence1`
+- `sequence_table` does not exist, or is missing the identifier column or `sequence1`, or has a `sequence1` or `sequence2` that is not VARCHAR or BLOB
 
 ### rype_extract_minimizer_set
 
@@ -313,7 +313,7 @@ WHERE a.read_id < b.read_id;
 ```
 
 **Error conditions:**
-- `sequence_table` does not exist, or is missing the identifier column or `sequence1`
+- `sequence_table` does not exist, or is missing the identifier column or `sequence1`, or has a `sequence1` that is not VARCHAR or BLOB
 - `k` not in {16, 32, 64}
 - `w` not greater than 0
 
@@ -364,7 +364,7 @@ ORDER BY read_id, pos;
 ```
 
 **Error conditions:**
-- `sequence_table` does not exist, or is missing the identifier column or `sequence1`
+- `sequence_table` does not exist, or is missing the identifier column or `sequence1`, or has a `sequence1` that is not VARCHAR or BLOB
 - `k` not in {16, 32, 64}
 - `w` not greater than 0
 

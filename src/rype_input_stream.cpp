@@ -28,6 +28,16 @@ unique_ptr<StreamingQuery> SubmitScan(Connection &conn, const std::string &selec
 	return query_result;
 }
 
+//! Refuse a sequence column AppendSlice cannot hand RYpe in place. It
+//! reinterprets VARCHAR or BLOB as BLOB, which is sound only for the string
+//! physical type: anything else would hand RYpe a pointer that is not one.
+void RequireStringSequence(const LogicalType &type, const std::string &column, const RypeInputStreamOptions &options) {
+	if (type.id() != LogicalTypeId::VARCHAR && type.id() != LogicalTypeId::BLOB) {
+		throw InvalidInputException("%s in '%s' must be VARCHAR or BLOB, not %s", column, options.source_name,
+		                            type.ToString());
+	}
+}
+
 } // namespace
 
 idx_t GetNonNegativeOption(ClientContext &context, const char *name, idx_t if_null, const char *zero_means) {
@@ -99,20 +109,29 @@ unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id
 	// sequence2 is projected as a typed NULL when the caller's relation has no
 	// such column, matching what the old TEMP table did, so the batch shape RYpe
 	// sees does not depend on the source schema.
-	std::string select_cols = options.id_column_quoted + " AS read_id, sequence1::BLOB AS sequence";
+	//
+	// The sequences are read as they are, not cast to BLOB in SQL: AppendSlice
+	// reinterprets a VARCHAR in place, which copies nothing, where a cast would
+	// also read a backslash escape in it ('\x43') as the byte it names.
+	std::string select_cols = options.id_column_quoted + " AS read_id, sequence1 AS sequence";
 	if (options.include_pair_column) {
-		select_cols += options.has_sequence2 ? ", sequence2::BLOB AS pair_sequence" : ", NULL::BLOB AS pair_sequence";
+		select_cols += options.has_sequence2 ? ", sequence2 AS pair_sequence" : ", NULL::BLOB AS pair_sequence";
 	}
 
 	auto query_result = SubmitScan(conn, select_cols, options);
+	const auto &types = query_result->GetTypes();
+	const RypeSourceColumns source;
+	RequireStringSequence(types[source.sequence], "sequence1", options);
+	if (options.include_pair_column) {
+		RequireStringSequence(types[source.pair_sequence], "sequence2", options);
+	}
 	return make_uniq<RypeInputStream>(std::move(query_result), id_map, std::move(options));
 }
 
 unique_ptr<RypeInputStream> BuildRypeFilterStream(Connection &conn, const vector<string> &columns,
                                                   RypeInputStreamOptions options) {
 	// The caller's columns as they are, so a group's rows go back out in their own
-	// types. Unlike BuildRypeInputStream, the sequences are not cast to BLOB in
-	// SQL: AppendSlice reinterprets a VARCHAR in place, which copies nothing.
+	// types; the sequences are reinterpreted, as BuildRypeInputStream's are.
 	optional_idx sequence1;
 	optional_idx sequence2;
 	std::string select_cols;
@@ -136,17 +155,10 @@ unique_ptr<RypeInputStream> BuildRypeFilterStream(Connection &conn, const vector
 	}
 
 	auto query_result = SubmitScan(conn, select_cols, options);
-	// Reinterpreting is sound only for the string physical type; anything else
-	// would hand RYpe a pointer that is not one.
 	const auto &types = query_result->GetTypes();
 	for (const auto &position : {sequence1, sequence2}) {
-		if (!position.IsValid()) {
-			continue;
-		}
-		const auto &type = types[position.GetIndex()];
-		if (type.id() != LogicalTypeId::VARCHAR && type.id() != LogicalTypeId::BLOB) {
-			throw InvalidInputException("%s in '%s' must be VARCHAR or BLOB, not %s", columns[position.GetIndex()],
-			                            options.source_name, type.ToString());
+		if (position.IsValid()) {
+			RequireStringSequence(types[position.GetIndex()], columns[position.GetIndex()], options);
 		}
 	}
 	return make_uniq<RypeInputStream>(std::move(query_result), nullptr, std::move(options), source);
