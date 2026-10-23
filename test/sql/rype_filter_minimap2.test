@@ -148,6 +148,29 @@ ORDER BY read_id;
 neither
 random_no_mate
 
+# A pair is mapped as align_minimap2 maps it: as one fragment, with mate 2 read
+# from the other strand. The pairs of the paired ground truth
+# (align_minimap2_paired_ground_truth.test) whose mates map nowhere alone, the
+# fragment_* pairs, map that way and are dropped; of its nine pairs only the one
+# with neither mate in the subject is kept.
+statement ok
+CREATE TABLE fragment_subject AS SELECT * FROM read_fastx('data/minimap2/paired_subject.fasta');
+
+query I
+SELECT success FROM save_minimap2_index('fragment_subject', '{TEST_DIR}/rype_filter_fragment.mmi');
+----
+true
+
+statement ok
+CREATE TABLE fragment_pairs AS
+SELECT * FROM read_fastx('data/minimap2/paired_R1.fasta', sequence2 := 'data/minimap2/paired_R2.fasta');
+
+query I
+SELECT read_id FROM rype_filter('fragment_pairs', 'data/rype/test.ryxdi', '{TEST_DIR}/rype_filter_fragment.mmi', threshold := 0.5)
+ORDER BY read_id;
+----
+unmapped
+
 # ---------------------------------------------------------------------------
 # Parity with the two-stage join, single-end and paired, under every read_id
 # type, at group sizes that end inside a scan chunk, one chunk, and automatic

@@ -631,8 +631,8 @@ bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view se
 	return mapped;
 }
 
-void Minimap2Aligner::map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname,
-                               int n_regs[2], mm_reg1_t *regs[2]) {
+void Minimap2Aligner::map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname, int n_regs[2],
+                               mm_reg1_t *regs[2]) {
 	mm_mapopt_t mopt = *active_mapopt();
 	mopt.flag |= MM_F_FRAG_MODE;
 
