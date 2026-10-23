@@ -383,8 +383,7 @@ TEST_CASE("SequenceReader reports a failed open as a failed open, not an empty f
 		fixture.write_temp_fastq(path, {fixture.simple_read("read1", "ATGC", "IIII")});
 		// Root ignores permission bits, so this case cannot be exercised as root.
 		if (geteuid() == 0) {
-			SUCCEED("skipped: running as root, permission bits are not enforced");
-			return;
+			SKIP("permission bits are not enforced for root");
 		}
 		std::filesystem::permissions(path, std::filesystem::perms::none);
 
