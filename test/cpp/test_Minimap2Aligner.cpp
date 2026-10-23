@@ -4,14 +4,17 @@
 #include "SequenceRecord.hpp"
 #include "minimap2_part_cursor.hpp"
 #include "sequence_utils.hpp"
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <mutex>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1427,6 +1430,56 @@ static std::string dump_index(const mm_idx_t *idx, const std::string &path) {
 	return bytes;
 }
 
+//! An .mmi's bytes with each bucket's hash entries put in one fixed order.
+//! mm_idx_dump writes them in the order of the hash table's slots, which depends
+//! on how the table was filled, so two dumps of one index can differ there and
+//! nowhere else. The layout is mm_idx_dump's (ext/minimap2/index.c).
+static std::string canonical_index(const std::string &bytes) {
+	// Thrown rather than REQUIREd: these run once per hash entry.
+	const auto check_within = [&](size_t end) {
+		if (end > bytes.size()) {
+			throw std::runtime_error("the index ends early");
+		}
+	};
+	size_t pos = 0;
+	const auto u32_at = [&](size_t at) {
+		check_within(at + 4);
+		uint32_t value;
+		std::memcpy(&value, bytes.data() + at, 4);
+		return value;
+	};
+	const auto take = [&](size_t n) {
+		check_within(pos + n);
+		const std::string out = bytes.substr(pos, n);
+		pos += n;
+		return out;
+	};
+	// Magic, then w, k, b, n_seq and flag.
+	const uint32_t b = u32_at(4 + 2 * 4);
+	const uint32_t n_seq = u32_at(4 + 3 * 4);
+	std::string out = take(4 + 5 * 4);
+	for (uint32_t i = 0; i < n_seq; i++) {
+		check_within(pos + 1);
+		const auto name_length = static_cast<uint8_t>(bytes[pos]);
+		out += take(1 + name_length + 4);
+	}
+	for (uint32_t bucket = 0; bucket < (1u << b); bucket++) {
+		const uint32_t n = u32_at(pos);
+		out += take(4 + 8 * static_cast<size_t>(n));
+		const uint32_t size = u32_at(pos);
+		out += take(4);
+		std::vector<std::string> entries;
+		for (uint32_t e = 0; e < size; e++) {
+			entries.push_back(take(16));
+		}
+		std::sort(entries.begin(), entries.end());
+		for (const auto &entry : entries) {
+			out += entry;
+		}
+	}
+	return out + bytes.substr(pos);
+}
+
 TEST_CASE("A minimap2 index read on several threads is the index read on one", "[Minimap2Aligner]") {
 	std::mt19937 rng {20261022};
 	Minimap2Config config;
@@ -1453,6 +1506,12 @@ TEST_CASE("A minimap2 index read on several threads is the index read on one", "
 	const std::string dumped_many = dump_index(from_many->index(), path + ".many");
 	REQUIRE(dumped_one.size() > 1000000);
 	REQUIRE(dumped_many == dumped_one);
+	// Both reads go through the same loader, so each is also held to the file it
+	// read, which the builder wrote from its own index without loading anything:
+	// equal but for the order of the hash entries, which loading refills.
+	std::ifstream saved_in(path, std::ios::binary);
+	const std::string saved((std::istreambuf_iterator<char>(saved_in)), std::istreambuf_iterator<char>());
+	REQUIRE(canonical_index(dumped_one) == canonical_index(saved));
 
 	std::remove(path.c_str());
 }

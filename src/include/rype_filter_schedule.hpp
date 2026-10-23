@@ -3,7 +3,7 @@
 // What rype_filter's threads and background jobs share (rype_filter.cpp), and the
 // state changes they make to it under its lock. The state changes do no work and
 // wake no one themselves: each returns what its caller must do once the lock is
-// released, which keeps them testable alone (test/cpp/test_RypeFilterSchedule.cpp).
+// released, which keeps them testable alone, without threads.
 
 #include "rype_filter.hpp"
 
@@ -58,7 +58,8 @@ struct RypeFilterFollowUp {
 	vector<InterruptState> wake;
 };
 
-//! Jobs run off DuckDB's threads, on its async pool: classifying, one RYpe call
+//! Jobs run as tasks on DuckDB's async pool, apart from the query's pipeline
+//! (DuckDB's idle threads take such tasks too): classifying, one RYpe call
 //! per group, one group at a time and in scan order; and, when minimap2 runs,
 //! loading its index, and mapping. Reading the scan ahead of RYpe is a job too,
 //! asked for by the input stream itself and kept out of this state
@@ -94,7 +95,7 @@ struct RypeFilterTableFunction::Schedule {
 	//! its context, so it outlives input_stream.
 	unique_ptr<Connection> input_connection;
 	unique_ptr<RypeInputStream> input_stream;
-	double threshold = 0.1;
+	double threshold = RYPE_DEFAULT_THRESHOLD;
 	idx_t group_rows = 0;
 	bool use_minimap2 = false;
 	std::string minimap2_path;
@@ -161,6 +162,13 @@ struct RypeFilterTableFunction::Schedule {
 	//! next group's classify is due: taken here when async threads will run it, and
 	//! otherwise left to a woken thread.
 	RypeFilterFollowUp FinishUnitLocked(const RypeFilterUnit &unit, bool inline_jobs);
+
+	//! Free the RYpe index, the minimap2 index, the held rows, the scan and its
+	//! connection. The GlobalState calls it once the jobs are drained: a job's task
+	//! is dropped, with its reference to the schedule, only after the executor has
+	//! counted it finished, so the last reference can go on any of the pool's
+	//! threads, after the query. ~Schedule calls it too; a second call does nothing.
+	void Release();
 
 	~Schedule();
 

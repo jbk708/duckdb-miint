@@ -27,18 +27,19 @@
 // row rather than an emergent property of two scans, which is a stronger
 // guarantee than the TEMP table gave, not a weaker one.
 //
-// Threading. get_next runs on whichever thread pulls RYpe's output stream. That
-// is the table function's Execute, and every RYpe table function pins
-// MaxThreads() to 1, so the RypeIdMap is written and read from one thread. RYpe's
-// internal rayon parallelism happens inside classification, after the pull
-// returns.
+// Threading. get_next runs on whichever thread pulls RYpe's output stream. For
+// rype_classify, rype_log_ratio and rype_extract that is the table function's
+// Execute, which each pins to one thread (MaxThreads() is 1), so the RypeIdMap is
+// written and read from one thread. rype_filter pulls from one classify job at a
+// time and keeps no id map. RYpe's internal rayon parallelism happens inside
+// classification, after the pull returns.
 //
 // Filter streams (BuildRypeFilterStream) read the caller's own columns instead,
 // keep no id map, and end after a set number of rows so that one RYpe call sees
 // exactly one group. The rows a group sent are held, shared rather than copied,
 // for the caller to take once RYpe has classified them. A filter stream can also
 // read ahead (SetReadAhead): another thread fetches the scan's chunks while RYpe
-// classifies, since a streaming result produces only as it is fetched from.
+// classifies.
 
 #include "rype_id_map.hpp"
 
@@ -99,6 +100,11 @@ constexpr idx_t RYPE_ARROW_BATCH_BYTES = 256ULL * 1024 * 1024;
 //! the ingest path meant a typo like `1G` parsed as 1 byte with no diagnostic.
 //! DuckDB parses and range-checks the value for us.
 idx_t GetRypeArrowBatchBytes(ClientContext &context);
+
+//! A BIGINT extension option that must not be negative, as LoadInternal registers
+//! miint_rype_arrow_batch_bytes and miint_rype_filter_group_rows: `if_null` when
+//! it is NULL. `zero_means` says, in the error for a negative value, what 0 does.
+idx_t GetNonNegativeOption(ClientContext &context, const char *name, idx_t if_null, const char *zero_means);
 
 //! Everything the stream needs that is not derivable from the connection.
 struct RypeInputStreamOptions {

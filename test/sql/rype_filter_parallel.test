@@ -145,9 +145,8 @@ endloop
 # Through FASTQ files: miint's FASTQ writer takes its rows in order, so DuckDB
 # runs the whole query on one of its threads, and rype_filter maps on jobs of
 # its own instead. Single-end, paired into an R1 and an R2 file, and paired
-# interleaved into one, with async threads to map on, with one, where the index
-# load, classifying, reading ahead and mapping all take turns on it and so none
-# of them may wait on another, and without
+# interleaved into one, with async threads to map on, with only one, and
+# without
 # ---------------------------------------------------------------------------
 
 statement ok
@@ -437,9 +436,10 @@ sequence1 is NULL in 'late_null' at row 2900
 endloop
 
 # ---------------------------------------------------------------------------
-# Where a thread cannot park, it waits for the background work instead: no
-# async threads (the work then runs on DuckDB's own threads), a synchronous
-# scan, and a positional join, which drives the scan without a way to wake it
+# With no async threads the background work runs on DuckDB's own threads, the
+# one that finds a job due running it while the others park. Where a thread
+# cannot park, it waits for that work instead: a synchronous scan, and a
+# positional join, which drives the scan without a way to wake it
 # ---------------------------------------------------------------------------
 
 statement ok

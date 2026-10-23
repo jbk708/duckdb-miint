@@ -14,6 +14,7 @@
 #include "duckdb/parallel/task_scheduler.hpp"
 
 #include <chrono>
+#include <exception>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -39,22 +40,7 @@ miint::Minimap2Config FilterMinimap2Config() {
 //! Read the session-scoped `miint_rype_filter_group_rows` setting: rows per
 //! group, or 0 to size groups from the memory budget.
 idx_t GetRypeFilterGroupRows(ClientContext &context) {
-	Value v;
-	// Registered as a BIGINT extension option in LoadInternal; missing means it
-	// never was, which is a load-order programmer error.
-	if (!context.TryGetCurrentSetting("miint_rype_filter_group_rows", v)) {
-		throw InternalException(
-		    "miint extension option 'miint_rype_filter_group_rows' is not registered — was LoadInternal completed?");
-	}
-	if (v.IsNull()) {
-		return 0;
-	}
-	const auto rows = v.GetValue<int64_t>();
-	if (rows < 0) {
-		throw InvalidInputException(
-		    "miint_rype_filter_group_rows must be >= 0 (0 sizes groups from the memory budget)");
-	}
-	return NumericCast<idx_t>(rows);
+	return GetNonNegativeOption(context, "miint_rype_filter_group_rows", 0, "0 sizes groups from the memory budget");
 }
 
 //! The most rows one group should carry within `budget` bytes; see
@@ -80,17 +66,24 @@ constexpr auto WAIT_FOR_PROGRESS = std::chrono::milliseconds(10);
 // Schedule
 // ============================================================================
 
-RypeFilterTableFunction::Schedule::~Schedule() {
+void RypeFilterTableFunction::Schedule::Release() {
 	// Every RYpe output stream was released inside the call that made it, so
 	// nothing of RYpe's is left reading the input stream or the index.
 	units.clear();
+	aligned.clear();
+	minimap2_index.reset();
 	if (index) {
 		rype_index_free(index);
+		index = nullptr;
 	}
 	// The stream holds the streaming result, which points into the connection's
 	// context: stream first, connection last.
 	input_stream.reset();
 	input_connection.reset();
+}
+
+RypeFilterTableFunction::Schedule::~Schedule() {
+	Release();
 }
 
 idx_t RypeFilterTableFunction::Schedule::GroupRows(idx_t per_batch_memory, idx_t batch_size, idx_t held_bytes_per_row) {
@@ -250,8 +243,20 @@ using Schedule = RypeFilterTableFunction::Schedule;
 
 void Wake(Schedule &s, const vector<InterruptState> &parked) {
 	s.progress.notify_all();
+	// Every parked thread is called back even when one callback throws: one left
+	// out would stay parked for good.
+	std::exception_ptr first_error;
 	for (auto &task : parked) {
-		task.Callback();
+		try {
+			task.Callback();
+		} catch (...) {
+			if (!first_error) {
+				first_error = std::current_exception();
+			}
+		}
+	}
+	if (first_error) {
+		std::rethrow_exception(first_error);
 	}
 }
 
@@ -283,13 +288,12 @@ shared_ptr<RypeFilterGroup> ClassifyGroup(Schedule &s) {
 	ArrowArrayStreamWrapper output;
 	if (rype_classify_arrow_ex(s.index, nullptr, &input.stream, s.threshold, s.group_rows,
 	                           &output.arrow_array_stream) != 0) {
-		const char *err = rype_get_last_error();
-		throw IOException("RYpe classification failed: %s", err ? err : "unknown error");
+		throw IOException("RYpe classification failed: %s", RypeErrorText(rype_get_last_error()));
 	}
 	ArrowSchemaWrapper schema;
 	if (output.arrow_array_stream.get_schema(&output.arrow_array_stream, &schema.arrow_schema) != 0) {
-		const char *err = output.arrow_array_stream.get_last_error(&output.arrow_array_stream);
-		throw IOException("Failed to get RYpe output schema: %s", err ? err : "unknown error");
+		throw IOException("Failed to get RYpe output schema: %s",
+		                  RypeErrorText(output.arrow_array_stream.get_last_error(&output.arrow_array_stream)));
 	}
 	if (schema.arrow_schema.n_children < 1 || std::string(schema.arrow_schema.children[0]->format) != "l") {
 		throw IOException("RYpe classify returned an unexpected schema: its first column is not an Int64 query_id");
@@ -301,8 +305,8 @@ shared_ptr<RypeFilterGroup> ClassifyGroup(Schedule &s) {
 	for (;;) {
 		ArrowArrayWrapper batch;
 		if (output.arrow_array_stream.get_next(&output.arrow_array_stream, &batch.arrow_array) != 0) {
-			const char *err = output.arrow_array_stream.get_last_error(&output.arrow_array_stream);
-			throw IOException("Error getting next batch from RYpe: %s", err ? err : "unknown error");
+			throw IOException("Error getting next batch from RYpe: %s",
+			                  RypeErrorText(output.arrow_array_stream.get_last_error(&output.arrow_array_stream)));
 		}
 		if (!batch.arrow_array.release) {
 			break;
@@ -536,25 +540,34 @@ public:
 	}
 
 	void ExecuteTask() override {
-		switch (job) {
-		case FilterJob::CLASSIFY:
-			RunClassify(schedule, &executor);
-			break;
-		case FilterJob::LOAD_INDEX:
-			RunIndexLoad(schedule, &executor);
-			break;
-		case FilterJob::ALIGN:
-			RunAlign(*schedule);
-			break;
-		case FilterJob::READ_AHEAD:
-			// Keeps a scan error for the classify job that reaches it.
-			schedule->input_stream->ReadAhead();
-			break;
+		// Each job settles its own work's errors. What escapes it, such as a failure
+		// to schedule the jobs it starts, is settled here too: the executor keeps its
+		// own record of an error, which the threads waiting on the schedule never read.
+		try {
+			switch (job) {
+			case FilterJob::CLASSIFY:
+				RunClassify(schedule, &executor);
+				break;
+			case FilterJob::LOAD_INDEX:
+				RunIndexLoad(schedule, &executor);
+				break;
+			case FilterJob::ALIGN:
+				RunAlign(*schedule);
+				break;
+			case FilterJob::READ_AHEAD:
+				// Keeps a scan error for the classify job that reaches it.
+				schedule->input_stream->ReadAhead();
+				break;
+			}
+		} catch (std::exception &e) {
+			Fail(*schedule, ErrorData(e));
+			throw;
 		}
 	}
 
-	//! Retired unrun, which happens only as the query is torn down: settle it as a
-	//! failure, so nothing waits on a job that will never finish.
+	//! Retired unrun: as the query is torn down, after another job failed, or when
+	//! it could not be scheduled. Settle it as a failure, so nothing waits on a job
+	//! that will never finish; an error already recorded is kept.
 	void Cancel() override {
 		Fail(*schedule, ErrorData(InterruptException()));
 	}
@@ -607,6 +620,9 @@ void StartJobs(TaskExecutor *executor, const shared_ptr<Schedule> &schedule, con
 //! them here unless an align job has. False when it has none, leaving `output`
 //! untouched.
 bool EmitUnit(const Schedule &s, miint::Minimap2Aligner *aligner, RypeFilterUnit &unit, DataChunk &output) {
+	// A unit no align job mapped is mapped here, so with minimap2 on this thread
+	// must have an aligner (InitLocal gives it one when there are no align jobs).
+	D_ASSERT(unit.aligned || !s.use_minimap2 || aligner);
 	if (!unit.aligned) {
 		unit.survivor_count = SelectSurvivors(s, aligner, unit, unit.survivors);
 	}
@@ -655,8 +671,11 @@ RypeFilterTableFunction::GlobalState::~GlobalState() {
 	if (executor) {
 		executor->CancelAndDrain();
 	}
-	// The schedule, and with it the index, the scan and its connection, goes with
-	// its last reference.
+	// No job runs now, though a finished one may still hold a reference: free what
+	// the schedule holds here, on the query's thread.
+	if (schedule) {
+		schedule->Release();
+	}
 }
 
 // ============================================================================
@@ -682,19 +701,12 @@ unique_ptr<FunctionData> RypeFilterTableFunction::Bind(ClientContext &context, T
 		}
 	}
 
-	auto threshold_param = input.named_parameters.find("threshold");
-	if (threshold_param != input.named_parameters.end() && !threshold_param->second.IsNull()) {
-		data->threshold = threshold_param->second.GetValue<double>();
-		// Written so that NaN fails it too.
-		if (!(data->threshold >= 0.0 && data->threshold <= 1.0)) {
-			throw BinderException("threshold must be between 0.0 and 1.0");
-		}
-	}
+	data->threshold = ParseRypeThreshold(input);
 
 	// The index paths are left to the loaders in InitGlobal, as rype_classify
 	// leaves its own: they report a missing or damaged index better than a check
 	// here, and a minimap2 index is not opened at all for long reads.
-	auto columns = GetTableColumns(context, data->relation);
+	auto columns = GetTableOrViewColumns(context, data->relation, "Table");
 	for (idx_t i = 0; i < columns.names.size(); i++) {
 		const auto &name = columns.names[i];
 		if (StringUtil::CIEquals(name, "read_id")) {
@@ -767,7 +779,7 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 	}
 
 	// From the head of the stream's own scan, which SampleSizing does not consume:
-	// the relation is read once (#229).
+	// the relation is read once.
 	const auto &minimap2_path = bind_data.minimap2_index_path;
 	RypeInputStream::Sizing sizing {};
 	sizing = s.input_stream->SampleSizing();
@@ -794,8 +806,8 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 
 	s.index = rype_index_load(bind_data.index_path.c_str());
 	if (!s.index) {
-		const char *err = rype_get_last_error();
-		throw IOException("Failed to load RYpe index '%s': %s", bind_data.index_path, err ? err : "unknown error");
+		throw IOException("Failed to load RYpe index '%s': %s", bind_data.index_path,
+		                  RypeErrorText(rype_get_last_error()));
 	}
 
 	if (group_rows_setting > 0) {
@@ -810,11 +822,12 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 			const size_t reserved = minimap2_index_bytes;
 			budget = MaxValue<size_t>(budget > reserved ? budget - reserved : 0, floor);
 			if (budget <= RYPE_MIN_MEMORY_BUDGET) {
-				miint::EmitWarning(context,
-				                   "rype_filter: only %s of memory is free for classification, so groups are small and "
-				                   "each costs a pass over the index; this can be many times slower than usual. Free "
-				                   "memory, or run when the host is quieter.",
-				                   StringUtil::BytesToHumanReadableString(budget));
+				miint::EmitWarning(
+				    context,
+				    "rype_filter: only %s of memory is free for classification, so groups are small and "
+				    "each costs a pass over the index, which slows the run. Free memory, or run when the "
+				    "machine is quieter.",
+				    StringUtil::BytesToHumanReadableString(budget));
 			}
 		}
 		s.group_rows = AutoGroupRows(context, s.index, sizing, budget);
@@ -843,8 +856,7 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 	if (scheduler.NumberOfAsyncThreads() > 0) {
 		gstate->executor = make_uniq<TaskExecutor>(context, TaskSchedulerType::ASYNC);
 		// minimap2 maps on the async pool too, as many units at once as DuckDB has
-		// threads and the pool can run: a sink that takes rows in order gives this
-		// function only one of DuckDB's.
+		// threads (see Schedule for why).
 		if (s.use_minimap2) {
 			s.max_aligners = gstate->max_threads;
 		}
@@ -861,8 +873,7 @@ unique_ptr<GlobalTableFunctionState> RypeFilterTableFunction::InitGlobal(ClientC
 			}
 		});
 		// Start now, not at the first scan: the minimap2 index takes as long to load
-		// as RYpe takes over several groups, and both can begin at once given two
-		// async threads. With one they take turns, as no job waits on another.
+		// as RYpe takes over several groups, and both can begin at once.
 		RypeFilterJobs jobs;
 		{
 			std::lock_guard<std::mutex> guard(s.lock);
@@ -926,8 +937,11 @@ void RypeFilterTableFunction::Execute(ClientContext &context, TableFunctionInput
 				return;
 			} else {
 				jobs = s.TakeJobsLocked(inline_jobs);
-				// A thread with a job to run inline runs it; any other waits.
-				if (can_park && !(inline_jobs && jobs.Any())) {
+				// A thread that took jobs starts them, then looks again. Only a thread
+				// that took none parks: starting a job can fail and wake the parked
+				// threads, and waking its own registration would wait on this call's
+				// return for good (Executor::RescheduleTask).
+				if (can_park && !jobs.Any()) {
 					// Registered last, under the lock every wake-up takes, so none is
 					// missed; and nothing this call does after it wakes anyone.
 					s.parked.push_back(*data_p.interrupt_state);
@@ -949,13 +963,11 @@ void RypeFilterTableFunction::Execute(ClientContext &context, TableFunctionInput
 		}
 		if (jobs.Any()) {
 			StartJobs(gstate.executor.get(), gstate.schedule, jobs);
+			continue;
 		}
 		if (park) {
 			data_p.async_result = AsyncResultType::BLOCKED;
 			return;
-		}
-		if (inline_jobs && jobs.Any()) {
-			continue;
 		}
 		// Cannot park: wait for the background work, looking again now and then so
 		// an interrupted query stops.

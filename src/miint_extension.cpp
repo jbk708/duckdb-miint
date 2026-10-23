@@ -327,8 +327,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    LogicalType::BIGINT, Value::BIGINT(NumericCast<int64_t>(RYPE_ARROW_BATCH_BYTES)));
 
 	// Rows per rype_filter group, each group one RYpe call. 0 sizes groups from the
-	// memory budget. Setting it is how test/sql/rype_filter.test makes groups of one
-	// row, or groups that end inside a scan chunk.
+	// memory budget. Tests set it to make groups of one row, or groups that end
+	// inside a scan chunk.
 	ena_db_config.AddExtensionOption("miint_rype_filter_group_rows",
 	                                 "Rows per rype_filter group, each classified by one RYpe call. 0 (the default) "
 	                                 "sizes groups from the memory budget.",

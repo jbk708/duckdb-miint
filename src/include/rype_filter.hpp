@@ -15,11 +15,11 @@
 // them, mapped by minimap2 there, and the rows it does not map are emitted from
 // those chunks. RYpe needs no read_id, and nothing is read a second time to join
 // on it. minimap2 runs only on short reads (see LONG_READ_MEAN_LENGTH in
-// rype_filter.cpp), and is given each read's read_id as its name, as
-// align_minimap2 gives it, so that it breaks ties between equal hits alike.
+// rype_filter.cpp).
 
 #include "Minimap2Aligner.hpp"
 #include "rype.h"
+#include "rype_common.hpp"
 #include "rype_input_stream.hpp"
 
 #include "duckdb/function/table_function.hpp"
@@ -39,7 +39,7 @@ public:
 		std::string index_path;
 		//! Empty when no minimap2 index was given.
 		std::string minimap2_index_path;
-		double threshold = 0.1;
+		double threshold = RYPE_DEFAULT_THRESHOLD;
 		//! The relation's columns at bind: the output schema, and what the scan projects.
 		vector<string> column_names;
 		vector<LogicalType> column_types;
@@ -49,7 +49,7 @@ public:
 		idx_t read_id_column = DConstants::INVALID_INDEX;
 	};
 
-	//! What DuckDB's threads and the background jobs share; see rype_filter.cpp.
+	//! What DuckDB's threads and the background jobs share; see rype_filter_schedule.hpp.
 	struct Schedule;
 
 	struct GlobalState : public GlobalTableFunctionState {
@@ -68,7 +68,8 @@ public:
 	};
 
 	struct LocalState : public LocalTableFunctionState {
-		//! Set when minimap2 runs; attached to the index once it has loaded.
+		//! Set when minimap2 runs and this thread maps the units it emits (no async
+		//! threads); attached to the index once it has loaded.
 		unique_ptr<miint::Minimap2Aligner> aligner;
 		bool attached = false;
 	};

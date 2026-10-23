@@ -808,8 +808,8 @@ set(MINIMAP2_ARCH_FLAGS "")
 set(MINIMAP2_ARCH_CFLAGS "")
 set(MINIMAP2_FPIC "-fPIC")
 if(EMSCRIPTEN)
-  # Emscripten: use WASM SIMD via SSE2 emulation (minimap2 has SIMDe support).
-  # sse2only=1 avoids SSE4.1 dispatch which requires runtime CPU detection.
+  # Emscripten: use WASM SIMD via Emscripten's SSE2 emulation. sse2only=1 avoids
+  # SSE4.1 dispatch which requires runtime CPU detection.
   set(MINIMAP2_ARCH_FLAGS "sse2only=1")
   set(MINIMAP2_ARCH_CFLAGS "-msimd128 -msse -msse2 ${EMSCRIPTEN_THREAD_CFLAGS}")
   # Keep -fPIC: required for WASM side module linking (-sSIDE_MODULE=2)
@@ -2958,8 +2958,8 @@ target_compile_definitions(tests PRIVATE HAVE_KALLOC)
 
 # C++ tests that need a running DuckDB: they open an in-process database and
 # drive miint code against it. `tests` above links no DuckDB, so these get a
-# binary of their own, linked the way DuckDB links its unittest runner, and only
-# where DuckDB builds that runner (not in the WASM builds, for one).
+# binary of their own, linking DuckDB and miint statically, built only where
+# DuckDB builds its unittest runner (not in the WASM builds, for one).
 if(BUILD_UNITTESTS)
   add_executable(
     tests_duckdb

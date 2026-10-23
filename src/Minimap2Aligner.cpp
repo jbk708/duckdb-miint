@@ -402,9 +402,7 @@ void Minimap2Aligner::align(const SequenceRecordBatch &queries, SAMRecordBatch &
 		return;
 	}
 
-	if (!active_index()) {
-		throw std::runtime_error("No index built. Call build_index() or attach_shared_index() first.");
-	}
+	require_index();
 
 	// Heuristic: ~3 alignments per query (primary + secondaries)
 	output.reserve(output.size() + queries.size() * 3);
@@ -435,8 +433,7 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 	}
 
 	int n_regs = 0;
-	mm_reg1_t *regs = mm_map(active_index(), static_cast<int>(sequence.length()), sequence.c_str(), &n_regs,
-	                         tbuf_.get(), active_mapopt(), read_id.c_str());
+	mm_reg1_t *regs = map_single(sequence, read_id.c_str(), n_regs);
 
 	int secondary_count = 0;
 
@@ -445,7 +442,7 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 		mm_reg1_t *reg = &regs[j];
 
 		// Bounds check for reference ID before using it
-		if (reg->rid < 0 || static_cast<size_t>(reg->rid) >= active_subject_names().size()) {
+		if (!known_reference(reg->rid)) {
 			continue; // Skip alignments with invalid reference ID
 		}
 
@@ -472,11 +469,7 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 		);
 	}
 
-	// Free results (must use MM_FREE — minimap2 may use jemalloc allocator)
-	for (int j = 0; j < n_regs; j++) {
-		MM_FREE(regs[j].p);
-	}
-	MM_FREE(regs);
+	free_regions(regs, n_regs);
 
 	// Comparing against the row count taken on entry catches every way a query can end up with no
 	// row -- no seed chain, the min_chain_coverage prefilter, or every reg rejected by the rid
@@ -503,7 +496,7 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 		for (int j = 0; j < n_regs[seg]; j++) {
 			mm_reg1_t *reg = &regs[seg][j];
 			// Bounds check for reference ID
-			if (reg->rid < 0 || static_cast<size_t>(reg->rid) >= active_subject_names().size()) {
+			if (!known_reference(reg->rid)) {
 				continue;
 			}
 			if (reg->parent == reg->id) { // Primary
@@ -549,7 +542,7 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 			mm_reg1_t *reg = &regs[seg][j];
 
 			// Bounds check for reference ID
-			if (reg->rid < 0 || static_cast<size_t>(reg->rid) >= active_subject_names().size()) {
+			if (!known_reference(reg->rid)) {
 				continue;
 			}
 
@@ -578,24 +571,17 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 		}
 	}
 
-	// Free results (must use MM_FREE — minimap2 may use jemalloc allocator)
 	for (int seg = 0; seg < 2; seg++) {
-		for (int j = 0; j < n_regs[seg]; j++) {
-			MM_FREE(regs[seg][j].p);
-		}
-		MM_FREE(regs[seg]);
+		free_regions(regs[seg], n_regs[seg]);
 	}
 }
 
 bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view sequence2, const char *qname) {
-	if (!active_index()) {
-		throw std::runtime_error("No index built. Call build_index() or attach_shared_index() first.");
-	}
-	// align() emits a row for each region whose reference id is in range; that is the whole test.
-	const auto n_subjects = active_subject_names().size();
-	const auto any_valid = [n_subjects](const mm_reg1_t *regs, int n_regs) {
+	require_index();
+	// align() emits a row for each region whose reference it knows; that is the whole test.
+	const auto any_known = [this](const mm_reg1_t *regs, int n_regs) {
 		for (int j = 0; j < n_regs; j++) {
-			if (regs[j].rid >= 0 && static_cast<size_t>(regs[j].rid) < n_subjects) {
+			if (known_reference(regs[j].rid)) {
 				return true;
 			}
 		}
@@ -608,27 +594,43 @@ bool Minimap2Aligner::any_mapped(std::string_view sequence1, std::string_view se
 			return false; // align_single never calls minimap2 on an empty query
 		}
 		int n_regs = 0;
-		mm_reg1_t *regs = mm_map(active_index(), static_cast<int>(sequence1.size()), sequence1.data(), &n_regs,
-		                         tbuf_.get(), active_mapopt(), qname);
-		const bool mapped = any_valid(regs, n_regs);
-		for (int j = 0; j < n_regs; j++) {
-			MM_FREE(regs[j].p);
-		}
-		MM_FREE(regs);
+		mm_reg1_t *regs = map_single(sequence1, qname, n_regs);
+		const bool mapped = any_known(regs, n_regs);
+		free_regions(regs, n_regs);
 		return mapped;
 	}
 
 	int n_regs[2] = {0, 0};
 	mm_reg1_t *regs[2] = {nullptr, nullptr};
 	map_pair(sequence1, sequence2, qname, n_regs, regs);
-	const bool mapped = any_valid(regs[0], n_regs[0]) || any_valid(regs[1], n_regs[1]);
+	const bool mapped = any_known(regs[0], n_regs[0]) || any_known(regs[1], n_regs[1]);
 	for (int seg = 0; seg < 2; seg++) {
-		for (int j = 0; j < n_regs[seg]; j++) {
-			MM_FREE(regs[seg][j].p);
-		}
-		MM_FREE(regs[seg]);
+		free_regions(regs[seg], n_regs[seg]);
 	}
 	return mapped;
+}
+
+mm_reg1_t *Minimap2Aligner::map_single(std::string_view sequence, const char *qname, int &n_regs) {
+	return mm_map(active_index(), static_cast<int>(sequence.size()), sequence.data(), &n_regs, tbuf_.get(),
+	              active_mapopt(), qname);
+}
+
+void Minimap2Aligner::free_regions(mm_reg1_t *regs, int n_regs) {
+	// MM_FREE, not free: minimap2 may allocate through jemalloc.
+	for (int j = 0; j < n_regs; j++) {
+		MM_FREE(regs[j].p);
+	}
+	MM_FREE(regs);
+}
+
+bool Minimap2Aligner::known_reference(int32_t rid) const {
+	return rid >= 0 && static_cast<size_t>(rid) < active_subject_names().size();
+}
+
+void Minimap2Aligner::require_index() const {
+	if (!active_index()) {
+		throw std::runtime_error("No index built. Call build_index() or attach_shared_index() first.");
+	}
 }
 
 void Minimap2Aligner::map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname, int n_regs[2],

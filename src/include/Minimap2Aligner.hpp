@@ -230,10 +230,17 @@ private:
 	void align_paired(const std::string &read_id, const std::string &sequence1, const std::string &sequence2,
 	                  SAMRecordBatch &output);
 	// Map a pair as minimap2 does: the hits of each segment come back
-	// against that segment as given. The caller frees regs as minimap2 allocated them:
-	// MM_FREE each regs[seg][j].p, then regs[seg].
+	// against that segment as given. The caller frees each regs[seg] with free_regions.
 	void map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname, int n_regs[2],
 	              mm_reg1_t *regs[2]);
+	// Map a single-end query as minimap2 does. The caller frees the result with free_regions.
+	mm_reg1_t *map_single(std::string_view sequence, const char *qname, int &n_regs);
+	// Free regions as minimap2 allocated them: each one's p, then the array.
+	static void free_regions(mm_reg1_t *regs, int n_regs);
+	// Whether a region's reference is one of the index's subjects: align() emits a row for a
+	// region only when it is.
+	bool known_reference(int32_t rid) const;
+	void require_index() const;
 
 	// Convert minimap2 result to SAM fields
 	void reg_to_sam(const mm_reg1_t *reg, const std::string &read_id, const std::string &query_seq,

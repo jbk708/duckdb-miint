@@ -150,13 +150,13 @@ SELECT * FROM reads ANTI JOIN rype_classify('host.ryxdi', 'reads', threshold := 
 SELECT * FROM kept ANTI JOIN align_minimap2('kept', index_path := 'host.mmi') USING (read_id);
 ```
 
-but reads `sequence_table` once and stores nothing between the stages, so the relation can be a view straight over `read_fastx`. Note that the relation comes first here, where `rype_classify` takes the index first.
+but reads `sequence_table` once and stores nothing between the stages, so the relation can be a view straight over `read_fastx`. The joins keep every row whose `read_id` is NULL, since a join never matches NULL; `rype_filter` drops such a row when either stage would remove it. The relation is the first argument here, and the index the first in `rype_classify`.
 
 **Parameters:**
 - `sequence_table` (VARCHAR): Name of a DuckDB table or view. Must have `sequence1` (VARCHAR or BLOB); `sequence2` (VARCHAR or BLOB) is optional. A `read_id` column is optional too: RYpe does not need one, and minimap2 uses it only to name the reads, so with a minimap2 index it must be VARCHAR, BIGINT or UUID. Every other column is carried through untouched
 - `index_path` (VARCHAR): Path to a RYpe index directory (`.ryxdi`), typically of the host
 - `minimap2_index_path` (VARCHAR, optional): Path to a minimap2 index (`.mmi`) of the host, built as one part, as [`save_minimap2_index`](alignment_reference.md#index-creation-with-minimap2) always builds it. Omit it to filter with RYpe alone
-- `threshold` (DOUBLE, optional, default 0.1): A row is dropped when RYpe scores it at or above this for any bucket (0.0-1.0), as `rype_classify` would return a match for it
+- `threshold` (DOUBLE, optional, default 0.1): A row is dropped when RYpe scores it at or above this for any bucket (0.0-1.0), as `rype_classify` would return a match for it. NULL takes the default
 
 **Output schema:** every column of `sequence_table`, with its name and type, for the rows kept.
 
@@ -166,9 +166,9 @@ but reads `sequence_table` once and stores nothing between the stages, so the re
 - **Short reads only:** minimap2 runs when the mean `sequence1` length over the first chunk of the scan (up to 2,048 rows) is under 300, the reads its short-read preset is for. Otherwise, for long reads or an empty relation, the minimap2 index is never opened, and RYpe alone decides
 - **Rows come out in no fixed order** on more than one thread, as `rype_classify`'s and `align_minimap2`'s do, whatever `preserve_insertion_order` is set to. Add an `ORDER BY` to put them in an order, for instance `read_fastx`'s `sequence_index`
 - **Read once:** the relation is read in a single pass, so a view, including one over files still to be decompressed, or a registered Arrow relation, works
-- **Threads:** RYpe classifies and minimap2 maps on DuckDB's background pool (`async_threads`), RYpe a group of rows ahead of minimap2, and minimap2 on as many threads at once as both `SET threads` and `async_threads` allow. DuckDB's own threads only write the rows out, so a writer that takes them in order on one thread, as `COPY ... (FORMAT FASTQ)` does, does not hold the mapping to one. With `async_threads` set to 0, both run on DuckDB's own threads instead
+- **Threads:** RYpe classifies and minimap2 maps as background tasks, which DuckDB's async pool (`async_threads`) runs and its idle threads take up too. RYpe works a batch of reads ahead of minimap2, and minimap2 maps on as many threads at once as `SET threads` allows. The query itself only writes the rows out, so a writer that takes them in order on one thread, as `COPY ... (FORMAT FASTQ)` does, does not hold the mapping to one. With `async_threads` set to 0, both run in the query itself instead
 - **Memory** is sized automatically, with no `max_memory` parameter; see [Memory budget](#memory-budget)
-- The minimap2 index is loaded whole, once. A multi-part index would have to be loaded part by part with every read held meanwhile, so it is refused, by name, once its first part has loaded and before any row is returned; rebuild it as one part (`minimap2 -d` builds one part when `-I` is larger than the reference)
+- The minimap2 index is loaded whole, once. A multi-part index would have to be loaded part by part with every read held meanwhile, so it is refused, with an error naming the file, once its first part has loaded and before any row is returned; rebuild it as one part (`minimap2 -d` builds one part when `-I` is larger than the reference)
 
 **Examples:**
 ```sql
@@ -188,7 +188,7 @@ SELECT * FROM rype_filter('reads', 'human.ryxdi', 'human.mmi') ORDER BY sequence
 ```
 
 **Error conditions:**
-- A NULL argument, or an empty `minimap2_index_path` (omit it to filter with RYpe alone)
+- A NULL `sequence_table`, `index_path` or `minimap2_index_path`, or an empty `minimap2_index_path` (omit it to filter with RYpe alone)
 - `sequence_table` does not exist, or names a common table expression (a `WITH` name; create a view or table instead)
 - `sequence_table` has no `sequence1`, or a `sequence1` or `sequence2` that is not VARCHAR or BLOB
 - With a minimap2 index, a `read_id` that is not VARCHAR, BIGINT or UUID
@@ -441,8 +441,8 @@ mapped and written out, the next being classified, and the one after that, read
 ahead so that decoding it overlaps classifying. It sizes a group, which is one
 RYpe call, so that its classification and all three groups' rows fit.
 When that leaves RYpe no more than its 256 MiB floor, `miint_warnings()` says
-so: groups are then small, each costs a pass over the index, and the run can be
-many times slower than usual. The `miint_rype_filter_group_rows` setting (rows,
+so: groups are then small, and each costs a pass over the index, so the run is
+slower the less memory there is. The `miint_rype_filter_group_rows` setting (rows,
 default 0) fixes the group size instead; it exists for testing.
 
 ### Seeing what was chosen

@@ -155,6 +155,31 @@ inline void AddRypeSharedNamedParameters(TableFunction &tf) {
 	AddNamedParameter(tf, "debug", LogicalType::BOOLEAN);
 }
 
+//! The score at or above which rype_classify reports a match, and rype_filter
+//! drops a read, unless `threshold` says otherwise.
+constexpr double RYPE_DEFAULT_THRESHOLD = 0.1;
+
+//! The `threshold` named parameter of rype_classify and rype_filter, which must
+//! agree on it: RYPE_DEFAULT_THRESHOLD when it is absent or NULL.
+inline double ParseRypeThreshold(const TableFunctionBindInput &input) {
+	auto param = input.named_parameters.find("threshold");
+	if (param == input.named_parameters.end() || param->second.IsNull()) {
+		return RYPE_DEFAULT_THRESHOLD;
+	}
+	const double threshold = param->second.GetValue<double>();
+	// Written so that NaN fails it too.
+	if (!(threshold >= 0.0 && threshold <= 1.0)) {
+		throw BinderException("threshold must be between 0.0 and 1.0");
+	}
+	return threshold;
+}
+
+//! The text of an error RYpe reported, as rype_get_last_error or an Arrow
+//! stream's get_last_error gives it; either can give none.
+inline const char *RypeErrorText(const char *err) {
+	return err ? err : "unknown error";
+}
+
 //! Ask RYpe to size a classification batch within `memory_budget`.
 //!
 //! Wraps rype_calculate_batch_config rather than rype_recommend_batch_size
@@ -174,9 +199,8 @@ inline std::optional<RypeBatchConfig> CalculateRypeBatchConfig(ClientContext &co
 	    rype_calculate_batch_config(sizing_index, avg_read_length, is_paired, memory_budget, 1);
 
 	if (config.batch_size == 0) {
-		const char *err = rype_get_last_error();
 		miint::EmitWarning(context, "%s: could not size a classification batch (%s); falling back to %llu reads", label,
-		                   err ? err : "unknown error", (unsigned long long)STANDARD_VECTOR_SIZE);
+		                   RypeErrorText(rype_get_last_error()), (unsigned long long)STANDARD_VECTOR_SIZE);
 		return std::nullopt;
 	}
 	return config;
@@ -227,21 +251,21 @@ inline size_t ResolveRypeBatchSize(ClientContext &context, const char *label, co
 // Both facts now come from the head of the single pass:
 // RypeInputStream::SampleSizing.
 
-//! Column names and their storage types for a table/view, index-aligned. The
-//! single backing query for GetTableColumnNamesLower, the id-type capture in
-//! ValidateSequenceTable, and rype_filter's output schema.
-struct TableColumns {
+//! Column names (lowercased) and their storage types for a table/view,
+//! index-aligned. The single backing query for both GetTableColumnNamesLower
+//! and the id-type capture in ValidateSequenceTable.
+struct LowercasedColumns {
 	vector<string> names;
 	vector<LogicalType> types;
 };
 
-//! Look up a table or view by name and return its column names, as declared, and
+//! Look up a table or view by name and return its column names (lowercased) and
 //! types, index-aligned. Throws BinderException if the entry does not exist or
 //! is not a table/view. `role` names the entry in the "does not exist" message
 //! (e.g. "Table or view", "chunk table"), so callers can produce role-specific
 //! diagnostics.
-inline TableColumns GetTableColumns(ClientContext &context, const std::string &table_name,
-                                    const std::string &role = "Table or view") {
+inline LowercasedColumns GetTableColumnsLower(ClientContext &context, const std::string &table_name,
+                                              const std::string &role = "Table or view") {
 	EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_name)), QueryErrorContext());
 	auto entry = Catalog::GetEntry(context, lookup_info, OnEntryNotFound::RETURN_NULL);
 
@@ -249,13 +273,13 @@ inline TableColumns GetTableColumns(ClientContext &context, const std::string &t
 		throw BinderException("%s '%s' does not exist", role, table_name);
 	}
 
-	TableColumns cols;
+	LowercasedColumns cols;
 	if (entry->type == CatalogType::TABLE_ENTRY) {
 		auto &table = entry->Cast<TableCatalogEntry>();
 		auto &columns = table.GetColumns();
 		for (idx_t i = 0; i < columns.LogicalColumnCount(); i++) {
 			auto &col = columns.GetColumn(LogicalIndex(i));
-			cols.names.push_back(col.Name().GetIdentifierName());
+			cols.names.push_back(StringUtil::Lower(col.Name().GetIdentifierName()));
 			cols.types.push_back(col.Type());
 		}
 	} else if (entry->type == CatalogType::VIEW_ENTRY) {
@@ -263,21 +287,11 @@ inline TableColumns GetTableColumns(ClientContext &context, const std::string &t
 		view.BindView(context);
 		auto col_info = view.GetColumnInfo();
 		for (idx_t i = 0; i < col_info->names.size(); i++) {
-			cols.names.push_back(col_info->names[i].GetIdentifierName());
+			cols.names.push_back(StringUtil::Lower(col_info->names[i].GetIdentifierName()));
 			cols.types.push_back(col_info->types[i]);
 		}
 	} else {
 		throw BinderException("'%s' is not a table or view", table_name);
-	}
-	return cols;
-}
-
-//! GetTableColumns with the names lowercased, for case-insensitive lookups.
-inline TableColumns GetTableColumnsLower(ClientContext &context, const std::string &table_name,
-                                         const std::string &role = "Table or view") {
-	auto cols = GetTableColumns(context, table_name, role);
-	for (auto &name : cols.names) {
-		name = StringUtil::Lower(name);
 	}
 	return cols;
 }

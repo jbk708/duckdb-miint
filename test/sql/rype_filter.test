@@ -80,6 +80,29 @@ SELECT "ReadName", "Sequence1" FROM rype_filter('mixed_case', 'data/rype/test.ry
 ----
 x	ACGTACG
 
+# The relation's name and every column's go into the scan's SQL. A relation and a
+# carried column named so that either would end the statement if spliced in raw
+# are one identifier each: the call gives what the plain names give, and runs
+# nothing else.
+statement ok
+CREATE TABLE injection_victim AS SELECT 1 AS x;
+
+statement ok
+CREATE TABLE "reads""; DROP TABLE injection_victim; --" AS
+SELECT read_id, sequence1, extra AS "extra""; DROP TABLE injection_victim; --" FROM reads;
+
+query II
+SELECT count(*) > 0, count(*) = (SELECT count(*) FROM rype_filter('reads', 'data/rype/test.ryxdi', threshold := 0.05))
+FROM rype_filter('reads"; DROP TABLE injection_victim; --', 'data/rype/test.ryxdi', threshold := 0.05) f
+JOIN reads r ON r.read_id = f.read_id AND r.extra = f."extra""; DROP TABLE injection_victim; --";
+----
+true	true
+
+query I
+SELECT count(*) FROM injection_victim;
+----
+1
+
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
@@ -369,7 +392,7 @@ statement ok
 RESET miint_rype_filter_group_rows;
 
 # ---------------------------------------------------------------------------
-# The relation is read exactly once (#229)
+# The relation is read exactly once
 #
 # As in test/sql/rype_single_read.test, the volatility is in sequence1, which
 # every reader must evaluate: the first 2000 rows any scan pulls are the
@@ -412,3 +435,23 @@ SELECT count(*), count(*) FILTER (WHERE sequence1 != read_class(2))
 FROM rype_filter('volatile_grouped', 'data/rype/test.ryxdi', threshold := 0.05);
 ----
 2000	0
+
+# Past one scan chunk, in groups that end inside chunks, so that the scan's
+# read-ahead fetches chunks of its own ahead of RYpe's pulls: from the same scan.
+statement ok
+CREATE SEQUENCE once_ahead_seq START 1;
+
+statement ok
+CREATE VIEW volatile_ahead AS
+SELECT i AS ord,
+       CASE WHEN nextval('once_ahead_seq') <= 5000 THEN read_class(2) ELSE read_class(0) END AS sequence1
+FROM range(5000) t(i);
+
+statement ok
+SET miint_rype_filter_group_rows = 1000;
+
+query II
+SELECT count(*), count(*) FILTER (WHERE sequence1 != read_class(2))
+FROM rype_filter('volatile_ahead', 'data/rype/test.ryxdi', threshold := 0.05);
+----
+5000	0

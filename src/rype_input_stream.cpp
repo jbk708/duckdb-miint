@@ -16,26 +16,41 @@ constexpr idx_t COL_ID = 0;
 constexpr idx_t COL_SEQUENCE = 1;
 constexpr idx_t COL_PAIR_SEQUENCE = 2;
 
+//! Stream the relation's `select_cols`. SubmitStream, not Query: the result must
+//! stream so memory stays O(batch) instead of materializing the whole corpus.
+unique_ptr<StreamingQuery> SubmitScan(Connection &conn, const std::string &select_cols,
+                                      const RypeInputStreamOptions &options) {
+	auto query_result = SubmitStream(conn, "SELECT " + select_cols + " FROM " + options.relation_quoted);
+	if (query_result->HasError()) {
+		throw InvalidInputException("Failed to read sequences from '%s': %s", options.source_name,
+		                            query_result->GetError());
+	}
+	return query_result;
+}
+
 } // namespace
 
-idx_t GetRypeArrowBatchBytes(ClientContext &context) {
+idx_t GetNonNegativeOption(ClientContext &context, const char *name, idx_t if_null, const char *zero_means) {
 	Value v;
-	// Registered as a BIGINT extension option at extension load (LoadInternal in
-	// src/miint_extension.cpp). Missing means the option was never registered,
-	// which is a load-order programmer error rather than a user mistake.
-	if (!context.TryGetCurrentSetting("miint_rype_arrow_batch_bytes", v)) {
-		throw InternalException(
-		    "miint extension option 'miint_rype_arrow_batch_bytes' is not registered — was LoadInternal completed?");
+	// Registered at extension load (LoadInternal in src/miint_extension.cpp).
+	// Missing means the option was never registered, which is a load-order
+	// programmer error rather than a user mistake.
+	if (!context.TryGetCurrentSetting(name, v)) {
+		throw InternalException("miint extension option '%s' is not registered — was LoadInternal completed?", name);
 	}
 	if (v.IsNull()) {
-		return RYPE_ARROW_BATCH_BYTES;
+		return if_null;
 	}
-	const auto bytes = v.GetValue<int64_t>();
-	if (bytes < 0) {
-		throw InvalidInputException(
-		    "miint_rype_arrow_batch_bytes must be >= 0 (0 disables the Arrow batch byte ceiling)");
+	const auto value = v.GetValue<int64_t>();
+	if (value < 0) {
+		throw InvalidInputException("%s must be >= 0 (%s)", name, zero_means);
 	}
-	return NumericCast<idx_t>(bytes);
+	return NumericCast<idx_t>(value);
+}
+
+idx_t GetRypeArrowBatchBytes(ClientContext &context) {
+	return GetNonNegativeOption(context, "miint_rype_arrow_batch_bytes", RYPE_ARROW_BATCH_BYTES,
+	                            "0 disables the Arrow batch byte ceiling");
 }
 
 // ============================================================================
@@ -89,13 +104,7 @@ unique_ptr<RypeInputStream> BuildRypeInputStream(Connection &conn, RypeIdMap &id
 		select_cols += options.has_sequence2 ? ", sequence2::BLOB AS pair_sequence" : ", NULL::BLOB AS pair_sequence";
 	}
 
-	// SubmitStream, not Query: the result must stream so memory stays O(batch)
-	// instead of materializing the whole corpus.
-	auto query_result = SubmitStream(conn, "SELECT " + select_cols + " FROM " + options.relation_quoted);
-	if (query_result->HasError()) {
-		throw InvalidInputException("Failed to read sequences from '%s': %s", options.source_name,
-		                            query_result->GetError());
-	}
+	auto query_result = SubmitScan(conn, select_cols, options);
 	return make_uniq<RypeInputStream>(std::move(query_result), id_map, std::move(options));
 }
 
@@ -126,11 +135,7 @@ unique_ptr<RypeInputStream> BuildRypeFilterStream(Connection &conn, const vector
 		source.pair_sequence = sequence2.GetIndex();
 	}
 
-	auto query_result = SubmitStream(conn, "SELECT " + select_cols + " FROM " + options.relation_quoted);
-	if (query_result->HasError()) {
-		throw InvalidInputException("Failed to read sequences from '%s': %s", options.source_name,
-		                            query_result->GetError());
-	}
+	auto query_result = SubmitScan(conn, select_cols, options);
 	// Reinterpreting is sound only for the string physical type; anything else
 	// would hand RYpe a pointer that is not one.
 	const auto &types = query_result->GetTypes();
@@ -203,7 +208,7 @@ void RypeInputStream::StreamRelease(ArrowArrayStream *stream) {
 }
 
 void RypeInputStream::ReleaseScan() {
-	// transformed's sequence columns Reference the last source chunk's vectors, so
+	// transformed's sequence columns share the last source chunk's vectors, so
 	// they keep that chunk's buffers (and its string heap) alive. Dropping the scan
 	// without this would pin one DataChunk of sequence data for the rest of the
 	// query — negligible for short reads, hundreds of MB for long ones. Reset
@@ -565,17 +570,13 @@ idx_t RypeInputStream::AppendSlice(ArrowAppender &appender, DataChunk &chunk, id
 	for (idx_t i = from; i < to; i++) {
 		if (!sequence_format.validity.RowIsValid(sequence_format.sel->get_index(i))) {
 			const idx_t surrogate = base + (i - from);
-			if (!id_map) {
-				throw InvalidInputException(
-				    "sequence1 is NULL in '%s' at row %llu. RYpe cannot classify a NULL sequence "
-				    "— filter these rows out (WHERE sequence1 IS NOT NULL) or supply a value.",
-				    options.source_name, static_cast<unsigned long long>(surrogate));
-			}
+			// A filter stream keeps no id map, so it has only the row to name.
+			const std::string id =
+			    id_map ? StringUtil::Format(" (%s = %s)", options.id_column_name, id_map->ToString(surrogate)) : "";
 			throw InvalidInputException(
-			    "sequence1 is NULL in '%s' at row %llu (%s = %s). RYpe cannot classify a NULL sequence — filter "
+			    "sequence1 is NULL in '%s' at row %llu%s. RYpe cannot classify a NULL sequence — filter "
 			    "these rows out (WHERE sequence1 IS NOT NULL) or supply a value.",
-			    options.source_name, static_cast<unsigned long long>(surrogate), options.id_column_name,
-			    id_map->ToString(surrogate));
+			    options.source_name, static_cast<unsigned long long>(surrogate), id);
 		}
 	}
 

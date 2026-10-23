@@ -97,6 +97,7 @@ SentGroup ConsumeGroup(RypeInputStream &input) {
 			break;
 		}
 		REQUIRE(static_cast<size_t>(batch.n_children) == sent.formats.size());
+		REQUIRE(batch.n_children >= 2);
 		const auto &ids = *batch.children[0];
 		const auto id_data = static_cast<const int64_t *>(ids.buffers[1]);
 		for (idx_t r = 0; r < static_cast<idx_t>(batch.length); r++) {

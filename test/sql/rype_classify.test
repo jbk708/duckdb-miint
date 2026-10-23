@@ -81,6 +81,13 @@ SELECT * FROM rype_classify('data/rype/test.ryxdi', 'sequences', threshold := 1.
 ----
 threshold must be between
 
+# Test error: NaN, which compares false with both ends of the range, refused as
+# rype_filter refuses it, before the index is loaded
+statement error
+SELECT * FROM rype_classify('data/rype/test.ryxdi', 'sequences', threshold := 'nan'::DOUBLE);
+----
+threshold must be between
+
 # Test error: negative index doesn't exist
 statement error
 SELECT * FROM rype_classify('data/rype/test.ryxdi', 'sequences', negative_index := 'nonexistent.ryxdi');

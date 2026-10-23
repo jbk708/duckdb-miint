@@ -81,14 +81,7 @@ unique_ptr<FunctionData> RypeClassifyTableFunction::Bind(ClientContext &context,
 		data->id_column = id_col_param->second.ToString();
 	}
 
-	// Optional: threshold (defaults to 0.1)
-	auto threshold_param = input.named_parameters.find("threshold");
-	if (threshold_param != input.named_parameters.end() && !threshold_param->second.IsNull()) {
-		data->threshold = threshold_param->second.GetValue<double>();
-		if (data->threshold < 0.0 || data->threshold > 1.0) {
-			throw BinderException("threshold must be between 0.0 and 1.0");
-		}
-	}
+	data->threshold = ParseRypeThreshold(input);
 
 	// Optional: negative_index
 	auto neg_idx_param = input.named_parameters.find("negative_index");
