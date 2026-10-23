@@ -511,10 +511,14 @@ SequenceReader::SequenceReader(const std::string &path1, const std::optional<std
 		std::error_code ec;
 		return std::filesystem::is_regular_file(path, ec);
 	};
-	read_ahead_enabled_ = read_ahead && regular(path1) && (!paired_ || regular(path2.value()));
-	peeked_record_bytes_[0] = record_bytes(buffered_read1_[0]);
-	if (paired_) {
-		peeked_record_bytes_[1] = record_bytes(buffered_read2_[0]);
+	// An empty file (allow_empty) has nothing to read ahead, and no record to size polls by.
+	read_ahead_enabled_ =
+	    read_ahead && !buffered_read1_.empty() && regular(path1) && (!paired_ || regular(path2.value()));
+	if (read_ahead_enabled_) {
+		peeked_record_bytes_[0] = record_bytes(buffered_read1_[0]);
+		if (paired_) {
+			peeked_record_bytes_[1] = record_bytes(buffered_read2_[0]);
+		}
 	}
 #endif
 }

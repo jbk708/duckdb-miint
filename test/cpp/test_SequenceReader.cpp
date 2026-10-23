@@ -1147,6 +1147,19 @@ TEST_CASE("SequenceReader dropped while reading ahead goes once its poll returns
 	REQUIRE((dropped_while_reading == 20));
 }
 
+// read_fastx reads ahead whenever DuckDB's threads allow, so `allow_empty := true` meets
+// read-ahead on most machines.
+TEST_CASE("SequenceReader allow_empty reads an empty file as no records with read-ahead on",
+          "[SequenceReader][read_ahead]") {
+	TempFileFixture fixture;
+	auto path = "allow_empty_read_ahead.fq";
+	fixture.write_temp_fastq(path, {});
+
+	miint::SequenceReader reader(path, std::nullopt, false, true, true);
+	REQUIRE(ReadWithin(reader, 10).empty());
+	REQUIRE(ReadWithin(reader, 10).empty());
+}
+
 #endif
 
 // kseq++ fails its stream both on a malformed record and at the end of the input, so a reader
