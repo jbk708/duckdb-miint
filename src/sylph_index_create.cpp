@@ -30,6 +30,7 @@
 #include <limits>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -337,8 +338,17 @@ unique_ptr<GlobalTableFunctionState> SylphIndexCreateTableFunction::InitGlobal(C
 
 	std::vector<std::thread> pool;
 	pool.reserve(nthreads);
-	for (idx_t t = 0; t < nthreads; t++) {
-		pool.emplace_back(worker, t);
+	try {
+		for (idx_t t = 0; t < nthreads; t++) {
+			pool.emplace_back(worker, t);
+		}
+	} catch (const std::system_error &) {
+		// A thread that cannot start (a process or thread limit) must not unwind past the
+		// joinable threads already in `pool`, whose destructors would end the process. This
+		// thread takes the slot of the first thread that did not start, so the genomes are
+		// sketched on the threads that did and on this one. Same defence as
+		// community_distances.cpp.
+		worker(pool.size());
 	}
 	for (auto &th : pool) {
 		th.join();

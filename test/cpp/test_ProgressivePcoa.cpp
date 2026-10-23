@@ -15,6 +15,16 @@
 #include <unordered_map>
 #include <vector>
 
+// POSIX-only calls used by a test below (a resource limit in a forked child); that test is
+// compiled out elsewhere. Same guard as test_SequenceReader.cpp.
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <system_error>
+#include <thread>
+#include <unistd.h>
+#endif
+
 #include "ordination.h" // skbb_pcoa_fsvd_fp32
 
 #include "procrustes_core.hpp" // FullDisparity — frame-invariant M^2 for the oracle comparison
@@ -461,6 +471,74 @@ TEST_CASE("progressive PCoA runs a wave's batches concurrently without changing 
 	REQUIRE(par.eigvals == ser.eigvals);
 	REQUIRE(par.proportion_explained == ser.proportion_explained);
 }
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+TEST_CASE("progressive PCoA runs a wave whose worker threads cannot start", "[progressive]") {
+	// A process or thread limit refuses the wave's worker threads: the wave runs on the threads
+	// that did start, here none but the caller's, and gives the serial result, rather than
+	// failing the query or ending the process.
+	if (geteuid() == 0) {
+		SKIP("root is not held to RLIMIT_NPROC");
+	}
+	const uint32_t n = 140, d_true = 3, n_dims = 3, a = 20, batch_size = 10;
+	const int seed = 11;
+	const Oracle oracle = MakeEuclideanOracle(n, d_true, /*seed=*/2718);
+	const std::vector<std::string> anchors(oracle.ids.begin(), oracle.ids.begin() + a);
+	const std::vector<std::string> remaining(oracle.ids.begin() + a, oracle.ids.end()); // 12 batches
+	const auto provider = [&oracle](const std::vector<std::string> &req) {
+		return SliceBlock(oracle, req);
+	};
+	const ProgressivePcoaResult ser =
+	    RunProgressivePcoa(anchors, remaining, n_dims, batch_size, seed, /*n_threads=*/1, provider);
+
+	// In a child, so that the limit, which no unprivileged process can raise again, ends with it.
+	// Catch2's macros are not used in the child; it reports through its exit status.
+	const pid_t child = fork();
+	REQUIRE((child >= 0));
+	if (child == 0) {
+		// This user already runs more than one process, so no new thread should start; a thread
+		// that still does (a capability, or a system that counts only processes) means the case
+		// cannot be tested here.
+		const struct rlimit one = {1, 1};
+		int status = 2;
+		if (setrlimit(RLIMIT_NPROC, &one) == 0) {
+			bool refused = false;
+			try {
+				std::thread([]() {}).join();
+			} catch (const std::system_error &) {
+				refused = true;
+			}
+			if (!refused) {
+				_exit(4);
+			}
+			try {
+				const ProgressivePcoaResult par =
+				    RunProgressivePcoa(anchors, remaining, n_dims, batch_size, seed, /*n_threads=*/1, provider,
+				                       /*prefetch=*/nullptr, /*wave_batches=*/12, /*batch_workers=*/4);
+				bool same = par.coords.size() == ser.coords.size() && par.eigvals == ser.eigvals;
+				for (size_t i = 0; same && i < ser.coords.size(); ++i) {
+					same = par.coords[i].sample_id == ser.coords[i].sample_id &&
+					       par.coords[i].axis == ser.coords[i].axis && par.coords[i].batch == ser.coords[i].batch &&
+					       par.coords[i].coordinate == ser.coords[i].coordinate;
+				}
+				status = same ? 0 : 1;
+			} catch (...) {
+				status = 3;
+			}
+		}
+		_exit(status);
+	}
+	int status = 0;
+	REQUIRE((waitpid(child, &status, 0) == child));
+	REQUIRE(WIFEXITED(status));
+	if (WEXITSTATUS(status) == 4) {
+		SKIP("RLIMIT_NPROC does not refuse a thread here");
+	}
+	// 1: a result other than the serial one; 2: the limit could not be set; 3: the run failed.
+	INFO("child exit status: " << WEXITSTATUS(status));
+	REQUIRE((WEXITSTATUS(status) == 0));
+}
+#endif // !_WIN32 && !__EMSCRIPTEN__
 
 TEST_CASE("progressive PCoA worker count is bounded by the work, not asserted against it", "[progressive]") {
 	// Worker counts come from a thread setting, batch counts from the data, so every
