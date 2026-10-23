@@ -83,7 +83,7 @@ File not found: nonexistent.fastq
 - Keep test data files small and focused
 - Use clear, descriptive comments for each test section
 - A test that reads through a glob and asserts `filepath` values selects `replace(filepath, '\', '/')`: glob expansion returns native separators on Windows. A single path or an explicit path list keeps the caller's string and needs no wrapping.
-- Write files under `__TEST_DIR__`, the per-process scratch directory unittest substitutes into a test's SQL. Under `MIINT_TEST_JOBS`, test files and the C++ tests run at the same time in one working directory, so any other path a test writes must be one no other test reads or writes. For the same reason the parallel runner gives each SQL process a spill directory under its `__TEST_DIR__` (`docs/internals/duckdb-engine-notes.md`, "Storage").
+- Write files under `{TEST_DIR}`, the per-process scratch directory unittest substitutes into a test's SQL. Under `MIINT_TEST_JOBS`, test files and the C++ tests run at the same time in one working directory, so any other path a test writes must be one no other test reads or writes. For the same reason the parallel runner gives each SQL process a spill directory under its `{TEST_DIR}` (`docs/internals/duckdb-engine-notes.md`, "Storage").
 
 **Guards and skipped tests:**
 

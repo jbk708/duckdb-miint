@@ -254,8 +254,6 @@ jobs:
 
       - name: Install tutorial test dependencies
         if: ${{ !contains(steps.duckdb_py.outputs.version, '-dev') }}
-        # The Python client must be the DuckDB version the extension was built
-        # against, or it cannot load it.
         run: python3 -m pip install --user duckdb==${{ steps.duckdb_py.outputs.version }} pyarrow pandas matplotlib
 
       - name: Run tutorial tests

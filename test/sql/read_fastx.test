@@ -231,8 +231,7 @@ SELECT count(*) FROM read_fastx('data/fastq/empty.fq', sequence2 := 'data/fastq/
 ----
 0
 
-# The same with read-ahead off (one thread) and on (four): read_fastx reads each local file
-# ahead on a thread of its own when the scan's threads fit in DuckDB's, two for one file.
+# One empty file with read-ahead off (one thread) and on (four; SequenceReader::ReadAheadFits).
 statement ok
 SET threads = 1;
 

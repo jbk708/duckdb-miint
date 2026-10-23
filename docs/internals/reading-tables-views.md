@@ -121,12 +121,8 @@ nothing else.
 
 ## Streaming a relation
 
-`conn.Query()` returns a `MaterializedQueryResult`: the whole relation in memory. To
-stream, use `conn.SendQuery(sql)` and call `result->Fetch()` until it returns null; the
-result is a `StreamQueryResult`. A prepared `SELECT` streams too when executed with
-`allow_stream_result` true, which is `PreparedStatement::Execute`'s default; passing
-false materializes (measured on v1.5.5: a `StreamQueryResult` and a
-`MaterializedQueryResult` respectively). Precedents: `src/alignment_slice.cpp` and
+`conn.Query()` holds the whole relation in memory. To stream, use `SubmitStream(conn, sql)`
+(above) and call `Fetch()` until it returns null. Precedents: `src/alignment_slice.cpp` and
 `src/rype_input_stream.cpp`. Check streaming by measurement: peak RSS stays flat as the
 input grows.
 

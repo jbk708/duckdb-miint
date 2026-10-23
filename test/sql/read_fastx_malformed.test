@@ -51,10 +51,10 @@ SELECT count(*) FROM read_fastx('data/fastq/corrupt.fq.gz');
 ----
 <REGEX>:.*corrupt\.fq\.gz: read failed after record [0-9]+: .*
 
-# A damaged record in the middle of a file read ahead, on a thread of its own: read_fastx reads
-# each local file ahead when the scan's threads fit in DuckDB's (two for one file). The thread
-# meets the damage, and the scan must fail on it as a scan without read-ahead does, never end
-# there with the 4000 records before it.
+# A damaged record in the middle of a file, with read-ahead on (four threads;
+# SequenceReader::ReadAheadFits) and off (one). Read ahead, the damage is met on the read-ahead's
+# own thread, and the scan must fail on it as a scan without read-ahead does, never end there
+# with the 4000 records before it.
 statement ok
 COPY (SELECT unnest(['@r' || i, repeat('ACGT', 25), '+', repeat('I', CASE WHEN i = 4000 THEN 99 ELSE 100 END)])
       FROM range(5000) t(i)) TO '{TEST_DIR}/damaged_mid_file.fq' (FORMAT csv, HEADER false);

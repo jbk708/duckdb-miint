@@ -732,8 +732,10 @@ TEST_CASE("SequenceReader byte budget default (SIZE_MAX) unchanged behavior", "[
 // smaller, and a poll of long records does not run far past them, since that memory is counted
 // against nothing; a read still gets every record it asks for when they take more bytes than
 // that; every batch comes out exactly as it would without it; a pipe, whose read can wait on its
-// writer forever, is never read ahead; and a reader dropped while reading ahead goes once the
-// poll in flight returns. read_fastx reads ahead only while the threads it takes fit in DuckDB's.
+// writer forever, is never read ahead; a reader dropped while reading ahead goes once the poll in
+// flight returns; an error the thread meets is raised by the read that needs the records its poll
+// lost, naming that file; and an empty file starts no read-ahead. read_fastx reads ahead only
+// while the threads it takes fit in DuckDB's.
 // Nothing is read ahead in wasm, and these tests are compiled out there.
 
 TEST_CASE("SequenceReader reads ahead only while its threads fit beside the scan's", "[SequenceReader][read_ahead]") {
@@ -1148,9 +1150,9 @@ TEST_CASE("SequenceReader dropped while reading ahead goes once its poll returns
 }
 
 // A damaged record is met by the read-ahead's thread but must be raised by read(), and only
-// after every record read ahead before the poll that met it: raised as soon as the thread
-// fails, it would drop those records and point at the wrong place in the file; taken for the
-// end of the file, it would end the scan early with no error at all.
+// after every record read ahead before the poll that met it, which are intact: raised as soon
+// as the thread fails, it would drop them; taken for the end of the file, it would end the scan
+// early with no error at all.
 TEST_CASE("SequenceReader raises a read-ahead's error after the records read before it",
           "[SequenceReader][read_ahead][error]") {
 	TempFileFixture fixture;
@@ -1196,6 +1198,36 @@ TEST_CASE("SequenceReader allow_empty reads an empty file as no records with rea
 	REQUIRE(ReadWithin(reader, 10).empty());
 	// Nothing to read ahead, and no first record to size its polls by.
 	REQUIRE_FALSE(reader.ReadAheadStarted(0));
+}
+
+// Each file of a pair is read ahead on a thread of its own, with that file's name and parser
+// state: a damaged mate 2 must be named, with its own record number, not mate 1.
+TEST_CASE("SequenceReader names the mate whose read-ahead met the damage", "[SequenceReader][read_ahead][error]") {
+	TempFileFixture fixture;
+	auto path1 = "read_ahead_damaged_r1.fq";
+	auto path2 = "read_ahead_damaged_r2.fq";
+	const int damaged = 1000;
+	auto mates2 = ReadAheadRecords(fixture, "2", 2000);
+	mates2[damaged] = fixture.simple_read("r1000/2", std::string(150, 'A'), std::string(149, 'I'));
+	fixture.write_temp_fastq(path1, ReadAheadRecords(fixture, "1", 2000));
+	fixture.write_temp_fastq(path2, mates2);
+	miint::SequenceReader reader(path1, std::string(path2), false, false, true);
+
+	REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r0"}));
+	REQUIRE((ReadWithin(reader, 1).read_ids == std::vector<std::string> {"r1"}));
+	REQUIRE(reader.ReadAheadStarted(0));
+	REQUIRE(reader.ReadAheadStarted(1));
+	REQUIRE(WaitIdle(reader, 0));
+	REQUIRE(WaitIdle(reader, 1));
+
+	const size_t before_failed_poll = 1 + (damaged - 1) / SHORT_RECORDS_PER_POLL * SHORT_RECORDS_PER_POLL;
+	std::vector<std::string> expected;
+	for (size_t i = 2; i < before_failed_poll; i++) {
+		expected.push_back("r" + std::to_string(i));
+	}
+	REQUIRE((ReadWithin(reader, static_cast<int>(expected.size())).read_ids == expected));
+	REQUIRE_THROWS_WITH(ReadWithin(reader, 1), "read_ahead_damaged_r2.fq: record 'r1000/2' (record 1001): sequence "
+	                                           "length 150 does not match quality length 149");
 }
 
 #endif

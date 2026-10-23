@@ -155,7 +155,7 @@ ScModelHeader ReadModelHeader(duckdb::Connection &conn, const std::string &relat
 //! when no name was given.
 //!
 //! Only the *value* comes from the caller, and it goes through
-//! `KeywordHelper::WriteQuoted`. That is what makes this safe where a general
+//! `SQLString::ToString`. That is what makes this safe where a general
 //! `where :=` parameter would not be: the predicate's shape is ours, so there is
 //! no way to inject a second clause.
 std::string ModelNameFilter(const std::string &name);
