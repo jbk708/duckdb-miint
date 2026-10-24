@@ -64,8 +64,8 @@ public:
 		    file_sequence_counters; // Per-file sequence counters (no atomic needed - file access is exclusive)
 		FileSystem &fs;
 
-		// A file is read by one thread at a time, so a scan can use one thread per file; DuckDB's
-		// `threads` setting bounds that.
+		// A file, or a pair of files, is read by one thread at a time, so a scan can use one thread
+		// per file or pair; DuckDB's `threads` setting bounds that.
 		// stdin cannot be read in parallel (no seeking/rewinding).
 		// This forces sequential execution, which may be slower than
 		// reading from files where DuckDB can parallelize.

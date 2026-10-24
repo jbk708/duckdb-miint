@@ -149,8 +149,10 @@ CREATE TABLE no_mate2 AS SELECT * FROM (VALUES
     ('no_mate2', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', '')
 ) AS t(read_id, sequence1, sequence2);
 
+# The read is its own reverse complement, so the strand it maps to rests on a tie minimap2
+# breaks; whether it maps as a pair (0x1) is what this checks.
 query III
-SELECT read_id, flags, reference FROM align_minimap2('no_mate2', subject_table='subjects', max_secondary=0);
+SELECT read_id, flags & 1 AS paired, reference FROM align_minimap2('no_mate2', subject_table='subjects', max_secondary=0);
 ----
 no_mate2	0	ref1
 

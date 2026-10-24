@@ -308,12 +308,13 @@ static size_t record_bytes(const klibpp::KSeq &rec) {
 // Size the next poll so a single read_stream call materializes at most ~room bytes of records,
 // where room is what is left under the caller's budget or cap, rather than a fixed
 // POLL_CHUNK_SIZE that ignores record size. The poll that reaches the budget then passes it by
-// about a record. Before any record is observed, or with room for POLL_CHUNK_SIZE records or
-// more (as when there is no budget), poll POLL_CHUNK_SIZE -- the short-read fast path. Never
-// returns less than 1. Capped at `remaining` by the caller's batch limit.
+// about a record, or by up to POLL_CHUNK_SIZE records where record lengths jump. Before any
+// record is observed, or with room for POLL_CHUNK_SIZE records or more (as when there is no
+// budget), poll POLL_CHUNK_SIZE -- the short-read fast path. Never returns less than 1. Capped
+// at `remaining` by the caller's batch limit.
 static int dynamic_poll_n(size_t observed_record_bytes, size_t room, int remaining) {
 	int poll_n = POLL_CHUNK_SIZE;
-	if (observed_record_bytes > 0 && room != SIZE_MAX) {
+	if (observed_record_bytes > 0) {
 		const size_t by_budget = room / observed_record_bytes;
 		if (by_budget < static_cast<size_t>(POLL_CHUNK_SIZE)) {
 			poll_n = by_budget < 1 ? 1 : static_cast<int>(by_budget);

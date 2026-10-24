@@ -8,7 +8,8 @@
 #   minimap2 -a -x map-ont --frag=yes --eqx --MD data/minimap2/paired_subject.fasta \
 #       data/minimap2/paired_R1.fasta data/minimap2/paired_R2.fasta
 #   and the same as the first with -x short, then with -x splice:sr
-#   minimap2 version: 2.30-r1287
+#   minimap2 version: 2.30-r1287, built from ext/minimap2 (0477498b: r1287 and a
+#   min_chain_coverage option, off by default)
 #
 # Test data (simulated):
 #   data/minimap2/paired_subject.fasta - one random 6,000 bp sequence. The sr, map-ont

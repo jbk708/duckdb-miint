@@ -81,7 +81,8 @@ public:
 			// oversubscribe (up to min(files, 8) readers run concurrently, each spawning a
 			// pool), so we deliberately leave the multi-file path single-threaded per file.
 			// The pool is sized from DuckDB's `threads` setting: up to 4 threads beside the one
-			// running the scan (set_threads starts no pool for fewer than 2).
+			// running the scan (set_threads starts no pool for fewer than 2). HTSlib adds one
+			// more thread that reads the compressed blocks and hands them to the pool.
 			if (readers.size() == 1 && !uses_stdin) {
 				readers[0]->set_threads(std::min(db_threads - 1, 4));
 			}
