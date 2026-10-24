@@ -9,13 +9,12 @@ require miint
 # "descriptors proportional to path count".
 require-env MIINT_LOW_FD_TEST
 
-# Pin the scan width. ReadFastxTableFunction::GlobalState::MaxThreads() caps parallelism at
-# std::thread::hardware_concurrency(), NOT at this setting -- but DuckDB still runs no more
-# concurrent local states than there are scheduler threads, so this bounds it from below and
-# makes the descriptor budget the same on a 4-core laptop and a 128-core runner. Without it
-# the paired-end query below would want 2 x hardware_concurrency descriptors, which on a
-# large runner lands near the 256 the harness allows and would flake for a reason that has
-# nothing to do with reader release.
+# Pin the scan width. ReadFastxTableFunction::GlobalState::MaxThreads() is the file count, and
+# DuckDB runs no more of the scan's threads than this setting allows, so this makes the
+# descriptor budget the same on a 4-core laptop and a 128-core runner. Without it the
+# paired-end query below would want two descriptors per thread of the runner's default, which
+# on a large runner lands near the 256 the harness allows and would flake for a reason that
+# has nothing to do with reader release.
 statement ok
 SET threads = 4;
 
