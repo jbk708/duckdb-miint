@@ -11,7 +11,6 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include <atomic>
-#include <thread>
 #include <vector>
 
 namespace duckdb {
@@ -53,7 +52,7 @@ public:
 			return std::min<idx_t>(readers.size(), 8);
 		}
 
-		GlobalState(const std::vector<std::string> &paths, FileSystem &fs, bool stdin_used)
+		GlobalState(const std::vector<std::string> &paths, FileSystem &fs, bool stdin_used, int db_threads)
 		    : filepaths(paths), next_file_idx(0), uses_stdin(stdin_used) {
 			for (const auto &path : paths) {
 				try {
@@ -81,10 +80,10 @@ public:
 			// on file-level parallelism instead -- giving every reader its own pool would
 			// oversubscribe (up to min(files, 8) readers run concurrently, each spawning a
 			// pool), so we deliberately leave the multi-file path single-threaded per file.
+			// The pool is sized from DuckDB's `threads` setting: up to 4 threads beside the one
+			// running the scan (set_threads starts no pool for fewer than 2).
 			if (readers.size() == 1 && !uses_stdin) {
-				auto hw = std::thread::hardware_concurrency();
-				int decompress_threads = (hw > 1) ? std::min<int>(static_cast<int>(hw) - 1, 4) : 1;
-				readers[0]->set_threads(decompress_threads);
+				readers[0]->set_threads(std::min(db_threads - 1, 4));
 			}
 		}
 	};
