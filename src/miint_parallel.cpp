@@ -2,7 +2,6 @@
 
 #include <stdexcept>
 #include <string>
-#include <system_error>
 
 namespace miint {
 
@@ -46,8 +45,9 @@ WorkerPool::WorkerPool(int n_threads) {
 		for (int t = 1; t < n_threads; ++t) {
 			workers_.emplace_back([this] { WorkerLoop(); });
 		}
-	} catch (const std::system_error &) {
-		// The thread constructor failed, e.g. EAGAIN under a pids/ulimit cap. Do
+	} catch (...) {
+		// The thread constructor failed, e.g. EAGAIN under a pids/ulimit cap, or no
+		// memory for the thread's state. Do
 		// NOT let it unwind past the joinable threads already in `workers_` -- a
 		// joinable std::thread's destructor calls std::terminate() and would crash
 		// the process. Degrade instead: whatever threads we did get are perfectly

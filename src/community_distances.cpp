@@ -9,7 +9,6 @@
 #include <functional>
 #include <limits>
 #include <stdexcept>
-#include <system_error>
 #include <thread>
 
 namespace miint {
@@ -200,8 +199,9 @@ void RunPairLoop(uint32_t row_end, unsigned n_threads, const std::function<void(
 		for (unsigned t = 1; t < nt; ++t) {
 			pool.emplace_back(worker);
 		}
-	} catch (const std::system_error &) {
-		// A thread constructor failed (e.g. EAGAIN under a pids/ulimit cap). Do NOT
+	} catch (...) {
+		// A thread constructor failed (e.g. EAGAIN under a pids/ulimit cap, or no memory
+		// for the thread's state). Do NOT
 		// let it unwind past the joinable threads already in `pool` — a joinable
 		// std::thread's destructor calls std::terminate() and would take the whole
 		// process down. Swallow it and degrade: the threads already spawned keep

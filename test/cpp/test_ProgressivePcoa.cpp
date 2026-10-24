@@ -16,7 +16,7 @@
 #include <vector>
 
 // POSIX-only calls used by a test below (a resource limit in a forked child); that test is
-// compiled out elsewhere. Same guard as test_SequenceReader.cpp.
+// compiled out elsewhere.
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -474,9 +474,9 @@ TEST_CASE("progressive PCoA runs a wave's batches concurrently without changing 
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 TEST_CASE("progressive PCoA runs a wave whose worker threads cannot start", "[progressive]") {
-	// A process or thread limit refuses the wave's worker threads: the wave runs on the threads
-	// that did start, here none but the caller's, and gives the serial result, rather than
-	// failing the query or ending the process.
+	// A process or thread limit refuses the wave's worker threads: the wave runs on the caller's
+	// thread alone and gives the serial result, rather than failing the query. Here no worker
+	// starts; a limit that lets some start and refuses the next cannot be set up reliably.
 	if (geteuid() == 0) {
 		SKIP("root is not held to RLIMIT_NPROC");
 	}

@@ -7,7 +7,6 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
-#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -510,11 +509,10 @@ std::vector<BatchOutput> ProgressivePcoaRun::NextWave() {
 			for (size_t w = 1; w < wave_workers; ++w) {
 				pool.emplace_back(worker);
 			}
-		} catch (const std::system_error &) {
-			// A thread that cannot start (a process or thread limit) must not unwind past the
-			// joinable threads already in `pool`, whose destructors would end the process. The
-			// wave runs on the threads that did start and on this one. Same defence as
-			// community_distances.cpp.
+		} catch (...) {
+			// A thread that cannot start (a process or thread limit, or no memory for its state)
+			// must not unwind past the joinable threads already in `pool`, whose destructors would
+			// end the process. The wave runs on the threads that did start and on this one.
 		}
 		worker();
 		for (auto &t : pool) {
