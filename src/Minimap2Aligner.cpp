@@ -599,7 +599,12 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
 	// minimap2 adds the mates' lengths into an int (mm_map_frag_core, map.c), so the pair
 	// together has to fit as well as each mate.
-	QueryLength(sequence1.length() + sequence2.length(), qname);
+	const size_t pair_length = sequence1.length() + sequence2.length();
+	if (pair_length > static_cast<size_t>(INT_MAX)) {
+		throw std::runtime_error("read '" + std::string(qname) + "': its two mates are " + std::to_string(pair_length) +
+		                         " bases long together; minimap2 maps a pair of at most " + std::to_string(INT_MAX) +
+		                         " bases");
+	}
 	const std::string *given[2] = {&sequence1, &sequence2};
 	int qlens[2];
 	const char *seqs[2];
