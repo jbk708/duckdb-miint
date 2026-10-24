@@ -688,7 +688,7 @@ echo "Running $FD_RELEASE_TEST with RLIMIT_NOFILE<=$FD_RELEASE_LIMIT..."
              "refusing to run $FD_RELEASE_TEST without real descriptor pressure" >&2
         exit 1
     fi
-    MIINT_LOW_FD_TEST=1 ./build/release/test/unittest "$FD_RELEASE_TEST"
+    MIINT_LOW_FD_TEST=1 ./build/release/test/unittest -w NoTests "$FD_RELEASE_TEST"
 ) || exit 1
 
 # sylph_index_create_thread_limit.test must run where no new thread can start: it asserts that
@@ -706,7 +706,7 @@ else
     echo "Running $NPROC_LIMIT_TEST with RLIMIT_NPROC=1..."
     (
         ulimit -u 1 || exit 1
-        MIINT_NPROC_LIMIT_TEST=1 exec ./build/release/test/unittest "$NPROC_LIMIT_TEST"
+        MIINT_NPROC_LIMIT_TEST=1 exec ./build/release/test/unittest -w NoTests "$NPROC_LIMIT_TEST"
     ) || exit 1
 fi
 
