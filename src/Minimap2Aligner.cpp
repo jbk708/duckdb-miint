@@ -597,6 +597,9 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 	// splice:sr); minimap2 reverse-complements those before mapping, and flips their hits
 	// back after (worker_for, map.c).
 	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
+	// minimap2 adds the mates' lengths into an int (mm_map_frag_core, map.c), so the pair
+	// together has to fit as well as each mate.
+	QueryLength(sequence1.length() + sequence2.length(), qname);
 	const std::string *given[2] = {&sequence1, &sequence2};
 	int qlens[2];
 	const char *seqs[2];

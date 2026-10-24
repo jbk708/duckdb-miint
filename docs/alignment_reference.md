@@ -576,7 +576,7 @@ Returns the same schema as `read_alignments` (21 columns):
 - Supports both single-end and paired-end query sequences, and maps a pair as minimap2 does. The presets for forward-reverse pairs (`sr`, its alias `short`, and `splice:sr`) flag a pair proper (`0x2`) when its mates face each other, close together on one reference; every other preset flags a pair proper only when both mates lie on one strand. `splice:sr` maps each mate alone and then pairs the hits; every other preset maps a pair as one fragment, and under `sr` and `short` a pair can then map when neither of its mates maps alone. Positions, strands and CIGARs are reported against each mate as given
 - `mate_reference`, `mate_position` and `template_length` are written as minimap2 writes them. `template_length` is per record: the distance from the record's 5' end to the 5' end of its mate's primary record, counting both ends, negative when the mate's lies to the left, and 0 when the two lie on different references. A record whose mate did not map gets `mate_reference` `'='` and its own `position` as `mate_position`
 - A row whose `sequence2` is NULL or empty is mapped single-end. A row with an empty `sequence1` and a non-empty `sequence2` fails the query, naming the read: a pair needs both mates
-- A read longer than 2,147,483,647 bases, the most minimap2 takes, fails the query, naming the read
+- A read longer than 2,147,483,647 bases, the most minimap2 takes, fails the query, naming the read; so does a pair whose two mates together are longer
 - Uses minimap2's in-memory indexing for fast alignment
 - Secondary alignments are controlled by `max_secondary` parameter
 

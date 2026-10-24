@@ -337,9 +337,9 @@ TEST_CASE("Minimap2Aligner maps a pair only when it has mate 1", "[Minimap2Align
 	}
 }
 
-TEST_CASE("Minimap2Aligner refuses a read longer than minimap2 takes", "[Minimap2Aligner]") {
-	// minimap2 takes a read's length as int: a read of INT_MAX + 1 bases is refused by its name
-	// rather than passed on as a negative length.
+TEST_CASE("Minimap2Aligner::QueryLength refuses a length minimap2 cannot take", "[Minimap2Aligner]") {
+	// minimap2 takes a read's length as int: a length of INT_MAX + 1 is refused with the read's
+	// name rather than passed on as a negative length.
 	REQUIRE(Minimap2Aligner::QueryLength(INT_MAX, "longest") == INT_MAX);
 	REQUIRE_THROWS_WITH(Minimap2Aligner::QueryLength(static_cast<size_t>(INT_MAX) + 1, "too_long"),
 	                    Catch::Matchers::ContainsSubstring("'too_long'"));
