@@ -281,12 +281,12 @@ std::shared_ptr<ActiveShard> AlignMinimap2ShardedTableFunction::ClaimWork(Client
 		bool timed_out = false;
 
 		while (true) {
-			// A query that failed or was cancelled gets no more work. DuckDB stops the other workers
-			// between Execute calls, so a shard one of them holds is never released, and a thread
-			// waiting for it would wait forever.
+			// A query that failed or was cancelled gets no more work: this worker stops as DuckDB's
+			// own interrupt checks stop the others. The workers holding a shard may never call
+			// Execute again, so a thread waiting for it would otherwise wait on.
 			if (context.IsInterrupted()) {
-				SHARD_DBG(gstate, "ClaimWork: DONE (query interrupted)");
-				return nullptr;
+				SHARD_DBG(gstate, "ClaimWork: query interrupted");
+				throw InterruptException();
 			}
 
 			// Phase 1: Try to join an existing active shard with capacity
