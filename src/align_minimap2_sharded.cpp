@@ -266,8 +266,17 @@ std::shared_ptr<ActiveShard> AlignMinimap2ShardedTableFunction::ClaimWork(Client
 
 	{
 		std::unique_lock<std::mutex> lock(gstate.lock);
+		bool timed_out = false;
 
 		while (true) {
+			// A query that failed or was cancelled gets no more work. DuckDB stops the other workers
+			// between Execute calls, so a shard one of them holds is never released, and a thread
+			// waiting for it would wait forever.
+			if (context.IsInterrupted()) {
+				SHARD_DBG(gstate, "ClaimWork: DONE (query interrupted)");
+				return nullptr;
+			}
+
 			// Phase 1: Try to join an existing active shard with capacity
 			for (auto &shard : gstate.active_shards) {
 				if (shard->ready.load(std::memory_order_acquire) && !shard->exhausted.load(std::memory_order_acquire) &&
@@ -315,11 +324,14 @@ std::shared_ptr<ActiveShard> AlignMinimap2ShardedTableFunction::ClaimWork(Client
 				return nullptr; // All shards processed, no active work remaining
 			}
 
-			// Wait for: a shard to become ready, capacity to open, or a shard to be removed
-			SHARD_DBG(gstate, "ClaimWork: WAIT (active=%zu, unclaimed=%s, any_alive=%s)",
-			          static_cast<size_t>(gstate.active_shards.size()), has_unclaimed ? "yes" : "no",
-			          any_not_exhausted ? "yes" : "no");
-			gstate.cv.wait(lock);
+			// Wait for: a shard to become ready, capacity to open, or a shard to be removed. Timed, so
+			// that the interrupt check above runs when no worker is left to notify.
+			if (!timed_out) {
+				SHARD_DBG(gstate, "ClaimWork: WAIT (active=%zu, unclaimed=%s, any_alive=%s)",
+				          static_cast<size_t>(gstate.active_shards.size()), has_unclaimed ? "yes" : "no",
+				          any_not_exhausted ? "yes" : "no");
+			}
+			timed_out = gstate.cv.wait_for(lock, std::chrono::milliseconds(100)) == std::cv_status::timeout;
 		}
 	}
 	// Lock released
@@ -327,8 +339,8 @@ std::shared_ptr<ActiveShard> AlignMinimap2ShardedTableFunction::ClaimWork(Client
 	// Phase 4: load the index and open this shard's read stream, both OUTSIDE the
 	// lock. Either can throw, and either way the cleanup is the same: without it
 	// the ActiveShard stays in active_shards with ready=false, so every thread
-	// parked in the wait above is never woken and the query hangs instead of
-	// failing. Same guard Execute puts around Advance.
+	// parked in the wait above waits on it until it sees the query interrupted.
+	// Same guard Execute puts around Advance.
 	auto &shard_info = bind_data.shards[shard_idx];
 	SHARD_DBG(gstate, "ClaimWork: LOADING index '%s'", shard_info.index_path.c_str());
 	auto load_start = std::chrono::steady_clock::now();
@@ -540,9 +552,9 @@ void AlignMinimap2ShardedTableFunction::Execute(ClientContext &context, TableFun
 				// failure), and `prepare` runs a query that can fail. Letting that
 				// escape Execute would skip ReleaseWork: this worker's
 				// active_workers count would stay up and the shard would never be
-				// marked exhausted, so a thread parked in ClaimWork's wait is never
-				// woken and the query HANGS instead of failing. Same guard ClaimWork
-				// puts around its own index load.
+				// marked exhausted, so a thread parked in ClaimWork's wait would wait
+				// on it until it sees the query interrupted. Same guard ClaimWork puts
+				// around its own index load.
 				active->exhausted.store(true, std::memory_order_release);
 				ReleaseWork(global_state, local_state);
 				throw;
