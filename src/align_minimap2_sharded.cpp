@@ -568,7 +568,15 @@ void AlignMinimap2ShardedTableFunction::Execute(ClientContext &context, TableFun
 		local_state.buffer_offset = 0;
 
 		auto align_start = std::chrono::steady_clock::now();
-		local_state.aligner->align(query_batch, local_state.result_buffer);
+		try {
+			local_state.aligner->align(query_batch, local_state.result_buffer);
+		} catch (...) {
+			// The aligner refuses a read it cannot map (an empty mate 1, a read too long for
+			// minimap2). Same guard, for the same reason, as the one around Advance above.
+			active->exhausted.store(true, std::memory_order_release);
+			ReleaseWork(global_state, local_state);
+			throw;
+		}
 		auto align_ms =
 		    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - align_start)
 		        .count();

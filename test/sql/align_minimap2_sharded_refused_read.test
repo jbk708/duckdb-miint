@@ -1,0 +1,40 @@
+# name: test/sql/align_minimap2_sharded_refused_read.test
+# description: A read the aligner refuses fails align_minimap2_sharded instead of hanging it
+# group: [sql]
+
+require miint
+
+# A pair with an empty mate 1 fails the query, naming the read (docs/alignment_reference.md).
+# Here it comes after three sub-batches of reads on shard_a, and shard_b holds one read. With
+# one worker per shard, the worker that finishes shard_b waits for shard_a, which it cannot
+# join. The worker on shard_a has to release the shard when the read is refused: otherwise
+# the waiting worker is never woken and the query hangs.
+
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE TABLE q AS
+SELECT 'r' || i AS read_id,
+       translate(md5(i::VARCHAR) || md5((i + 1000000)::VARCHAR) || md5((i + 2000000)::VARCHAR),
+                 '0123456789abcdef', 'ACGTACGTACGTACGT') AS sequence1,
+       translate(md5((i + 3000000)::VARCHAR) || md5((i + 4000000)::VARCHAR) || md5((i + 5000000)::VARCHAR),
+                 '0123456789abcdef', 'ACGTACGTACGTACGT') AS sequence2
+FROM range(6144) t(i)
+UNION ALL
+SELECT 'on_shard_b', 'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA',
+       'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA'
+UNION ALL
+SELECT 'no_mate1', '', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT';
+
+statement ok
+CREATE TABLE r2s AS
+SELECT read_id, CASE WHEN read_id = 'on_shard_b' THEN 'shard_b' ELSE 'shard_a' END AS shard_name FROM q;
+
+statement error
+SELECT count(*) FROM align_minimap2_sharded('q',
+    shard_directory := 'data/shards/',
+    read_to_shard := 'r2s',
+    max_threads_per_shard := 1);
+----
+read 'no_mate1': sequence1 is empty but sequence2 is not
