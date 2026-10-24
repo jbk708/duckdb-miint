@@ -49,7 +49,8 @@ read 'no_mate1': sequence1 is empty but sequence2 is not
 # Two workers per shard. One worker on shard_a finds its reads used up and waits for
 # shard_b, whose two workers keep it full; the other refuses the read at the end of shard_a's
 # last sub-batch, whose long reads keep it busy until then. DuckDB stops shard_b's workers
-# between the chunks of alignments they return, so they never release shard_b.
+# between the chunks of alignments they return, and the query has to end with the refused
+# read's error rather than leave the waiting worker waiting for them.
 statement ok
 CREATE TABLE two_workers AS
 SELECT 'a' || i AS read_id, random_bases(i, 96) AS sequence1, random_bases(i + 1000000, 96) AS sequence2,

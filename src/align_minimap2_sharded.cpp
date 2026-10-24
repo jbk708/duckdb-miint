@@ -234,18 +234,27 @@ AlignMinimap2ShardedTableFunction::InitLocal(ExecutionContext &context, TableFun
 	auto lstate = make_uniq<LocalState>();
 	// Create per-thread aligner with config
 	lstate->aligner = std::make_unique<miint::Minimap2Aligner>(data.config);
-	lstate->gstate = &global_state->Cast<GlobalState>();
+	lstate->global = global_state->Cast<GlobalState>().handle;
 	return lstate;
 }
 
+AlignMinimap2ShardedTableFunction::GlobalState::~GlobalState() {
+	std::lock_guard<std::mutex> guard(handle->lock);
+	handle->state = nullptr;
+}
+
 AlignMinimap2ShardedTableFunction::LocalState::~LocalState() {
-	if (has_shard && gstate) {
-		try {
-			ReleaseWork(*gstate, *this);
-		} catch (...) {
-			// A destructor must not throw. The claim then stays, and a waiting worker leaves once
-			// ClaimWork sees the query interrupted.
+	if (!has_shard || !global) {
+		return;
+	}
+	try {
+		std::lock_guard<std::mutex> guard(global->lock);
+		if (global->state) { // null once the GlobalState is gone; see GlobalStateHandle
+			ReleaseWork(*global->state, *this);
 		}
+	} catch (...) {
+		// A destructor must not throw. The claim then stays, and a worker waiting on it leaves
+		// only when the query is interrupted or passes max_execution_time.
 	}
 }
 
@@ -281,13 +290,10 @@ std::shared_ptr<ActiveShard> AlignMinimap2ShardedTableFunction::ClaimWork(Client
 		bool timed_out = false;
 
 		while (true) {
-			// A query that failed or was cancelled gets no more work: this worker stops as DuckDB's
-			// own interrupt checks stop the others. The workers holding a shard may never call
-			// Execute again, so a thread waiting for it would otherwise wait on.
-			if (context.IsInterrupted()) {
-				SHARD_DBG(gstate, "ClaimWork: query interrupted");
-				throw InterruptException();
-			}
+			// A query that failed, was cancelled or passed max_execution_time gets no more work: this
+			// worker stops here as DuckDB's own checks stop the others, rather than join or load a
+			// shard for a query that has ended, or wait on a claim that no release will free.
+			context.BlockingInterruptCheck();
 
 			// Phase 1: Try to join an existing active shard with capacity
 			for (auto &shard : gstate.active_shards) {

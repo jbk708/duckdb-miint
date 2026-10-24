@@ -37,3 +37,22 @@ SELECT count(*) FROM (
     LIMIT 1);
 ----
 1
+
+# In a recursive CTE the scan runs again on each iteration, and DuckDB keeps its executors
+# between runs: it replaces the scan's global state before the local states of the run before,
+# which the LIMIT left holding shards. Their release must not reach the global state that is
+# gone.
+query I
+WITH RECURSIVE r(n) AS (
+    SELECT 1
+    UNION ALL
+    SELECT n + 1 FROM r, (
+        SELECT read_id FROM align_minimap2_sharded('reads',
+            shard_directory := 'data/shards/',
+            read_to_shard := 'routing',
+            max_threads_per_shard := 2)
+        LIMIT 1) s
+    WHERE n < 3)
+SELECT count(*) FROM r;
+----
+3

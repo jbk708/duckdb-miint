@@ -121,6 +121,18 @@ public:
 		}
 	};
 
+	struct GlobalState;
+
+	// How a LocalState reaches its scan's GlobalState from its destructor. DuckDB most often destroys
+	// a scan's local states before its global one, but not always: a recursive CTE that runs the scan
+	// again replaces its global state before the local states of the run before. The GlobalState
+	// clears `state` under `lock` as it dies, so a release either ends first or finds nothing to
+	// release into; once the GlobalState is gone no worker is left to wait on it.
+	struct GlobalStateHandle {
+		std::mutex lock;
+		GlobalState *state = nullptr;
+	};
+
 	struct GlobalState : public GlobalTableFunctionState {
 		std::mutex lock;
 		std::condition_variable cv;
@@ -143,14 +155,19 @@ public:
 		// docs/internals/reading-tables-views.md § "Read the relation ONCE").
 		std::shared_ptr<QuerySnapshots> snapshots;
 
+		std::shared_ptr<GlobalStateHandle> handle = std::make_shared<GlobalStateHandle>();
+
 		idx_t MaxThreads() const override {
 			return max_active_shards * max_threads_per_shard;
 		}
 
-		GlobalState() = default;
+		GlobalState() {
+			handle->state = this;
+		}
 
-		// No destructor: the snapshots are dropped by ~QuerySnapshots once the last
-		// shard still streaming them is gone, which may be after this state dies.
+		// Clears handle->state. The snapshots are not dropped here but by ~QuerySnapshots, once
+		// the last shard still streaming them is gone, which may be after this state dies.
+		~GlobalState() override;
 	};
 
 	struct LocalState : public LocalTableFunctionState {
@@ -161,12 +178,13 @@ public:
 		miint::SAMRecordBatch result_buffer;
 		idx_t buffer_offset = 0;
 		std::string current_shard_name;
-		GlobalState *gstate = nullptr; // the scan's, for the destructor
+		std::shared_ptr<GlobalStateHandle> global; // the scan's, for the destructor
 
 		LocalState() = default;
 		// DuckDB destroys a worker's local state when its task ends, also when the query ends it
-		// early (a LIMIT that is met, an error, a cancel). A shard it still holds is released then,
-		// so that a worker waiting in ClaimWork for a place on that shard is woken.
+		// early (a LIMIT that is met, an error, a cancel); a recursive CTE keeps it until the scan
+		// runs again. A shard it still holds is released then, so that a worker waiting in ClaimWork
+		// for a place on that shard is woken.
 		~LocalState() override;
 	};
 
