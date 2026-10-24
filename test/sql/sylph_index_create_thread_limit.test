@@ -18,6 +18,7 @@ statement ok
 CREATE TABLE refs AS
   SELECT * FROM read_fastx('data/sylph/tiny_refs/*.fasta.gz', include_filepath := true);
 
+# threads := 2 also leaves a builder that no thread filled, which the merge must take as empty.
 query I
 SELECT num_genomes
   FROM sylph_index_create(
@@ -26,10 +27,9 @@ SELECT num_genomes
 ----
 3
 
-# The bytes a build on one sketching thread writes for these references: threads := 1 without
-# the limit gives them too (with more threads the genomes can be written in another order).
-# sylph_index_create.test profiles such an index against the sylph CLI's; sylph_profile cannot
-# check this one here, as it needs a thread pool of its own.
+# The bytes a build on one sketching thread writes for these references, taken from a build
+# with threads := 1 and no limit (with more threads the genomes can be written in another
+# order). sylph_profile cannot check this index here, as it needs a thread pool of its own.
 query I
 SELECT md5(content) FROM read_blob('{TEST_DIR}/thread_limit.syldb');
 ----

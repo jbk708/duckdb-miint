@@ -201,10 +201,9 @@ void RunPairLoop(uint32_t row_end, unsigned n_threads, const std::function<void(
 		}
 	} catch (...) {
 		// A thread constructor failed (e.g. EAGAIN under a pids/ulimit cap, or no memory
-		// for the thread's state). Do NOT
-		// let it unwind past the joinable threads already in `pool` — a joinable
-		// std::thread's destructor calls std::terminate() and would take the whole
-		// process down. Swallow it and degrade: the threads already spawned keep
+		// for the thread's state). It must not unwind past the joinable threads already in
+		// `pool`: a joinable std::thread's destructor calls std::terminate() and would take
+		// the whole process down. Swallow it and degrade: the threads already spawned keep
 		// draining rows through the atomic cursor and the calling thread finishes the
 		// remainder below, so the full result is still computed, just with fewer
 		// workers. (`pool` is pre-reserved, so emplace_back itself cannot throw.)
