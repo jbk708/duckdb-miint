@@ -161,8 +161,13 @@ public:
 		miint::SAMRecordBatch result_buffer;
 		idx_t buffer_offset = 0;
 		std::string current_shard_name;
+		GlobalState *gstate = nullptr; // the scan's, for the destructor
 
 		LocalState() = default;
+		// DuckDB destroys a worker's local state when its task ends, also when the query ends it
+		// early (a LIMIT that is met, an error, a cancel). A shard it still holds is released then,
+		// so that a worker waiting in ClaimWork for a place on that shard is woken.
+		~LocalState() override;
 	};
 
 	static unique_ptr<FunctionData> Bind(ClientContext &context, TableFunctionBindInput &input,

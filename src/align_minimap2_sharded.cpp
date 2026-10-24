@@ -234,7 +234,19 @@ AlignMinimap2ShardedTableFunction::InitLocal(ExecutionContext &context, TableFun
 	auto lstate = make_uniq<LocalState>();
 	// Create per-thread aligner with config
 	lstate->aligner = std::make_unique<miint::Minimap2Aligner>(data.config);
+	lstate->gstate = &global_state->Cast<GlobalState>();
 	return lstate;
+}
+
+AlignMinimap2ShardedTableFunction::LocalState::~LocalState() {
+	if (has_shard && gstate) {
+		try {
+			ReleaseWork(*gstate, *this);
+		} catch (...) {
+			// A destructor must not throw. The claim then stays, and a waiting worker leaves once
+			// ClaimWork sees the query interrupted.
+		}
+	}
 }
 
 // Sub-batch size a shard's stream hands each worker per claim.

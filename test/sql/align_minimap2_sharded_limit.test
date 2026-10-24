@@ -1,0 +1,39 @@
+# name: test/sql/align_minimap2_sharded_limit.test
+# description: A LIMIT met before align_minimap2_sharded runs out ends the query
+# group: [sql]
+
+require miint
+
+# Two workers per shard. shard_a holds a few reads, so one of its workers runs out of them
+# while shard_b, whose two workers keep it full, still has thousands, and waits for a place on
+# shard_b. The LIMIT is met long before shard_b runs out, and DuckDB then ends the workers
+# holding shard_b without another Execute call; the query has to end rather than leave the
+# waiting worker waiting for them.
+
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE TABLE q AS
+SELECT 'a' || i AS read_id, 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT' AS sequence1,
+       'shard_a' AS shard_name
+FROM range(10) t(i)
+UNION ALL
+SELECT 'b' || i, 'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA', 'shard_b'
+FROM range(40960) t(i);
+
+statement ok
+CREATE TABLE reads AS SELECT read_id, sequence1 FROM q;
+
+statement ok
+CREATE TABLE routing AS SELECT read_id, shard_name FROM q;
+
+query I
+SELECT count(*) FROM (
+    SELECT * FROM align_minimap2_sharded('reads',
+        shard_directory := 'data/shards/',
+        read_to_shard := 'routing',
+        max_threads_per_shard := 2)
+    LIMIT 1);
+----
+1
