@@ -127,7 +127,8 @@ public:
 	// a scan's local states before its global one, but not always: a recursive CTE that runs the scan
 	// again replaces its global state before the local states of the run before. The GlobalState
 	// clears `state` under `lock` as it dies, so a release either ends first or finds nothing to
-	// release into; once the GlobalState is gone no worker is left to wait on it.
+	// release into. Once the GlobalState is gone no worker is left to wait on it: every executor
+	// running the scan holds the global source state that owns it.
 	struct GlobalStateHandle {
 		std::mutex lock;
 		GlobalState *state = nullptr;

@@ -244,17 +244,18 @@ AlignMinimap2ShardedTableFunction::GlobalState::~GlobalState() {
 }
 
 AlignMinimap2ShardedTableFunction::LocalState::~LocalState() {
-	if (!has_shard || !global) {
+	if (!has_shard) {
 		return;
 	}
+	D_ASSERT(global); // set by InitLocal, before Execute can claim a shard
 	try {
 		std::lock_guard<std::mutex> guard(global->lock);
 		if (global->state) { // null once the GlobalState is gone; see GlobalStateHandle
 			ReleaseWork(*global->state, *this);
 		}
 	} catch (...) {
-		// A destructor must not throw. The claim then stays, and a worker waiting on it leaves
-		// only when the query is interrupted or passes max_execution_time.
+		// A destructor must not throw. ReleaseWork gives up this worker's place before anything in
+		// it can throw, and a waiter's timed wait finds the place without the notify a throw skips.
 	}
 }
 
