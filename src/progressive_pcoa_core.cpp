@@ -505,8 +505,14 @@ std::vector<BatchOutput> ProgressivePcoaRun::NextWave() {
 		// so W workers means W threads doing work, not W plus an idle one.
 		std::vector<std::thread> pool;
 		pool.reserve(wave_workers - 1);
-		for (size_t w = 1; w < wave_workers; ++w) {
-			pool.emplace_back(worker);
+		try {
+			for (size_t w = 1; w < wave_workers; ++w) {
+				pool.emplace_back(worker);
+			}
+		} catch (...) {
+			// A thread that cannot start (a process or thread limit, or no memory for its state)
+			// must not unwind past the joinable threads already in `pool`, whose destructors would
+			// end the process. The wave runs on the threads that did start and on this one.
 		}
 		worker();
 		for (auto &t : pool) {

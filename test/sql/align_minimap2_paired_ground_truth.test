@@ -8,7 +8,8 @@
 #   minimap2 -a -x map-ont --frag=yes --eqx --MD data/minimap2/paired_subject.fasta \
 #       data/minimap2/paired_R1.fasta data/minimap2/paired_R2.fasta
 #   and the same as the first with -x short, then with -x splice:sr
-#   minimap2 version: 2.30-r1287
+#   minimap2 version: 2.30-r1287, built from ext/minimap2 (0477498b: r1287 and a
+#   min_chain_coverage option, off by default)
 #
 # Test data (simulated):
 #   data/minimap2/paired_subject.fasta - one random 6,000 bp sequence. The sr, map-ont
@@ -73,18 +74,32 @@ mismatched	147	subject	2251	2401	60	10=1X49=1X79=1X9=	=	2001	-400	270	3	10C49T79
 reverse_fragment	83	subject	3301	3451	60	150=	=	3001	-450	300	0	150
 reverse_fragment	163	subject	3001	3151	60	150=	=	3301	450	300	0	150
 
-# Pairs with one mate mapped. minimap2 also writes the unmapped mate, placed at its
-# mate's position, and points the mapped mate at it; align_minimap2 reports no row
-# for an unmapped mate by default, nor a position for it, so the mate fields are left
-# out here.
-query IIIIIITIIT
-SELECT read_id, flags, reference, position, stop_position, mapq, cigar, tag_as, tag_nm, tag_md
+# Pairs with one mate mapped. minimap2 points the mapped mate at its own position,
+# where it places the unmapped mate.
+query IIIIIITTIIIIT
+SELECT read_id, flags, reference, position, stop_position, mapq, cigar,
+       mate_reference, mate_position, template_length, tag_as, tag_nm, tag_md
 FROM align_minimap2('pairs', subject_table := 'subject', eqx := true)
 WHERE read_id IN ('mate1_only', 'mate2_only')
 ORDER BY read_id, flags;
 ----
-mate1_only	73	subject	4501	4651	60	150=	300	0	150
-mate2_only	153	subject	5201	5351	60	150=	300	0	150
+mate1_only	73	subject	4501	4651	60	150=	=	4501	0	300	0	150
+mate2_only	153	subject	5201	5351	60	150=	=	5201	0	300	0	150
+
+# minimap2 writes the unmapped mate at its mate's reference and position. align_minimap2
+# writes it with include_unmapped, but with no reference or position, so that
+# `reference IS NULL` finds every unmapped row; its mate fields name its mate's reference
+# and position.
+query IIIITII
+SELECT read_id, flags, reference, position, mate_reference, mate_position, template_length
+FROM align_minimap2('pairs', subject_table := 'subject', eqx := true, include_unmapped := true)
+WHERE read_id IN ('mate1_only', 'mate2_only')
+ORDER BY read_id, flags;
+----
+mate1_only	73	subject	4501	=	4501	0
+mate1_only	133	NULL	NULL	subject	4501	0
+mate2_only	101	NULL	NULL	subject	5201	0
+mate2_only	153	subject	5201	=	5201	0
 
 # short is an alias of sr, and pairs as sr does.
 query II
@@ -130,3 +145,71 @@ mismatched	97	subject	2001	2151	60	20=1X54=1X54=1X19=	=	2251	400	282	3	20C54A54T
 mismatched	145	subject	2251	2401	60	10=1X49=1X79=1X9=	=	2001	-400	282	3	10C49T79G9
 reverse_fragment	81	subject	3301	3451	60	150=	=	3001	-450	300	0	150
 reverse_fragment	161	subject	3001	3151	60	150=	=	3301	450	300	0	150
+
+# Pairs in other layouts. Ground truth generated with:
+#   minimap2 -a -x sr --eqx --MD data/minimap2/paired_mates_subject.fasta \
+#       data/minimap2/paired_mates_R1.fasta data/minimap2/paired_mates_R2.fasta
+#   minimap2 -a -x map-ont --frag=yes --eqx --MD data/minimap2/paired_mates_subject.fasta \
+#       data/minimap2/paired_mates_R1.fasta data/minimap2/paired_mates_R2.fasta
+#
+# Test data:
+#   data/minimap2/paired_mates_subject.fasta - subject, the sequence of
+#   paired_subject.fasta, and subject_copy, its bases 2701-3000
+#   data/minimap2/paired_mates_R1.fasta, paired_mates_R2.fasta - pairs cut from subject:
+#   - same_strand: mate 1 is bases 1001-1150 and mate 2 bases 1301-1450, both forward
+#   - overlapping: mate 1 is bases 1101-1250 and mate 2 the reverse complement of bases
+#     1001-1150, so mate 2 starts left of mate 1 and ends inside it
+#   - secondary: mate 1 is bases 2801-2950, which subject_copy holds too, and mate 2 the
+#     reverse complement of bases 3101-3250
+#   - chimera: mate 1 is bases 501-580 followed by bases 4001-4080, and mate 2 the
+#     reverse complement of bases 4201-4350. The two halves of mate 1 score the same, and
+#     minimap2 breaks the tie with a hash of the read name, so the name is part of the
+#     fixture: renamed, the pair can map differently
+#
+# minimap2 writes each record's TLEN from its own 5' end to the 5' end of its mate's
+# primary record, counting both ends, and 0 when the two lie on different references.
+# Under sr, minimap2 pairs mate 2 with the hit of mate 1 at 4001 and makes that hit mate
+# 1's primary record, though it lists the hit at 501 first; mate 2's mate fields name
+# the hit at 4001.
+
+statement ok
+CREATE TABLE mates_subject AS SELECT * FROM read_fastx('data/minimap2/paired_mates_subject.fasta');
+
+statement ok
+CREATE TABLE mates AS
+SELECT * FROM read_fastx('data/minimap2/paired_mates_R1.fasta', sequence2 := 'data/minimap2/paired_mates_R2.fasta');
+
+query IIIIIITTIIIIT
+SELECT read_id, flags, reference, position, stop_position, mapq, cigar,
+       mate_reference, mate_position, template_length, tag_as, tag_nm, tag_md
+FROM align_minimap2('mates', subject_table := 'mates_subject', eqx := true)
+ORDER BY read_id, flags;
+----
+chimera	99	subject	4001	4081	60	80S80=	=	4201	350	160	0	80
+chimera	147	subject	4201	4351	60	150=	=	4001	-350	300	0	150
+chimera	2145	subject	501	581	60	80=80H	=	4201	3850	160	0	80
+overlapping	97	subject	1101	1251	60	150=	=	1001	50	300	0	150
+overlapping	145	subject	1001	1151	60	150=	=	1101	-50	300	0	150
+same_strand	65	subject	1001	1151	60	150=	=	1301	301	300	0	150
+same_strand	129	subject	1301	1451	60	150=	=	1001	-301	300	0	150
+secondary	99	subject	2801	2951	60	150=	=	3101	450	300	0	150
+secondary	147	subject	3101	3251	60	150=	=	2801	-450	300	0	150
+
+# Under map-ont the hit of mate 1 on subject_copy is written as a secondary record, which
+# lies on a different reference from its mate's primary record.
+query IIIIIITTIIIIT
+SELECT read_id, flags, reference, position, stop_position, mapq, cigar,
+       mate_reference, mate_position, template_length, tag_as, tag_nm, tag_md
+FROM align_minimap2('mates', subject_table := 'mates_subject', preset := 'map-ont', eqx := true)
+ORDER BY read_id, flags;
+----
+chimera	97	subject	501	581	60	80=80S	=	4201	3850	160	0	80
+chimera	145	subject	4201	4351	60	150=	=	501	-3850	300	0	150
+chimera	2145	subject	4001	4081	52	80H80=	=	4201	350	160	0	80
+overlapping	97	subject	1101	1251	60	150=	=	1001	50	300	0	150
+overlapping	145	subject	1001	1151	60	150=	=	1101	-50	300	0	150
+same_strand	67	subject	1001	1151	60	150=	=	1301	301	300	0	150
+same_strand	131	subject	1301	1451	60	150=	=	1001	-301	300	0	150
+secondary	97	subject	2801	2951	0	150=	=	3101	450	300	0	150
+secondary	145	subject	3101	3251	60	150=	=	2801	-450	300	0	150
+secondary	353	subject_copy	101	251	0	150=	subject	3101	0	300	0	150

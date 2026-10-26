@@ -15,7 +15,6 @@
 #include "duckdb/main/extension/extension_loader.hpp"
 #include <atomic>
 #include <optional>
-#include <thread>
 #include <vector>
 
 namespace duckdb {
@@ -65,6 +64,8 @@ public:
 		    file_sequence_counters; // Per-file sequence counters (no atomic needed - file access is exclusive)
 		FileSystem &fs;
 
+		// A file, or a pair of files, is read by one thread at a time, so a scan can use one thread
+		// per file or pair; DuckDB's `threads` setting bounds that.
 		// stdin cannot be read in parallel (no seeking/rewinding).
 		// This forces sequential execution, which may be slower than
 		// reading from files where DuckDB can parallelize.
@@ -72,7 +73,7 @@ public:
 			if (uses_stdin) {
 				return 1;
 			}
-			return std::min<idx_t>(sequence1_filepaths.size(), std::thread::hardware_concurrency());
+			return sequence1_filepaths.size();
 		};
 
 		GlobalState(FileSystem &fs, const std::vector<std::string> &sequence1_paths,

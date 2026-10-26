@@ -2,6 +2,7 @@
 #include <minimap2/bseq.h>
 #include <minimap2/minimap.h>
 #include <minimap2/mmpriv.h>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
@@ -393,6 +394,21 @@ void Minimap2Aligner::build_single_index(const AlignmentSubject &subject) {
 	build_index(subjects);
 }
 
+Minimap2Aligner::MappedHits::~MappedHits() {
+	for (int j = 0; j < n; j++) {
+		MM_FREE(regs[j].p);
+	}
+	MM_FREE(regs);
+}
+
+int Minimap2Aligner::QueryLength(size_t length, const char *read_id) {
+	if (length > static_cast<size_t>(INT_MAX)) {
+		throw std::runtime_error("read '" + std::string(read_id) + "' is " + std::to_string(length) +
+		                         " bases long; minimap2 maps a read of at most " + std::to_string(INT_MAX) + " bases");
+	}
+	return static_cast<int>(length);
+}
+
 void Minimap2Aligner::align(const SequenceRecordBatch &queries, SAMRecordBatch &output) {
 	if (queries.empty()) {
 		return;
@@ -430,15 +446,15 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 		return; // No alignments for empty query
 	}
 
-	int n_regs = 0;
-	mm_reg1_t *regs = mm_map(active_index(), static_cast<int>(sequence.length()), sequence.c_str(), &n_regs,
-	                         tbuf_.get(), active_mapopt(), read_id.c_str());
+	const int qlen = QueryLength(sequence.length(), read_id.c_str());
+	MappedHits hits;
+	hits.regs = mm_map(active_index(), qlen, sequence.c_str(), &hits.n, tbuf_.get(), active_mapopt(), read_id.c_str());
 
 	int secondary_count = 0;
 
 	// Process alignments (minimap2 returns them sorted by score, best first)
-	for (int j = 0; j < n_regs; j++) {
-		mm_reg1_t *reg = &regs[j];
+	for (int j = 0; j < hits.n; j++) {
+		mm_reg1_t *reg = &hits.regs[j];
 
 		// Bounds check for reference ID before using it
 		if (reg->rid < 0 || static_cast<size_t>(reg->rid) >= active_subject_names().size()) {
@@ -468,15 +484,9 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 		);
 	}
 
-	// Free results (must use MM_FREE — minimap2 may use jemalloc allocator)
-	for (int j = 0; j < n_regs; j++) {
-		MM_FREE(regs[j].p);
-	}
-	MM_FREE(regs);
-
 	// Comparing against the row count taken on entry catches every way a query can end up with no
 	// row -- no seed chain, the min_chain_coverage prefilter, or every reg rejected by the rid
-	// bounds check above -- rather than just testing n_regs == 0 and missing the other two.
+	// bounds check above -- rather than just testing hits.n == 0 and missing the other two.
 	if (config_.include_unmapped && output.size() == rows_before) {
 		append_unmapped(read_id, -1, false, false, -1, 0, output);
 	}
@@ -484,25 +494,30 @@ void Minimap2Aligner::align_single(const std::string &read_id, const std::string
 
 void Minimap2Aligner::align_paired(const std::string &read_id, const std::string &sequence1,
                                    const std::string &sequence2, SAMRecordBatch &output) {
-	// Skip if both sequences are empty (minimap2 requires len > 0)
-	if (sequence1.empty() && sequence2.empty()) {
-		return; // No alignments for empty queries
+	// align() maps a row with an empty sequence2 single-end, so a pair always has mate 2 here.
+	// Without mate 1 the row is not a pair that was sequenced, so it is refused rather than
+	// mapped. Mapped, a segment of length 0 fails minimap2's arena-leak assert in
+	// mm_map_frag_core and ends the process.
+	if (sequence1.empty()) {
+		throw std::runtime_error("read '" + read_id +
+		                         "': sequence1 is empty but sequence2 is not; a read pair needs both mates");
 	}
 
-	int n_regs[2] = {0, 0};
-	mm_reg1_t *regs[2] = {nullptr, nullptr};
-	map_pair(sequence1, sequence2, read_id.c_str(), n_regs, regs);
+	MappedHits hits[2];
+	map_pair(sequence1, sequence2, read_id.c_str(), hits);
 
-	// Find primary alignments for each segment (with bounds checking)
+	// Find each segment's primary record, the one written without 0x100 or 0x800. Pairing can make
+	// a hit other than the first listed the primary (mm_pair, pe.c), so it is found by sam_pri, as
+	// minimap2 finds it (get_sam_pri, format.c).
 	mm_reg1_t *primary[2] = {nullptr, nullptr};
 	for (int seg = 0; seg < 2; seg++) {
-		for (int j = 0; j < n_regs[seg]; j++) {
-			mm_reg1_t *reg = &regs[seg][j];
+		for (int j = 0; j < hits[seg].n; j++) {
+			mm_reg1_t *reg = &hits[seg].regs[j];
 			// Bounds check for reference ID
 			if (reg->rid < 0 || static_cast<size_t>(reg->rid) >= active_subject_names().size()) {
 				continue;
 			}
-			if (reg->parent == reg->id) { // Primary
+			if (reg->sam_pri) {
 				primary[seg] = reg;
 				break;
 			}
@@ -516,33 +531,14 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 	int32_t mate_pos[2] = {primary[1] ? (primary[1]->rs + 1) : 0, // 1-based
 	                       primary[0] ? (primary[0]->rs + 1) : 0};
 
-	// Calculate template length (only for proper pairs on same reference)
-	int32_t tlen = 0;
-	if (primary[0] && primary[1] && primary[0]->rid == primary[1]->rid) {
-		// tlen = rightmost end - leftmost start, with sign indicating direction
-		int32_t start0 = primary[0]->rs;
-		int32_t end0 = primary[0]->re;
-		int32_t start1 = primary[1]->rs;
-		int32_t end1 = primary[1]->re;
-
-		int32_t leftmost = std::min(start0, start1);
-		int32_t rightmost = std::max(end0, end1);
-		tlen = rightmost - leftmost;
-
-		// Sign: positive for read1 if it's leftmost
-		if (start0 > start1) {
-			tlen = -tlen;
-		}
-	}
-
 	// Process alignments for each segment
 	for (int seg = 0; seg < 2; seg++) {
 		const std::string &query_seq = (seg == 0) ? sequence1 : sequence2;
 		const size_t seg_rows_before = output.size();
 		int secondary_count = 0;
 
-		for (int j = 0; j < n_regs[seg]; j++) {
-			mm_reg1_t *reg = &regs[seg][j];
+		for (int j = 0; j < hits[seg].n; j++) {
+			mm_reg1_t *reg = &hits[seg].regs[j];
 
 			// Bounds check for reference ID
 			if (reg->rid < 0 || static_cast<size_t>(reg->rid) >= active_subject_names().size()) {
@@ -559,11 +555,24 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 				secondary_count++;
 			}
 
-			// For paired, tlen has opposite sign for read2
-			int32_t this_tlen = (seg == 0) ? tlen : -tlen;
+			// TLEN per record, as minimap2 writes it (mm_write_sam3, format.c): from this record's 5'
+			// end to the 5' end of its mate's primary record, counting both ends, and 0 when the two
+			// lie on different references
+			const mm_reg1_t *mate = primary[1 - seg];
+			int32_t tlen = 0;
+			if (mate && mate->rid == reg->rid) {
+				const int32_t this_pos5 = reg->rev ? reg->re - 1 : reg->rs;
+				const int32_t mate_pos5 = mate->rev ? mate->re - 1 : mate->rs;
+				tlen = mate_pos5 - this_pos5;
+				if (tlen > 0) {
+					tlen++;
+				} else if (tlen < 0) {
+					tlen--;
+				}
+			}
 
 			reg_to_sam(reg, read_id, query_seq, output, seg, mate_mapped[seg], mate_rev[seg], mate_rid[seg],
-			           mate_pos[seg], this_tlen);
+			           mate_pos[seg], tlen);
 		}
 
 		// Per segment, not per query: R1 can align while R2 does not, and SAM represents that as
@@ -573,18 +582,10 @@ void Minimap2Aligner::align_paired(const std::string &read_id, const std::string
 			append_unmapped(read_id, seg, mate_mapped[seg], mate_rev[seg], mate_rid[seg], mate_pos[seg], output);
 		}
 	}
-
-	// Free results (must use MM_FREE — minimap2 may use jemalloc allocator)
-	for (int seg = 0; seg < 2; seg++) {
-		for (int j = 0; j < n_regs[seg]; j++) {
-			MM_FREE(regs[seg][j].p);
-		}
-		MM_FREE(regs[seg]);
-	}
 }
 
 void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &sequence2, const char *qname,
-                               int n_regs[2], mm_reg1_t *regs[2]) {
+                               MappedHits hits[2]) {
 	mm_mapopt_t mopt = *active_mapopt();
 	mopt.flag |= MM_F_FRAG_MODE;
 
@@ -596,12 +597,20 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 	// splice:sr); minimap2 reverse-complements those before mapping, and flips their hits
 	// back after (worker_for, map.c).
 	const bool flip[2] = {((mopt.pe_ori >> 1) & 1) != 0, (mopt.pe_ori & 1) != 0};
+	// minimap2 adds the mates' lengths into an int (mm_map_frag_core, map.c), so the pair
+	// together has to fit as well as each mate.
+	const size_t pair_length = sequence1.length() + sequence2.length();
+	if (pair_length > static_cast<size_t>(INT_MAX)) {
+		throw std::runtime_error("read '" + std::string(qname) + "': its two mates are " + std::to_string(pair_length) +
+		                         " bases long together; minimap2 maps a pair of at most " + std::to_string(INT_MAX) +
+		                         " bases");
+	}
 	const std::string *given[2] = {&sequence1, &sequence2};
 	int qlens[2];
 	const char *seqs[2];
 	for (int seg = 0; seg < 2; seg++) {
 		const std::string &seq = *given[seg];
-		qlens[seg] = static_cast<int>(seq.length());
+		qlens[seg] = QueryLength(seq.length(), qname);
 		seqs[seg] = seq.c_str();
 		if (flip[seg]) {
 			// Complemented with minimap2's own table (bseq.h), as minimap2 complements
@@ -616,14 +625,20 @@ void Minimap2Aligner::map_pair(const std::string &sequence1, const std::string &
 		}
 	}
 
+	int n_regs[2] = {0, 0};
+	mm_reg1_t *regs[2] = {nullptr, nullptr};
 	mm_map_frag(active_index(), 2, qlens, seqs, n_regs, regs, tbuf_.get(), &mopt, qname);
+	for (int seg = 0; seg < 2; seg++) {
+		hits[seg].regs = regs[seg];
+		hits[seg].n = n_regs[seg];
+	}
 
 	for (int seg = 0; seg < 2; seg++) {
 		if (!flip[seg]) {
 			continue;
 		}
-		for (int j = 0; j < n_regs[seg]; j++) {
-			mm_reg1_t *reg = &regs[seg][j];
+		for (int j = 0; j < hits[seg].n; j++) {
+			mm_reg1_t *reg = &hits[seg].regs[j];
 			const int32_t qs = reg->qs;
 			reg->qs = qlens[seg] - reg->qe;
 			reg->qe = qlens[seg] - qs;
@@ -717,7 +732,7 @@ void Minimap2Aligner::reg_to_sam(const mm_reg1_t *reg, const std::string &read_i
 	batch.read_ids.push_back(read_id);
 	batch.flags.push_back(flags);
 
-	// Compute CIGAR string and alignment stats in a single pass (Opt 2+3)
+	// Compute CIGAR string and alignment stats in a single pass
 	AlignmentStats stats;
 	if (is_unmapped) {
 		batch.references.push_back("*");
@@ -742,6 +757,11 @@ void Minimap2Aligner::reg_to_sam(const mm_reg1_t *reg, const std::string &read_i
 			batch.mate_references.push_back(mate_ref);
 		}
 		batch.mate_positions.push_back(mate_pos);
+	} else if (is_paired && !is_unmapped) {
+		// The mate did not map: minimap2 places it at this record's position, and points this
+		// record there
+		batch.mate_references.push_back("=");
+		batch.mate_positions.push_back(reg->rs + 1);
 	} else {
 		batch.mate_references.push_back("*");
 		batch.mate_positions.push_back(0);
@@ -758,7 +778,7 @@ void Minimap2Aligner::reg_to_sam(const mm_reg1_t *reg, const std::string &read_i
 	batch.tag_xo_values.push_back(is_unmapped ? -1 : stats.gap_opens);   // XO: gap opens
 	batch.tag_xg_values.push_back(is_unmapped ? -1 : stats.gap_extends); // XG: gap extensions
 
-	// NM: use minimap2's O(1) formula instead of CIGAR walk (Opt 7)
+	// NM: minimap2's own formula from the hit's lengths, rather than a walk of the CIGAR
 	int64_t nm = reg->blen - reg->mlen + (reg->p ? reg->p->n_ambi : 0);
 	batch.tag_nm_values.push_back(is_unmapped ? -1 : nm);
 
@@ -775,8 +795,8 @@ void Minimap2Aligner::reg_to_sam(const mm_reg1_t *reg, const std::string &read_i
 	}
 	batch.tag_yt_values.push_back(yt);
 
-	// MD tag - use arena allocator for internal temp buffers (Opt 1),
-	// and pooled md_buf_ member to avoid per-call alloc/free (Opt 5)
+	// MD tag: minimap2's temporary buffers come from the thread buffer's arena, and md_buf_ is kept
+	// across calls (grown when a longer tag needs it) rather than allocated and freed per call
 	std::string md_tag;
 	if (reg->p && !is_unmapped) {
 		int md_len =

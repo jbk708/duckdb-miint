@@ -1253,7 +1253,7 @@ endif()
 find_program(CARGO cargo REQUIRED)
 message(STATUS "Found cargo: ${CARGO}")
 
-# emsdk 3.1.71 (the version DuckDB v1.5.5 pins for its WASM build) ships
+# emsdk 3.1.71 (the emsdk extension-ci-tools used for DuckDB v1.5) ships
 # binaryen v120, which predates the `bulk-memory-opt` and
 # `call-indirect-overlong` target-features that newer rustc/LLVM (>= LLVM 20,
 # i.e. Rust >= 1.87) stamp into wasm objects. At link time emcc forwards those
@@ -1263,6 +1263,8 @@ message(STATUS "Found cargo: ${CARGO}")
 # toolchain so the emitted objects stay within emsdk 3.1.71's binaryen feature
 # set. Matches the CI wasm-load job's `rust-toolchain@1.86.0`. Override only if
 # you have verified a different toolchain against emsdk 3.1.71.
+# extension-ci-tools builds DuckDB v2.0.0 extensions with emsdk 6.0.9, and the
+# glue builds under it with this pin.
 set(MIINT_WASM_RUST_TOOLCHAIN
     "1.86.0"
     CACHE

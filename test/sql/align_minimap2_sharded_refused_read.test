@@ -1,0 +1,81 @@
+# name: test/sql/align_minimap2_sharded_refused_read.test
+# description: A read the aligner refuses fails align_minimap2_sharded instead of hanging it
+# group: [sql]
+
+require miint
+
+# A pair with an empty mate 1 fails the query, naming the read (docs/alignment_reference.md).
+# Each case below leaves a worker waiting in ClaimWork for a shard when the read is refused;
+# the query has to fail rather than leave that worker waiting. The refused pair is inserted
+# after other reads of its shard, and a shard's reads stream in table order here (nothing
+# guarantees that order, but a waiting worker needs it).
+
+statement ok
+SET threads = 4;
+
+# n random bases, 32 per md5 digest
+statement ok
+CREATE MACRO random_bases(seed, n) AS (
+    SELECT string_agg(translate(md5((seed * 100 + k)::VARCHAR), '0123456789abcdef', 'ACGTACGTACGTACGT'), '')
+    FROM range(n // 32) t(k));
+
+# One worker per shard. The worker that finishes shard_b waits for shard_a, which it cannot
+# join; the worker on shard_a refuses the read after three sub-batches.
+statement ok
+CREATE TABLE one_worker AS
+SELECT 'r' || i AS read_id, random_bases(i, 96) AS sequence1, random_bases(i + 1000000, 96) AS sequence2,
+       'shard_a' AS shard_name
+FROM range(6144) t(i)
+UNION ALL
+SELECT 'on_shard_b', 'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA',
+       'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA', 'shard_b'
+UNION ALL
+SELECT 'no_mate1', '', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', 'shard_a';
+
+statement ok
+CREATE TABLE one_worker_reads AS SELECT read_id, sequence1, sequence2 FROM one_worker;
+
+statement ok
+CREATE TABLE one_worker_routing AS SELECT read_id, shard_name FROM one_worker;
+
+statement error
+SELECT count(*) FROM align_minimap2_sharded('one_worker_reads',
+    shard_directory := 'data/shards/',
+    read_to_shard := 'one_worker_routing',
+    max_threads_per_shard := 1);
+----
+read 'no_mate1': sequence1 is empty but sequence2 is not
+
+# Two workers per shard. One worker on shard_a finds its reads used up and waits for
+# shard_b, whose two workers keep it full; the other refuses the read at the end of shard_a's
+# last sub-batch, whose long reads keep it busy until then. DuckDB stops shard_b's workers
+# between the chunks of alignments they return, and the query has to end with the refused
+# read's error rather than leave the waiting worker waiting for them.
+statement ok
+CREATE TABLE two_workers AS
+SELECT 'a' || i AS read_id, random_bases(i, 96) AS sequence1, random_bases(i + 1000000, 96) AS sequence2,
+       'shard_a' AS shard_name
+FROM range(6144) t(i)
+UNION ALL
+SELECT 'a_long' || i, random_bases(i + 2000000, 960), random_bases(i + 3000000, 960), 'shard_a'
+FROM range(2047) t(i)
+UNION ALL
+SELECT 'no_mate1', '', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', 'shard_a'
+UNION ALL
+SELECT 'b' || i, 'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA',
+       'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA', 'shard_b'
+FROM range(20480) t(i);
+
+statement ok
+CREATE TABLE two_workers_reads AS SELECT read_id, sequence1, sequence2 FROM two_workers;
+
+statement ok
+CREATE TABLE two_workers_routing AS SELECT read_id, shard_name FROM two_workers;
+
+statement error
+SELECT count(*) FROM align_minimap2_sharded('two_workers_reads',
+    shard_directory := 'data/shards/',
+    read_to_shard := 'two_workers_routing',
+    max_threads_per_shard := 2);
+----
+read 'no_mate1': sequence1 is empty but sequence2 is not
