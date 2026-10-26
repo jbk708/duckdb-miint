@@ -480,7 +480,7 @@ Read one [myloasm](https://github.com/bluenote-1577/myloasm) output directory (i
 | [`read_myloasm_splits(dir)`](#read_myloasm_splitsdir) | `0-cleaning_and_unitigs/read_coverages.txt.gz`, `0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz` | chimera breakpoint |
 | [`read_myloasm_run(dir)`](#read_myloasm_rundir) | `myloasm*.log` | myloasm invocation |
 
-The formats were verified against myloasm 0.7.0's source and its real output; another version may write them differently. What the values mean (the depth tiers, thresholds and split conditions below) comes from myloasm's source. No function returns sequences. Contig sequences, alternates included, are in the FASTA files: join `read_fastx` on `fasta_id`.
+The formats were verified against myloasm 0.6.0's and 0.7.0's source and their real output; another version may write them differently. The two versions differ only in the GFA's `L` lines (see `read_myloasm_links`). What the values mean (the depth tiers, thresholds and split conditions below) comes from myloasm's source. No function returns sequences. Contig sequences, alternates included, are in the FASTA files: join `read_fastx` on `fasta_id`.
 
 myloasm tells strains apart with **SNPmers**: k-mers that span a variable site. Two reads, or a read and a contig, that share many SNPmers and contradict few come from the same strain.
 
@@ -550,6 +550,8 @@ The contig graph's edges, from the GFA's `L` lines.
 - `shared_snpmers`, `differing_snpmers`, `shared_minimizers` (BIGINT): The overlap's evidence
 - `snpmer_identity_percent` (DOUBLE, nullable): myloasm's identity estimate for the overlap; NULL when the ends share no minimizers
 - `from_read_id`, `from_split_suffix`, `to_read_id`, `to_split_suffix` (VARCHAR): The reads at the two ends that meet. Leaving a contig on `+` leaves from its last read and on `-` from its first; entering on `+` enters at its first read and on `-` at its last.
+
+myloasm 0.6.0 writes `L` lines without these tags, so for its links every column after the edge is NULL. The overlap length is unknown there, not 0: the GFA's overlap field is a `0M` placeholder in every version. A link that has some of the tags but not all of them is an error, as is a tagless link whose overlap is not `0M` and a file with both tagged and tagless links.
 
 #### `read_myloasm_splits(dir)`
 
