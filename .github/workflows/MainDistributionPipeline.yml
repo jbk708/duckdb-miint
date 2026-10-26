@@ -37,23 +37,12 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # PRE-RELEASE (DuckDB v2.0 has no release tag yet): build against the commit the
-  # duckdb submodule is pinned at, resolved by extension-ci-tools' own helper, instead
-  # of a literal duckdb_version. On release day put literal `duckdb_version: v2.0.0`
-  # back into both jobs below and drop this job (scripts/bump-duckdb-version.sh and
-  # scripts/check-duckdb-version.sh, and the published artifact names, expect them).
-  duckdb-submodule-version:
-    name: Resolve duckdb submodule pin
-    if: github.event_name != 'schedule'
-    uses: duckdb/extension-ci-tools/.github/workflows/_submodule_version.yml@v2.0-cyanoptera
-
   duckdb-stable-build:
     name: Build extension binaries
-    needs: duckdb-submodule-version
     if: github.event_name != 'schedule'
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v2.0-cyanoptera
     with:
-      duckdb_version: ${{ needs.duckdb-submodule-version.outputs.version }}
+      duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
       extension_name: miint
       extra_toolchains: 'rust;omp'
@@ -320,7 +309,7 @@ jobs:
   #  steps:
   #    - uses: actions/download-artifact@v4
   #      with:
-  #        name: miint-v1.5.5-extension-${{ matrix.wasm_arch }}
+  #        name: miint-v2.0.0-extension-${{ matrix.wasm_arch }}
 
   #    - name: Find WASM file
   #      id: find-wasm
@@ -418,11 +407,10 @@ jobs:
 
   code-quality-check:
     name: Code Quality Check
-    needs: duckdb-submodule-version
     if: github.event_name != 'schedule'
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v2.0-cyanoptera
     with:
-      duckdb_version: ${{ needs.duckdb-submodule-version.outputs.version }}
+      duckdb_version: v2.0.0
       ci_tools_version: v2.0-cyanoptera
       extension_name: miint
       format_checks: 'format;tidy'
