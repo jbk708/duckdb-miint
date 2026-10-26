@@ -1,6 +1,6 @@
 # Embedded Tools and Dependencies
 
-How duckdb-miint embeds external libraries and tools. `CMakeLists.txt` is the source of truth; this file explains the *why* and the non-obvious gotchas.
+How duckdb-miint embeds external libraries and tools. `CMakeLists.txt` and `cmake/` are the source of truth (layout and recipes: [`build-system.md`](build-system.md)); this file explains the *why* and the non-obvious gotchas.
 
 Five embedding categories:
 1. **Static libraries built from source** via `ExternalProject_Add`, linked into the extension
@@ -33,7 +33,7 @@ Run-time / conditional: `MIINT_USE_JEMALLOC` is set when DuckDB's jemalloc is li
 
 ## Reporting a new dependency's version
 
-1. `CMakeLists.txt`: when the version comes from `git describe`, capture it and pass it as a compile definition to both `${EXTENSION_NAME}` and `${LOADABLE_EXTENSION_NAME}`. A library that reports its own version through a header macro or a runtime call needs no capture.
+1. `cmake/deps/<name>.cmake`: when the version comes from `git describe`, call `miint_git_version(<NAME> ext/<dir>)`, which defines `<NAME>_GIT_VERSION` for every target. A library that reports its own version through a header macro or a runtime call needs no capture.
 2. `src/miint_extension.cpp`, `MiintVersionsBind`: add the row, under `#ifdef MIINT_HAS_<LIB>` when the library is optional.
 3. `test/sql/miint_versions.test`: update the library list and counts.
 4. This file: a section for the library and, when it is gated, a row in the feature-flag table above.
@@ -201,7 +201,7 @@ Four Rust crates — rype, sylph, sc and st3 — are statically linked into the 
   - `rype-fastx` — enables rype's needletail-based FASTX reader. Off on Emscripten and Windows/MinGW because needletail's `cdylib` crate type triggers linker errors (standalone-linking failures on WASM; unresolved `___chkstk_ms` on MSVC).
   - `arrow-ffi` — always on for rype and sylph; the extension consumes both via the Arrow C Data Interface for zero-copy FFI. st3-capi enables arrow's `ffi` itself.
   - sc has no Cargo feature: `sc-capi` is always linked, WASM included (see [sc subsystem](#sc-subsystem)).
-- **CMake exposure:** the umbrella is one `IMPORTED STATIC` target, `rype`, pointing at `libmiint_rust_glue.a`. The archive holds every crate's symbols, so linking `rype` provides sylph, sc and st3 too; there is no `sylph`, `sc` or `st3` target. The comment at the target in `CMakeLists.txt` says why a second target on the same archive is not used.
+- **CMake exposure:** the umbrella is one `IMPORTED STATIC` target, `rype`, pointing at `libmiint_rust_glue.a`. The archive holds every crate's symbols, so linking `rype` provides sylph, sc and st3 too; there is no `sylph`, `sc` or `st3` target. The comment at the target in `cmake/deps/rust_glue.cmake` says why a second target on the same archive is not used.
 - **Cross-compilation gotchas:**
   - Cargo `--target` flag selected per platform; `rustup target add` called at configure time.
   - **Emscripten:** `--target wasm32-unknown-emscripten` + `RUSTFLAGS=-C relocation-model=pic` (default wasm32 is static; DuckDB WASM side modules need PIC).
@@ -238,7 +238,7 @@ Four Rust crates — rype, sylph, sc and st3 — are statically linked into the 
 - **Purpose:** random forest classification and regression, nested cross-validation and path-dependent TreeSHAP, exposed as `fit_classifier`, `fit_regressor`, `predict`, `predict_proba`, `cross_validate_classifier`, `cross_validate_regressor`, `shap`, `feature_importances` and `model_features`. User documentation: [`docs/sample_classifier.md`](../sample_classifier.md).
 - **Why sc:** neither DuckDB nor any library embedded here offers random forests. sc reimplements scikit-learn's `RandomForestClassifier` / `RandomForestRegressor` as q2-sample-classifier (QIIME 2) uses them, and its oracle tests check it against scikit-learn. The alternative weighed was running scikit-learn out of process, which needs a Python environment on every host and cannot run in DuckDB-Wasm; sc is linked in-process and runs in both.
 - **Build:** `sc-capi` is a path dependency of the umbrella crate and is always linked, WASM included. It has no Cargo feature and no `MIINT_ENABLE_*` option.
-- **C API:** `sc.h`, which cbindgen generates in sc-capi's `build.rs`. CMake passes `SC_HEADER_DIR` (`<build dir>/sc_include`) to the glue build, so the header is written there rather than into the submodule, and native and WASM builds of one checkout each get their own. Cargo reruns the script when the C API's sources, the crate version or `SC_HEADER_DIR` change, so the header follows the linked symbols. A fresh build directory has no `sc.h` until the glue builds, so every target compiling a file that includes it builds after `miint_rust_glue_build` (`CMakeLists.txt`, at the `SC_HEADER_DIR` include directory).
+- **C API:** `sc.h`, which cbindgen generates in sc-capi's `build.rs`. CMake passes `SC_HEADER_DIR` (`<build dir>/sc_include`) to the glue build, so the header is written there rather than into the submodule, and native and WASM builds of one checkout each get their own. Cargo reruns the script when the C API's sources, the crate version or `SC_HEADER_DIR` change, so the header follows the linked symbols. A fresh build directory has no `sc.h` until the glue builds, so every target compiling a file that includes it builds after `miint_rust_glue_build` (`cmake/deps/rust_glue.cmake` adds it to `MIINT_TARGET_DEPENDENCIES`).
 - **Threads:** sc runs on rayon. Under Emscripten, `miint_rust_glue_init()`, called first in `LoadInternal`, builds rayon's global pool on the calling thread, which rype and sc share; rayon cannot start one there by itself.
 - **Reported as:** `sc` row in `miint_versions()`, the commit embedded.
 - **C++ wrappers:**
@@ -295,7 +295,7 @@ Four Rust crates — rype, sylph, sc and st3 — are statically linked into the 
 
 ### The two Eigen defines
 
-Both are `add_compile_definitions` in `CMakeLists.txt` — global, not per-source — and both are set for a reason that is easy to undo by accident.
+Both are `add_compile_definitions` in `cmake/system_deps.cmake` — global, not per-source — and both are set for a reason that is easy to undo by accident.
 
 - **`EIGEN_MPL2_ONLY`** confines the build to Eigen's pure-MPL2 subset, keeping miint's Modified-BSD licence clean. Nothing in the transitive include set of either Eigen user trips the guard.
 - **`EIGEN_DONT_PARALLELIZE`** exists because the extension links OpenMP (libssu is built `-fopenmp`), so `_OPENMP` is defined for miint's own sources too and Eigen would otherwise enable its parallel GEMM path. `mmvec`'s objective contains matrix products reducing over a long dimension (d1 = 2720 at cystic-fibrosis scale), and thread-count-dependent blocking would make a **seeded fit non-reproducible**. Measured at CF scale, seed 0, 500 iterations: with the define removed the same fit returns a different model as soon as `OMP_NUM_THREADS > 1` (final loss 1709324046711880.2 against 1709329920514833.8). It costs 3–5% of the fit's wall clock. The fit *is* threaded, but by `miint::WorkerPool` (`src/include/miint_parallel.hpp`) around the products rather than inside them, which is exactly why its values do not move — so this define is more load-bearing now, not less.
@@ -304,7 +304,7 @@ Global rather than per-source because Eigen's macros configure templates instant
 
 ### Per-instruction-set compilation of the mmvec kernel
 
-Eigen picks its packet width at **compile** time from `__AVX__` / `__AVX512F__` and does not runtime-dispatch. `__attribute__((target))` does not help — under it those macros are undefined at preprocessing time and Eigen still emits SSE2. Reaching a wider instruction set therefore means compiling a source *again* with different flags and choosing between the results at load time, which is what `miint_add_isa_variants()` in `CMakeLists.txt` does. Its only caller today is `src/mmvec_kernel.cpp`; the mechanism (`src/include/miint_isa.hpp`, the `MIINT_SIMD` override, the `MIINT_HAS_AVX2` / `MIINT_HAS_AVX512` feature macros) is deliberately subsystem-agnostic so a future dense kernel need not re-derive it.
+Eigen picks its packet width at **compile** time from `__AVX__` / `__AVX512F__` and does not runtime-dispatch. `__attribute__((target))` does not help — under it those macros are undefined at preprocessing time and Eigen still emits SSE2. Reaching a wider instruction set therefore means compiling a source *again* with different flags and choosing between the results at load time, which is what `miint_add_isa_variants()` in `cmake/isa_dispatch.cmake` does. Its only caller today is `src/mmvec_kernel.cpp`; the mechanism (`src/include/miint_isa.hpp`, the `MIINT_SIMD` override, the `MIINT_HAS_AVX2` / `MIINT_HAS_AVX512` feature macros) is deliberately subsystem-agnostic so a future dense kernel need not re-derive it.
 
 The precedent is htslib's htscodecs, which does the same thing and already ships through our distribution pipeline: the published `linux_amd64` artifact carries 78,583 AVX-512 and 25,511 AVX2 instructions (`rans_*_avx2` / `_avx512`, abPOA's aligner, OpenSSL's AES). Runtime dispatch needs **no CI or packaging change** — which matters because `DuckDBPlatform()` has no CPU-feature component and so cannot express a per-ISA download.
 
@@ -345,7 +345,7 @@ These are invoked via `fork`/`exec` at runtime; the extension links no code for 
   - DuckDB has no Arrow IPC byte-serialization at the C++ level (only the C Data Interface). gpl-boundary's wire format is FlatBuffers-framed Arrow IPC stream bytes, so we ship the official `nanoarrow_ipc` (~3k LOC, Apache 2.0) plus the `nanoarrow` C runtime and `flatcc` runtime it depends on.
   - **Pinned tag:** `apache-arrow-nanoarrow-0.8.0` (commit `a579fbf5...`).
   - **Symbol namespace:** `NANOARROW_NAMESPACE=miint` set in `third_party/nanoarrow_ipc/include/nanoarrow/nanoarrow_config.h`. Mangles every `Arrow*` and `ArrowIpc*` symbol to `miint_Arrow*` so we can't collide with DuckDB's bundled `duckdb_nanoarrow` (a C++ namespace).
-  - **CMake integration:** declared as an OBJECT library `miint_nanoarrow_ipc`. The main `CMakeLists.txt` wires it via `target_sources(... PRIVATE $<TARGET_OBJECTS:miint_nanoarrow_ipc>)` rather than `target_link_libraries` — the latter triggers DuckDB's export-set machinery and demands the static lib be exported, which it has no business being.
+  - **CMake integration:** declared as an OBJECT library `miint_nanoarrow_ipc`. `cmake/deps/gpl_boundary.cmake` adds `$<TARGET_OBJECTS:miint_nanoarrow_ipc>` to `MIINT_OBJECT_SOURCES`, which reaches each target through `target_sources` rather than `target_link_libraries` — the latter triggers DuckDB's export-set machinery and demands the static lib be exported, which it has no business being.
 - **Parity oracle:** `data/fasttree/{tiny,moderate}.golden.nwk` are bioconda FastTree binary outputs for committed input fixtures (`*.fa`); `*.golden.fixture.sha` holds the input's sha256 and `*.golden.fasttree.version` records which FastTree binary generated the golden. The parity test checks each fixture's SHA against its sidecar and fails on a mismatch. `test/sql/phylogeny_fasttree_parity.test` then verifies miint's daemon path produces topologically-identical trees (RF=0 via canonical bipartition multisets) with branch lengths matching within hybrid tolerance `max(1e-9, 1e-6 × max(|m|,|g|))`. Regenerate with `MIINT_FASTTREE_REGENERATE=1 bash run_tests.sh`.
 
 ### skb-arrow (process host for scikit-bio)
@@ -428,5 +428,5 @@ Extra libraries pulled in per platform (beyond the main target_link_libraries se
 
 ## WASM Loadable Extension Special Case
 
-DuckDB's `build_loadable_extension` on Emscripten runs a POST_BUILD `emcc` command to create the `.wasm` side module. It reads extra libs to link from `DUCKDB_EXTENSION_MIINT_LINKED_LIBS`, **not** from `target_link_libraries` (which only records metadata for `STATIC IMPORTED` targets on Emscripten). Without this explicit list, symbols like `gzclose` become unresolved imports and fail at load time with `"bad export type: undefined"`. The list is assembled in `CMakeLists.txt` around line 707–727.
+DuckDB's `build_loadable_extension` on Emscripten runs a POST_BUILD `emcc` command to create the `.wasm` side module. It reads extra libs to link from `DUCKDB_EXTENSION_MIINT_LINKED_LIBS`, **not** from `target_link_libraries` (which only records metadata for `STATIC IMPORTED` targets on Emscripten). Without this explicit list, symbols like `gzclose` become unresolved imports and fail at load time with `"bad export type: undefined"`. Each deps file appends its archive to `MIINT_WASM_LIBS`, and `CMakeLists.txt` joins that list into the variable.
 

@@ -151,7 +151,7 @@ Currently used by `align_minimap2` + `save_minimap2_index` (both sides), `copy_s
 1. Header in `src/include/` with TableFunction class
 2. Implement `Bind()`, `InitGlobal()`, `Execute()` in `src/`
 3. Register in `LoadInternal()` in `miint_extension.cpp`
-4. Add to `EXTENSION_SOURCES` in `CMakeLists.txt`
+4. Add to `MIINT_EXTENSION_SOURCES` in `CMakeLists.txt`, or in the feature's `cmake/deps` file if it needs an optional library ([build-system.md](build-system.md))
 5. Create SQL test in `test/sql/`
 6. If the function should run per-sample (partitioning an input relation by a column), follow `docs/internals/per-sample-pattern.md`
 7. If an argument names a relation to read, follow `docs/internals/reading-tables-views.md`, including its [CTE guard](reading-tables-views.md#ctes-reject-them-in-bind) and the matching `cte_relation_name_guard` test case
