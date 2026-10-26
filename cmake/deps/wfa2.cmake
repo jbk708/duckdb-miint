@@ -5,7 +5,7 @@
 # Keep -fPIC on every platform: required for WASM side module linking
 # (-sSIDE_MODULE=2) too.
 set(WFA2_FPIC "-fPIC")
-set(WFA2_ARCH_CFLAGS "${MIINT_OSX_ARCH_CFLAGS}${EMSCRIPTEN_THREAD_CFLAGS}")
+set(WFA2_ARCH_CFLAGS "${MIINT_OSX_ARCH_CFLAGS} ${EMSCRIPTEN_THREAD_CFLAGS}")
 
 ExternalProject_Add(
   wfa2_build

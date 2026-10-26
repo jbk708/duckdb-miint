@@ -653,7 +653,7 @@ permissions and limitations under the License.
 
 Minimal perfect hash functions. Transitive dependency of SortMeRNA,
 bundled into `libsortmerna_bundle.a` via the post-build `ar`-append
-step in `cmake/bundle_sortmerna.cmake`.
+step in `cmake/scripts/bundle_sortmerna.cmake`.
 
 - Repository: http://cmph.sourceforge.net/
 - Vendored location in this repo: `ext/sortmerna/3rdparty/cmph/` (submodule; same pin as SortMeRNA)
@@ -1127,7 +1127,7 @@ The UniFrac archives (`libssu_inmem.a` / `libskbb_inmem.a`) are compiled
 with `-fopenmp`, so the final extension must resolve their OpenMP runtime
 symbols. This runtime is **not** vendored in this repository — it is
 supplied by the platform toolchain and linked in via the `miint_openmp`
-INTERFACE target (see `CMakeLists.txt`). Only present when
+INTERFACE target (see `cmake/openmp.cmake`). Only present when
 `MIINT_ENABLE_UNIFRAC` is on and not building for Emscripten.
 
 - **Linux:** GCC's `libgomp`, `find_package(OpenMP)` → `OpenMP::OpenMP_CXX`.
@@ -1166,7 +1166,7 @@ time to its pure-MPL2 subset — see its row below.
 | curl | HTTP(S) transfers (INSDC/ENA paths) | `curl` (MIT/X-derivative) | Linked only when `MIINT_ENABLE_CURL` is on (auto-disabled on macOS to avoid an MD5/SHA1 symbol clash with vsearch) |
 | OpenSSL | TLS backend | `Apache-2.0` (OpenSSL 3.x) | Pulled in transitively by curl; present only where curl is linked |
 | HDF5 | HDF5 container I/O (fast5, etc.) | `BSD-3-Clause`-style (The HDF Group license) | Not built for Emscripten (`vcpkg.json` `platform: !emscripten`) |
-| Eigen | Linear algebra: `SelfAdjointEigenSolver` for the SYM/ARD Mk ancestral-state reconstruction, and the matrix backend for the vendored LBFGS++ used by `mmvec` | `MPL-2.0` | Header-only, so nothing is linked — the headers are compiled in. `EIGEN_MPL2_ONLY` is defined globally (`CMakeLists.txt`), which confines the build to Eigen's pure-MPL2 subset and keeps no stronger-copyleft file reachable. Authoritative text ships as `COPYING.MPL2` in the vcpkg source tree. A pinned, SHA-verified header-only Eigen 3.4.0 is fetched directly when the vcpkg CONFIG package is absent (the no-vcpkg "Tidy Check" CI lane only). |
+| Eigen | Linear algebra: `SelfAdjointEigenSolver` for the SYM/ARD Mk ancestral-state reconstruction, and the matrix backend for the vendored LBFGS++ used by `mmvec` | `MPL-2.0` | Header-only, so nothing is linked — the headers are compiled in. `EIGEN_MPL2_ONLY` is defined globally (`cmake/system_deps.cmake`), which confines the build to Eigen's pure-MPL2 subset and keeps no stronger-copyleft file reachable. Authoritative text ships as `COPYING.MPL2` in the vcpkg source tree. A pinned, SHA-verified header-only Eigen 3.4.0 is fetched directly when the vcpkg CONFIG package is absent (the no-vcpkg "Tidy Check" CI lane only). |
 
 Per the policy above, MPL-2.0 is identified by SPDX expression with a pointer to
 the upstream licence file rather than inlined. MPL-2.0 obligations attach

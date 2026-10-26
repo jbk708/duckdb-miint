@@ -13,7 +13,7 @@
 # Keep -fPIC on every platform: required for WASM side module linking
 # (-sSIDE_MODULE=2) too.
 set(MAFFT_FPIC "-fPIC")
-set(MAFFT_ARCH_CFLAGS "${MIINT_OSX_ARCH_CFLAGS}${EMSCRIPTEN_THREAD_CFLAGS}")
+set(MAFFT_ARCH_CFLAGS "${MIINT_OSX_ARCH_CFLAGS} ${EMSCRIPTEN_THREAD_CFLAGS}")
 
 ExternalProject_Add(
   mafft_build

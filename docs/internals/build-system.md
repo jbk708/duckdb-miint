@@ -47,9 +47,9 @@ A deps file builds its library, then appends to these lists. `include()` shares 
 
 ## Rules
 
-- **Include order is link order.** A static archive only resolves symbols for archives before it, so a library goes after every library that uses it. Compression codecs and platform libraries are appended last, in `CMakeLists.txt`.
+- **Include order is link order.** The linker resolves an archive's undefined symbols only from libraries after it, so a library goes after every library that uses it. zlib, expat, the compression codecs, Threads and the platform libraries are appended last, in `CMakeLists.txt`.
 - **Link by path what is outside DuckDB's export set.** The static extension is `install(EXPORT)`ed with DuckDB, which rejects link dependencies on targets outside that set. Link such a library as `$<TARGET_FILE:x>` and add `x` to `MIINT_TARGET_DEPENDENCIES` (see `abpoa.cmake`, `krepp.cmake`); feed OBJECT libraries through `MIINT_OBJECT_SOURCES`.
 - **Platform gates live only in the matrix.** A deps file may still turn its own feature off when a package is missing (`set(MIINT_ENABLE_<NAME> OFF)` then `return()`), as the tidy-check builds need.
 - **Headers whose names collide get a narrower scope.** `MIINT_INCLUDE_DIRS` reaches every miint translation unit, and its order decides which same-named header wins (vsearch's and skbb's `util.h`). When a library ships headers named like another's, scope them to the files that need them with `set_source_files_properties` (see `krepp.cmake`).
 - **`tests` sources must be DuckDB-free.** `tests` has no libduckdb and is built without `MIINT_STATIC_BUILD`, so a source in both lists is compiled twice with different `#ifdef`s. That is why the lists cannot share objects.
-- **Format `cmake/` by hand.** `make format-check` (and CI) checks the root `CMakeLists.txt` but nothing under `cmake/`, so run `cmake-format -i` on what you change there, in the `duckdb-format` environment.
+- **Format `cmake/` yourself.** `make format-check` covers the root `CMakeLists.txt` but nothing under `cmake/`; run `cmake-format -i` on what you change there, in the `duckdb-format` environment. CI's `cmake-format` job checks it.

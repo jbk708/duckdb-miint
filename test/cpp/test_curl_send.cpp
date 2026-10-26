@@ -6,7 +6,7 @@
 // Built only when `MIINT_ENABLE_CURL=ON` (default everywhere except macOS,
 // where vsearch's vendored MD5/SHA1 collide with libcurl→libcrypto and
 // Apple's ld lacks `--allow-multiple-definition`). On builds without
-// libcurl, this file is excluded by CMakeLists.txt; the guard below is a
+// libcurl, this file is excluded by cmake/deps/curl.cmake; the guard below is a
 // belt-and-braces backup if a future refactor unconditionally adds it.
 //   - GetCurlVersion returns a non-empty string starting with "libcurl"
 //   - RunCurlUpload to a non-existent local URL returns an error_message

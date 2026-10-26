@@ -101,7 +101,22 @@ endif()
 # ---------------------------------------------------------------------------
 # Each file below appends to the MIINT_* registration lists that
 # miint_configure_target() applies. Include order is link order: a library must
-# come after every library that uses it.
+# come after every library that uses it. Start every list empty: this file runs
+# inside DuckDB's tree, so a same-named variable from there or the cache would
+# otherwise reach all three targets.
+foreach(
+  list
+  EXTENSION_SOURCES
+  TEST_SOURCES
+  DEFINITIONS
+  INCLUDE_DIRS
+  LINK_LIBRARIES
+  OBJECT_SOURCES
+  TARGET_DEPENDENCIES
+  WASM_LIBS
+  SUBMODULE_VERSIONS)
+  set(MIINT_${list} "")
+endforeach()
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/miint_helpers.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/system_deps.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/openmp.cmake)
@@ -134,6 +149,9 @@ foreach(
 endforeach()
 
 # Libraries that the archives above depend on go last.
+list(APPEND MIINT_LINK_LIBRARIES ZLIB::ZLIB expat::expat Threads::Threads)
+list(APPEND MIINT_WASM_LIBS "$<TARGET_FILE:ZLIB::ZLIB>"
+     "$<TARGET_FILE:expat::expat>")
 if(HAVE_LIBZSTD)
   list(APPEND MIINT_LINK_LIBRARIES ${ZSTD_TARGET})
   list(APPEND MIINT_WASM_LIBS "$<TARGET_FILE:${ZSTD_TARGET}>")

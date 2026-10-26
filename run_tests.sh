@@ -3,7 +3,7 @@ set -e
 # Guard against the make-clean-build-target race (issue #83). A single `make`
 # invocation with both `clean` and a build goal lets -j run them concurrently,
 # and clean ends up rm-ing .o files mid-archive.
-if grep -nE '\bmake\b[^\n]*\bclean\b[^\n]*(\blib[A-Za-z0-9_]+\.a\b|\ball\b)' CMakeLists.txt; then
+if grep -rnE --include='*.cmake' --include=CMakeLists.txt '\bmake\b.*\bclean\b.*(\blib[A-Za-z0-9_]+\.a\b|\ball\b)' CMakeLists.txt cmake/; then
     echo "ERROR: BUILD_COMMAND has 'make ... clean <target>' on one line (race per #83)." >&2
     echo "Split into two sequential COMMAND steps." >&2
     exit 1

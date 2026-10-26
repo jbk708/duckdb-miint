@@ -73,10 +73,9 @@ add_compile_definitions(EIGEN_MPL2_ONLY)
 # all.
 add_compile_definitions(EIGEN_DONT_PARALLELIZE)
 
-list(APPEND MIINT_LINK_LIBRARIES Threads::Threads ZLIB::ZLIB expat::expat
-     Eigen3::Eigen)
-list(APPEND MIINT_WASM_LIBS "$<TARGET_FILE:ZLIB::ZLIB>"
-     "$<TARGET_FILE:expat::expat>")
+# Header-only, so its place in the link order does not matter. ZLIB, expat and
+# Threads are linked last, in CMakeLists.txt.
+list(APPEND MIINT_LINK_LIBRARIES Eigen3::Eigen)
 
 # libdeflate: accelerator for htslib bgzf gzip (FASTQ/FASTA/BAM COPY), ~3x over
 # zlib-parallel bgzf and ~37x over the original single-threaded gzip writer
