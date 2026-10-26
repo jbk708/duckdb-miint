@@ -652,8 +652,27 @@ echo "Running $FD_RELEASE_TEST with RLIMIT_NOFILE<=$FD_RELEASE_LIMIT..."
              "refusing to run $FD_RELEASE_TEST without real descriptor pressure" >&2
         exit 1
     fi
-    MIINT_LOW_FD_TEST=1 ./build/release/test/unittest "$FD_RELEASE_TEST"
+    MIINT_LOW_FD_TEST=1 ./build/release/test/unittest -w NoTests "$FD_RELEASE_TEST"
 ) || exit 1
+
+# sylph_index_create_thread_limit.test must run where no new thread can start: it asserts that
+# sylph_index_create then sketches every genome on the calling thread. The main pass cannot set
+# RLIMIT_NPROC, so the file holds itself back with `require-env MIINT_NPROC_LIMIT_TEST` and runs
+# here. The subshell lowers the limit and then execs the runner, since a fork would be refused
+# too. Only Linux counts threads against RLIMIT_NPROC, and root is not held to it; elsewhere the
+# file would pass without the limit doing anything, so it is skipped with a note.
+NPROC_LIMIT_TEST="test/sql/sylph_index_create_thread_limit.test"
+if [ "$(uname -s)" != "Linux" ]; then
+    echo "Skipping $NPROC_LIMIT_TEST: only Linux counts threads against RLIMIT_NPROC"
+elif [ "$(id -u)" = "0" ]; then
+    echo "Skipping $NPROC_LIMIT_TEST: root is not held to RLIMIT_NPROC"
+else
+    echo "Running $NPROC_LIMIT_TEST with RLIMIT_NPROC=1..."
+    (
+        ulimit -u 1 || exit 1
+        MIINT_NPROC_LIMIT_TEST=1 exec ./build/release/test/unittest -w NoTests "$NPROC_LIMIT_TEST"
+    ) || exit 1
+fi
 
 # The httpfs pass: every SQL file that needs httpfs, all of which `make test` above skips.
 # docs/testing.md ("Guards and skipped tests") says why, and how this pass loads httpfs and

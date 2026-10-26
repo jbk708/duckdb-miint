@@ -189,6 +189,10 @@ public:
 	static std::shared_ptr<SharedMinimap2Index> BuildSharedIndex(const std::vector<AlignmentSubject> &subjects,
 	                                                             const Minimap2Config &config);
 
+	// A read's length as minimap2 takes it (int). Throws, naming the read, for a read longer than
+	// INT_MAX bases.
+	static int QueryLength(size_t length, const char *read_id);
+
 	// Attach a shared index (clears any owned index)
 	void attach_shared_index(std::shared_ptr<SharedMinimap2Index> shared_idx);
 	// Detach the shared index (does not destroy it; other aligners may still reference it)
@@ -212,7 +216,7 @@ private:
 	std::vector<std::string> subject_names_;            // For reference name lookup
 	Minimap2TbufPtr tbuf_;                              // Reusable thread buffer
 	std::shared_ptr<SharedMinimap2Index> shared_index_; // Shared index (mutually exclusive with index_)
-	char *md_buf_ = nullptr;                            // Pooled buffer for mm_gen_MD (Opt 5)
+	char *md_buf_ = nullptr;                            // Reused by mm_gen_MD across calls
 	int md_max_len_ = 0;                                // Current capacity of md_buf_
 	std::string flipped_[2];                            // Reused by map_pair for a reverse-complemented mate
 
@@ -225,24 +229,26 @@ private:
 	const mm_mapopt_t *active_mapopt() const;
 	const std::vector<std::string> &active_subject_names() const;
 
+	// minimap2's hits for one read or mate: n of them in regs, each owning its p. Frees them with
+	// the allocator minimap2 allocated them with, on every path out.
+	struct MappedHits {
+		mm_reg1_t *regs = nullptr;
+		int n = 0;
+		MappedHits() = default;
+		MappedHits(const MappedHits &) = delete;
+		MappedHits &operator=(const MappedHits &) = delete;
+		~MappedHits();
+	};
+
 	// Internal alignment functions
 	void align_single(const std::string &read_id, const std::string &sequence, SAMRecordBatch &output);
 	void align_paired(const std::string &read_id, const std::string &sequence1, const std::string &sequence2,
 	                  SAMRecordBatch &output);
-	// Map a pair as minimap2 does: the hits of each segment come back
-	// against that segment as given. The caller frees regs with a RegionsGuard.
-	void map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname, int n_regs[2],
-	              mm_reg1_t *regs[2]);
-	// Map a single-end query as minimap2 does. The caller frees the result with a RegionsGuard.
-	mm_reg1_t *map_single(std::string_view sequence, const char *qname, int &n_regs);
-	// Frees `segments` arrays of regions as minimap2 allocated them (each region's p,
-	// then the array) when it goes, so also when appending a row throws.
-	struct RegionsGuard {
-		mm_reg1_t *const *regs;
-		const int *n_regs;
-		int segments;
-		~RegionsGuard();
-	};
+	// Map a pair as minimap2 does: the hits of each segment come back against that segment as
+	// given. Throws for a pair without mate 1, or one too long for minimap2.
+	void map_pair(std::string_view sequence1, std::string_view sequence2, const char *qname, MappedHits hits[2]);
+	// Map a single-end query as minimap2 does.
+	void map_single(std::string_view sequence, const char *qname, MappedHits &hits);
 	// Whether a region's reference is one of the index's subjects: align() emits a row for a
 	// region only when it is.
 	bool known_reference(int32_t rid) const;

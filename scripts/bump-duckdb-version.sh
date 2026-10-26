@@ -6,7 +6,7 @@
 # rewrite every in-repo spelling of the version, then verify with
 # check-duckdb-version.sh.
 #
-# The edits are purely mechanical but spread across six files, and two of them
+# The edits are purely mechanical but spread across four files, and two of them
 # have drifted silently in the past. This script exists so the mechanical part
 # stops being a human transcription exercise.
 #
@@ -171,11 +171,6 @@ edit must "python/pyproject.toml" \
     '(duckdb==)[0-9]+\.[0-9]+\.[0-9]+' \
     "\${1}${BARE}" \
     "python CLI pin"
-
-edit prose "CMakeLists.txt" \
-    '(the version DuckDB )v[0-9]+\.[0-9]+\.[0-9]+( pins)' \
-    "\${1}${VER}\${2}" \
-    "CMakeLists emsdk comment"
 
 # ---------------------------------------------------------------------------
 # Verify, then hand back

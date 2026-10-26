@@ -131,6 +131,37 @@ SELECT * FROM align_minimap2('queries', subject_table='paired_subjects');
 ----
 non-NULL sequence2
 
+# A query pair needs mate 1. An empty or NULL sequence2 marks a single-end row, whose sequence1
+# is mapped alone; an empty sequence1 beside a non-empty sequence2 fails the query, naming the read.
+statement ok
+CREATE TABLE no_mate1 AS SELECT * FROM (VALUES
+    ('query1', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', NULL),
+    ('no_mate1', '', 'TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA')
+) AS t(read_id, sequence1, sequence2);
+
+statement error
+SELECT * FROM align_minimap2('no_mate1', subject_table='subjects');
+----
+read 'no_mate1': sequence1 is empty but sequence2 is not
+
+statement ok
+CREATE TABLE no_mate2 AS SELECT * FROM (VALUES
+    ('no_mate2', 'ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT', '')
+) AS t(read_id, sequence1, sequence2);
+
+# The read is its own reverse complement, so the strand it maps to rests on a tie minimap2
+# breaks; whether it maps as a pair (0x1) is what this checks.
+query III
+SELECT read_id, flags & 1 AS paired, reference FROM align_minimap2('no_mate2', subject_table='subjects', max_secondary=0);
+----
+no_mate2	0	ref1
+
+statement ok
+DROP TABLE no_mate1;
+
+statement ok
+DROP TABLE no_mate2;
+
 # Test: subject table with sequence2 column (all NULL) should be accepted
 # Previously this failed at bind time; now the sequence2 column is tolerated if all NULL
 statement ok

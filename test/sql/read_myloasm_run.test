@@ -52,6 +52,19 @@ FROM read_myloasm_run('{TEST_DIR}/ecoli_sim');
 ----
 true	2026-10-15 12:44:45.889	0.7.0	myloasm reads.fa -o run1 --hifi -t 1	21	11	true
 
+# myloasm 0.6.0 writes the same COMMAND and VERSION lines, and its argument rules for k and c
+# are 0.7.0's. The version is how a reader of its links knows why their evidence is NULL.
+statement ok
+COPY (SELECT 1 AS x) TO '{TEST_DIR}/ecoli_sim_0.6.0' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
+
+unzip data/myloasm/ecoli_sim_0.6.0/myloasm.log.gz {TEST_DIR}/ecoli_sim_0.6.0/myloasm.log
+
+query TTTIIT
+SELECT started_at, myloasm_version, command, kmer_size, compression, hifi
+FROM read_myloasm_run('{TEST_DIR}/ecoli_sim_0.6.0');
+----
+2026-10-26 12:11:47.338	0.6.0	myloasm reads.fa -o run1 --hifi -t 1	21	11	true
+
 # --- Intent: k and c are the values the run used ---
 
 # myloasm logs its command line, not its settings, so k and c follow its argument rules

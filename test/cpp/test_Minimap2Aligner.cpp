@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include "Minimap2Aligner.hpp"
 #include "SAMRecord.hpp"
 #include "SequenceRecord.hpp"
@@ -6,6 +7,7 @@
 #include "sequence_utils.hpp"
 #include <algorithm>
 #include <atomic>
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -307,6 +309,49 @@ TEST_CASE("Minimap2Aligner paired-end alignment", "[Minimap2Aligner]") {
 	}
 	REQUIRE(found_read1);
 	REQUIRE(found_read2);
+}
+
+TEST_CASE("Minimap2Aligner maps a pair only when it has mate 1", "[Minimap2Aligner]") {
+	// An empty sequence2 marks a single-end row (a NULL sequence2 reaches the aligner as an empty
+	// string), so its sequence1 is mapped alone. An empty sequence1 beside a non-empty sequence2
+	// has no such reading, and is refused by the read's name.
+	Minimap2Config config;
+	config.preset = "sr";
+	Minimap2Aligner aligner(config);
+	std::string read1_seq = "ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT";
+	std::string read2_seq = "TGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCA";
+	std::vector<AlignmentSubject> subjects;
+	subjects.push_back({"reference", read1_seq + std::string(200, 'N') + read2_seq});
+	aligner.build_index(subjects);
+
+	SECTION("an empty mate 1 fails, naming the read") {
+		auto queries = make_paired_query_batch("no_mate1", "", read2_seq);
+		SAMRecordBatch batch;
+		REQUIRE_THROWS_WITH(aligner.align(queries, batch),
+		                    Catch::Matchers::ContainsSubstring("'no_mate1'") &&
+		                        Catch::Matchers::ContainsSubstring("sequence1 is empty"));
+	}
+
+	SECTION("an empty mate 2 maps mate 1 single-end") {
+		auto queries = make_paired_query_batch("no_mate2", read1_seq, "");
+		SAMRecordBatch batch;
+		aligner.align(queries, batch);
+		REQUIRE(batch.size() >= 1);
+		for (size_t i = 0; i < batch.size(); i++) {
+			REQUIRE((batch.flags[i] & 0x1) == 0);
+		}
+	}
+}
+
+TEST_CASE("Minimap2Aligner::QueryLength refuses a length minimap2 cannot take", "[Minimap2Aligner]") {
+	// minimap2 takes a read's length as int: a length of INT_MAX + 1 is refused with the read's
+	// name rather than passed on as a negative length.
+	REQUIRE(Minimap2Aligner::QueryLength(INT_MAX, "longest") == INT_MAX);
+	REQUIRE_THROWS_WITH(Minimap2Aligner::QueryLength(static_cast<size_t>(INT_MAX) + 1, "too_long"),
+	                    Catch::Matchers::ContainsSubstring("'too_long'"));
+	// any_mapped() may be given no name; the refusal still comes, rather than a null dereference.
+	REQUIRE_THROWS_WITH(Minimap2Aligner::QueryLength(static_cast<size_t>(INT_MAX) + 1, nullptr),
+	                    Catch::Matchers::ContainsSubstring("read ''"));
 }
 
 TEST_CASE("Minimap2Aligner build_single_index for per-subject mode", "[Minimap2Aligner]") {
@@ -1325,6 +1370,10 @@ TEST_CASE("any_mapped routes an empty mate the way align() does", "[Minimap2Alig
 	REQUIRE(aligner.any_mapped(hit, "", "se"));
 	// minimap2 is never called on an empty query; align() emits nothing for it.
 	REQUIRE_FALSE(aligner.any_mapped("", "", "empty"));
+	// A pair without mate 1 is refused as align() refuses it: mapped, its empty segment would fail
+	// minimap2's arena-leak assert and end the process.
+	REQUIRE_THROWS_WITH(aligner.any_mapped("", hit, "no_mate1"),
+	                    Catch::Matchers::ContainsSubstring("read 'no_mate1': sequence1 is empty"));
 }
 
 TEST_CASE("any_mapped requires an index", "[Minimap2Aligner]") {

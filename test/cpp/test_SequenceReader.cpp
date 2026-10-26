@@ -383,8 +383,7 @@ TEST_CASE("SequenceReader reports a failed open as a failed open, not an empty f
 		fixture.write_temp_fastq(path, {fixture.simple_read("read1", "ATGC", "IIII")});
 		// Root ignores permission bits, so this case cannot be exercised as root.
 		if (geteuid() == 0) {
-			SUCCEED("skipped: running as root, permission bits are not enforced");
-			return;
+			SKIP("permission bits are not enforced for root");
 		}
 		std::filesystem::permissions(path, std::filesystem::perms::none);
 
@@ -690,6 +689,68 @@ TEST_CASE("SequenceReader byte budget PE: large pairs do not over-prefetch", "[S
 	}
 	REQUIRE((total == 8));
 	REQUIRE((reader.MaxPollCount() == 1));
+}
+
+TEST_CASE("SequenceReader byte budget SE: a poll asks only for the room left in the budget",
+          "[SequenceReader][byte_budget]") {
+	// Records a poll brings in beyond the budget are held until the next read(), outside DuckDB's
+	// memory_limit. A long record fills most of the budget and short ones follow, so the poll that
+	// reaches the budget is sized by a short record: by the room left it asks for 3 of them, by the
+	// whole budget it would ask for POLL_CHUNK_SIZE (16) and hold 13.
+	TempFileFixture fixture;
+	auto path = "budget_room_left.fq";
+	std::vector<std::string> records;
+	records.push_back(fixture.simple_read("long", std::string(4500, 'A'), std::string(4500, 'I')));
+	for (int i = 10; i < 50; i++) {
+		records.push_back(fixture.simple_read("s" + std::to_string(i), std::string(50, 'C'), std::string(50, 'I')));
+	}
+	fixture.write_temp_fastq(path, records);
+
+	// Record bytes are name + seq + qual: 9,004 for the long record, 103 for each short one. After
+	// the long record and the first short one, 9,500 - 9,107 = 393 bytes are left: 3 short records.
+	miint::SequenceReader reader(path);
+	auto batch = reader.read(100, 9500);
+	REQUIRE((batch.size() == 5));
+	INFO("largest poll: " << reader.MaxPollCount() << " records");
+	REQUIRE((reader.MaxPollCount() == 3));
+
+	size_t total = batch.size();
+	for (batch = reader.read(100, 9500); !batch.empty(); batch = reader.read(100, 9500)) {
+		total += batch.size();
+	}
+	REQUIRE((total == records.size()));
+}
+
+TEST_CASE("SequenceReader byte budget PE: a poll asks only for the room left in the budget",
+          "[SequenceReader][byte_budget]") {
+	// As for single-end records above, counting both mates of a pair.
+	TempFileFixture fixture;
+	auto r1 = "budget_room_left_r1.fq";
+	auto r2 = "budget_room_left_r2.fq";
+	std::vector<std::string> recs1, recs2;
+	recs1.push_back(fixture.simple_read("long", std::string(4500, 'A'), std::string(4500, 'I')));
+	recs2.push_back(fixture.simple_read("long", std::string(4500, 'C'), std::string(4500, 'I')));
+	for (int i = 10; i < 50; i++) {
+		const std::string id = "s" + std::to_string(i);
+		recs1.push_back(fixture.simple_read(id, std::string(50, 'A'), std::string(50, 'I')));
+		recs2.push_back(fixture.simple_read(id, std::string(50, 'C'), std::string(50, 'I')));
+	}
+	fixture.write_temp_fastq(r1, recs1);
+	fixture.write_temp_fastq(r2, recs2);
+
+	// Pair bytes: 18,008 for the long pair, 206 for each short one. After the long pair and the
+	// first short one, 19,000 - 18,214 = 786 bytes are left: 3 short pairs.
+	miint::SequenceReader reader(r1, r2);
+	auto batch = reader.read(100, 19000);
+	REQUIRE((batch.size() == 5));
+	INFO("largest poll: " << reader.MaxPollCount() << " pairs");
+	REQUIRE((reader.MaxPollCount() == 3));
+
+	size_t total = batch.size();
+	for (batch = reader.read(100, 19000); !batch.empty(); batch = reader.read(100, 19000)) {
+		total += batch.size();
+	}
+	REQUIRE((total == recs1.size()));
 }
 
 TEST_CASE("SequenceReader byte budget SE: small records still poll in chunks", "[SequenceReader][byte_budget]") {
@@ -1383,6 +1444,23 @@ TEST_CASE("SequenceReader reads a multi-member gzip file to the end", "[Sequence
 
 	miint::SequenceReader reader(path);
 	REQUIRE(read_all(reader) == 3000);
+}
+
+TEST_CASE("SequenceReader reads a local gzip file by its content, whatever its name", "[SequenceReader][compression]") {
+	// A local file is opened with gzopen, which inflates gzip data and passes any other data
+	// through, so gzip data under a name without .gz reads as the same records as the plain file.
+	TempFileFixture fixture;
+	auto records = varied_reads(fixture, 1000);
+	fixture.write_temp_gz("gzip_without_suffix.fq", records);
+	fixture.write_temp_fastq("plain_control.fq", records);
+
+	miint::SequenceReader gzipped("gzip_without_suffix.fq");
+	miint::SequenceReader plain("plain_control.fq");
+	auto from_gzip = gzipped.read(2000);
+	auto from_plain = plain.read(2000);
+	REQUIRE((from_plain.size() == 1000));
+	REQUIRE((from_gzip.read_ids == from_plain.read_ids));
+	REQUIRE((from_gzip.sequences1 == from_plain.sequences1));
 }
 
 // FASTQ is read as strict four-line records: header, sequence, '+', quality, one line each.

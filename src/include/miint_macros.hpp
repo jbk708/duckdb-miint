@@ -198,8 +198,8 @@ const std::string READ_GFA_LINKS = // NOLINT
 // read_myloasm_contigs / _layout / _links / _splits / _mappings / _run (dir)
 //
 // One myloasm `-o` directory as tables, over read_fastx, read_gfa, read_gfa_links, read_paf
-// and read_csv. Every format detail here was checked against myloasm 0.7.0's source and its
-// real output (data/myloasm/README.md); the user-facing caveats are in docs/reading.md. Each
+// and read_csv. Every format detail here was checked against myloasm 0.6.0's and 0.7.0's
+// source and their real output (data/myloasm/README.md); the user-facing caveats are in docs/reading.md. Each
 // macro reads only the member files it needs, and a missing one is the reader's file error.
 //
 // Coordinates follow miint's convention, 1-based half-open: contig `position`/`stop_position`
@@ -420,8 +420,15 @@ const std::string READ_MYLOASM_LAYOUT = // NOLINT
 // read_myloasm_links(dir): the GFA's L lines with myloasm's tags (described on the GFA's
 // second line). r1/r2 are the reads at the two contig ends that meet; fs is omitted when the
 // contigs share no minimizers. The overlap field is a 0M placeholder and is dropped.
+// myloasm 0.6.0 writes L lines with none of these tags, so their columns are NULL. A link
+// with some of the tags but not all, or a file with both forms, is not myloasm's.
 const std::string READ_MYLOASM_LINKS = // NOLINT
     "CREATE OR REPLACE MACRO read_myloasm_links(dir) AS TABLE "
+    "WITH l AS ( "
+    "  SELECT *, tags['ol'] IS NULL AND tags['ss'] IS NULL AND tags['sd'] IS NULL AND tags['sm'] IS NULL "
+    "            AND tags['fs'] IS NULL AND tags['r1'] IS NULL AND tags['r2'] IS NULL AS tagless "
+    "  FROM read_gfa_links(_miint_myloasm_path(dir, 'final_contig_graph.gfa')) "
+    ") "
     "SELECT from_segment AS from_contig_id, from_orientation, to_segment AS to_contig_id, to_orientation, "
     "       tags['ol']::BIGINT AS overlap_length, "
     "       tags['ss']::BIGINT AS shared_snpmers, "
@@ -432,16 +439,28 @@ const std::string READ_MYLOASM_LINKS = // NOLINT
     "       _miint_myloasm_split_suffix(tags['r1']) AS from_split_suffix, "
     "       _miint_myloasm_read_id(tags['r2']) AS to_read_id, "
     "       _miint_myloasm_split_suffix(tags['r2']) AS to_split_suffix "
-    "FROM read_gfa_links(_miint_myloasm_path(dir, 'final_contig_graph.gfa')) "
+    "FROM l "
     "WHERE CASE "
+    "        WHEN tagless AND overlap IS DISTINCT FROM '0M' "
+    "        THEN error(printf('read_myloasm_links: link %s%s -> %s%s has no tags and overlap %s, "
+    "not myloasm''s 0M placeholder', "
+    "                          from_segment, from_orientation, to_segment, to_orientation, coalesce(overlap, '*'))) "
+    "        WHEN tagless THEN TRUE "
     "        WHEN TRY_CAST(tags['ol'] AS BIGINT) IS NULL OR TRY_CAST(tags['ss'] AS BIGINT) IS NULL "
     "          OR TRY_CAST(tags['sd'] AS BIGINT) IS NULL OR TRY_CAST(tags['sm'] AS BIGINT) IS NULL "
     "          OR (tags['fs'] IS NOT NULL AND TRY_CAST(tags['fs'] AS DOUBLE) IS NULL) "
     "          OR tags['r1'] IS NULL OR tags['r2'] IS NULL "
-    "        THEN error(printf('read_myloasm_links: link %s%s -> %s%s lacks myloasm''s ol/ss/sd/sm/r1/r2 tags', "
+    "        THEN error(printf('read_myloasm_links: link %s%s -> %s%s has some of myloasm''s tags but not "
+    "all of ol/ss/sd/sm/r1/r2 with valid values; myloasm 0.7.0 writes all of them and 0.6.0 none', "
     "                          from_segment, from_orientation, to_segment, to_orientation)) "
     "        ELSE TRUE "
-    "      END; ";
+    "      END "
+    "QUALIFY CASE "
+    "          WHEN count(*) FILTER (tagless) OVER () > 0 AND count(*) FILTER (NOT tagless) OVER () > 0 "
+    "          THEN error('read_myloasm_links: final_contig_graph.gfa has links with myloasm''s tags (0.7.0) "
+    "and links without them (0.6.0)') "
+    "          ELSE TRUE "
+    "        END; ";
 
 // read_myloasm_mappings(dir): the final mapping of every read to the unpolished contigs.
 // Each record names r<index>-<read> (myloasm's internal read number, then the read); its

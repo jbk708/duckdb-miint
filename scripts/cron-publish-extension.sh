@@ -80,7 +80,7 @@ if [[ -n "${1:-}" ]]; then
 fi
 
 : "${REPO:=the-miint/duckdb-miint}"
-: "${BRANCH:=v1.5-variegata}"
+: "${BRANCH:=v2.0-cyanoptera}"
 : "${WORKFLOW:=MainDistributionPipeline.yml}"
 
 # Which streams to publish this invocation, space-separated. Default is both.
@@ -101,7 +101,7 @@ fi
 # DUCKDB_VERSION must match both the duckdb submodule pin and the
 # duckdb_version input in .github/workflows/MainDistributionPipeline.yml.
 # When the extension targets a new DuckDB version, bump all three together.
-: "${DUCKDB_VERSION:=v1.5.5}"
+: "${DUCKDB_VERSION:=v2.0.0}"
 
 : "${DEST_USER:?DEST_USER is required}"
 : "${DEST_HOST:?DEST_HOST is required}"
@@ -589,9 +589,9 @@ log "All streams processed ($prefix)."
 # Example env file (save as e.g. /etc/miint-publish.env, chmod 600):
 #
 #   REPO=the-miint/duckdb-miint
-#   BRANCH=v1.5-variegata
+#   BRANCH=v2.0-cyanoptera
 #   WORKFLOW=MainDistributionPipeline.yml
-#   DUCKDB_VERSION=v1.5.5
+#   DUCKDB_VERSION=v2.0.0
 #   STREAMS="branch tagged"          # or just "branch" / just "tagged"
 #   DEST_USER=deploy
 #   DEST_HOST=repo.example.com

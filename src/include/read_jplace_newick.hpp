@@ -25,7 +25,7 @@ public:
 		FileSystem &fs;
 
 		idx_t MaxThreads() const override {
-			return std::min<idx_t>(file_paths.size(), std::thread::hardware_concurrency());
+			return file_paths.size();
 		}
 
 		GlobalState(const std::vector<std::string> &paths, FileSystem &fs_ref)

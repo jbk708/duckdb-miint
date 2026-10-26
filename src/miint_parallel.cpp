@@ -2,7 +2,6 @@
 
 #include <stdexcept>
 #include <string>
-#include <system_error>
 
 namespace miint {
 
@@ -46,13 +45,12 @@ WorkerPool::WorkerPool(int n_threads) {
 		for (int t = 1; t < n_threads; ++t) {
 			workers_.emplace_back([this] { WorkerLoop(); });
 		}
-	} catch (const std::system_error &) {
-		// The thread constructor failed, e.g. EAGAIN under a pids/ulimit cap. Do
-		// NOT let it unwind past the joinable threads already in `workers_` -- a
-		// joinable std::thread's destructor calls std::terminate() and would crash
-		// the process. Degrade instead: whatever threads we did get are perfectly
-		// usable, and Threads() reports the smaller budget. Same defence, and the
-		// same reasoning, as community_distances.cpp.
+	} catch (...) {
+		// The thread constructor failed, e.g. EAGAIN under a pids/ulimit cap, or no
+		// memory for the thread's state. It must not unwind past the joinable threads
+		// already in `workers_`: a joinable std::thread's destructor calls
+		// std::terminate() and would crash the process. Degrade instead: the threads
+		// that did start do the work, and Threads() reports the smaller budget.
 		//
 		// `workers_` is pre-reserved, so emplace_back itself cannot throw
 		// bad_alloc; the thread constructor is the only thing here that throws.

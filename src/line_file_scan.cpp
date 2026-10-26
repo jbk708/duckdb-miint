@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <climits>
-#include <thread>
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
@@ -59,7 +58,7 @@ namespace {
 
 unique_ptr<GlobalTableFunctionState> InitLineScanGlobal(ClientContext &context, TableFunctionInitInput &input) {
 	auto &data = input.bind_data->Cast<LineScanData>();
-	idx_t threads = std::max<idx_t>(1, std::min<idx_t>(data.file_paths.size(), std::thread::hardware_concurrency()));
+	idx_t threads = std::max<idx_t>(1, data.file_paths.size());
 	return make_uniq<LineScanGlobalState>(threads);
 }
 

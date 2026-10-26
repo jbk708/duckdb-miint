@@ -4,6 +4,7 @@
 #include "table_function_common.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/vector_size.hpp"
+#include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 #include "duckdb/common/vector/flat_vector.hpp"
 #include "duckdb/common/vector/list_vector.hpp"
@@ -84,7 +85,8 @@ unique_ptr<GlobalTableFunctionState> ReadSequencesSamTableFunction::InitGlobal(C
 	auto &data = input.bind_data->Cast<Data>();
 	auto &fs = FileSystem::GetFileSystem(context);
 
-	return duckdb::make_uniq<GlobalState>(data.file_paths, fs, data.uses_stdin);
+	return duckdb::make_uniq<GlobalState>(data.file_paths, fs, data.uses_stdin,
+	                                      NumericCast<int>(TaskScheduler::GetScheduler(context).NumberOfThreads()));
 }
 
 unique_ptr<LocalTableFunctionState> ReadSequencesSamTableFunction::InitLocal(ExecutionContext &context,

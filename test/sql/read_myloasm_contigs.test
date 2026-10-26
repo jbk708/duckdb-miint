@@ -294,3 +294,31 @@ statement error
 SELECT * FROM read_myloasm_contigs('{TEST_DIR}/contigs_missing');
 ----
 contigs_missing/alternate_assemblies/duplicated_contigs.fa
+
+# --- myloasm 0.6.0 ---
+
+# myloasm 0.6.0 wrote the same S lines and FASTAs as 0.7.0 from the fixture reads; its GFA
+# differs only in its L lines (data/myloasm/README.md), so reuse 0.7.0's FASTAs.
+foreach dir ecoli_sim_0.6.0 ecoli_sim_0.6.0/alternate_assemblies
+
+statement ok
+COPY (SELECT 1 AS x) TO '{TEST_DIR}/{dir}' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
+
+endloop
+
+unzip data/myloasm/ecoli_sim_0.6.0/final_contig_graph.gfa.gz {TEST_DIR}/ecoli_sim_0.6.0/final_contig_graph.gfa
+
+unzip data/myloasm/ecoli_sim/assembly_primary.fa.gz {TEST_DIR}/ecoli_sim_0.6.0/assembly_primary.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/assembly_alternate.fa.gz {TEST_DIR}/ecoli_sim_0.6.0/alternate_assemblies/assembly_alternate.fa
+
+unzip data/myloasm/ecoli_sim/alternate_assemblies/duplicated_contigs.fa.gz {TEST_DIR}/ecoli_sim_0.6.0/alternate_assemblies/duplicated_contigs.fa
+
+query II
+SELECT (SELECT count(*) FROM (
+          (SELECT * FROM read_myloasm_contigs('{TEST_DIR}/ecoli_sim') EXCEPT ALL SELECT * FROM read_myloasm_contigs('{TEST_DIR}/ecoli_sim_0.6.0'))
+          UNION ALL
+          (SELECT * FROM read_myloasm_contigs('{TEST_DIR}/ecoli_sim_0.6.0') EXCEPT ALL SELECT * FROM read_myloasm_contigs('{TEST_DIR}/ecoli_sim')))),
+       (SELECT count(*) FROM read_myloasm_contigs('{TEST_DIR}/ecoli_sim_0.6.0'));
+----
+0	5

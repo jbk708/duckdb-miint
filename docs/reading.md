@@ -58,13 +58,13 @@ SELECT * FROM read_fastx('some_file.fasta');
 - `filepath` (VARCHAR, optional): File path when include_filepath=true
 
 **Behavior:**
-- Detects FASTA (`>` headers) or FASTQ (`@` headers) from the file's content, whatever its extension
-- Supports gzip-compressed files (.gz extension)
+- Detects FASTA (`>` headers) or FASTQ (`@` headers) from the file's content, whatever its extension. Both files of a pair must be the same format: a FASTA file paired with a FASTQ file fails the query
+- Reads gzip-compressed files. A local file is recognized as gzip by its content, whatever its name; a remote file (`s3://`, `https://`) only by a `.gz` extension
 - Supports stdin input using `-` or `/dev/stdin` (single file only, no paired-end)
 - Quality scores converted to integers using specified offset (Phred+33 or Phred+64)
 - FASTQ records, those whose header starts with `@`, must be four lines each: header, sequence, `+`, quality, with the quality as long as the sequence. Blank lines, including lines of nothing but whitespace, may come before the first record and between records, and are ignored. Wrapped (multi-line) FASTQ is rejected; FASTA sequences may span any number of lines, and text before the first FASTA header (such as `;` comments) is skipped
 - A malformed record, a file that ends inside a FASTQ record, a truncated or corrupt gzip file, or NUL bytes where a record should start (such as the zero-filled block a crash can leave) fail the query rather than returning the records before it. The error names the file, and either the malformed record or how many records were read before the read failed; for damaged gzip data that count can stop short of the damage, since the data is inflated in blocks
-- Supports parallel processing (8 threads for files, 1 thread for stdin)
+- Reads files in parallel, one thread per file (per pair of files for paired input), up to DuckDB's `threads` setting; stdin is read on one thread
 - Each local regular file can be decompressed and parsed on a thread of its own, ahead of the rows being produced. This is decided once for the whole scan: it happens only if every file in the scan, each taking one of DuckDB's threads plus one more thread (two for a pair), fits in `threads` at once. With `SET threads = 8` that is up to four single-end files or two pairs. The count covers every file even when DuckDB reads them one at a time, as it does for a sink that keeps insertion order (a `CREATE TABLE ... AS` under the default `preserve_insertion_order`). Each read-ahead stops once it holds 4 MiB of records, or `max_batch_bytes` if that is smaller, passing it by about a record (by up to sixteen where record lengths jump). Remote files and pipes (stdin from a pipe included) are read without it, as is everything in DuckDB-Wasm
 - For paired-end data, reads are matched by position in files (not by ID)
 
@@ -185,7 +185,7 @@ SELECT * FROM read_alignments('some_alignments.sam')
 - Auto-detects file format from content
 - Supports gzip-compressed SAM files
 - Supports stdin input using `-` or `/dev/stdin` (single file only, not in arrays)
-- Supports parallel processing (4 threads for files, single-threaded for stdin)
+- Reads files in parallel, one thread per file, up to DuckDB's `threads` setting; stdin is read on one thread
 - For headerless SAM files, provide reference information via `reference_lengths` parameter
 
 **Examples:**
@@ -480,7 +480,7 @@ Read one [myloasm](https://github.com/bluenote-1577/myloasm) output directory (i
 | [`read_myloasm_splits(dir)`](#read_myloasm_splitsdir) | `0-cleaning_and_unitigs/read_coverages.txt.gz`, `0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz` | chimera breakpoint |
 | [`read_myloasm_run(dir)`](#read_myloasm_rundir) | `myloasm*.log` | myloasm invocation |
 
-The formats were verified against myloasm 0.7.0's source and its real output; another version may write them differently. What the values mean (the depth tiers, thresholds and split conditions below) comes from myloasm's source. No function returns sequences. Contig sequences, alternates included, are in the FASTA files: join `read_fastx` on `fasta_id`.
+The formats were verified against myloasm 0.6.0's and 0.7.0's source and their real output; another version may write them differently. The two versions differ only in the GFA's `L` lines (see `read_myloasm_links`). What the values mean (the depth tiers, thresholds and split conditions below) comes from myloasm's source. No function returns sequences. Contig sequences, alternates included, are in the FASTA files: join `read_fastx` on `fasta_id`.
 
 myloasm tells strains apart with **SNPmers**: k-mers that span a variable site. Two reads, or a read and a contig, that share many SNPmers and contradict few come from the same strain.
 
@@ -550,6 +550,8 @@ The contig graph's edges, from the GFA's `L` lines.
 - `shared_snpmers`, `differing_snpmers`, `shared_minimizers` (BIGINT): The overlap's evidence
 - `snpmer_identity_percent` (DOUBLE, nullable): myloasm's identity estimate for the overlap; NULL when the ends share no minimizers
 - `from_read_id`, `from_split_suffix`, `to_read_id`, `to_split_suffix` (VARCHAR): The reads at the two ends that meet. Leaving a contig on `+` leaves from its last read and on `-` from its first; entering on `+` enters at its first read and on `-` at its last.
+
+myloasm 0.6.0 writes `L` lines without these tags, so for its links every column after the edge is NULL. The overlap length is unknown there, not 0: the GFA's overlap field is a `0M` placeholder in every version. A link that has some of the tags but not all of them is an error, as is a tagless link whose overlap is not `0M` and a file with both tagged and tagless links.
 
 #### `read_myloasm_splits(dir)`
 
@@ -800,7 +802,7 @@ SELECT * FROM read_biom('some_file.biom');
 **Behavior:**
 - Reads BIOM format v2.1 files (HDF5-based)
 - Returns data in sparse COO (coordinate) format: one row per non-zero (sample, feature, value) entry
-- Supports parallel processing for faster reads of large files
+- Reads up to 4 files at a time, one thread per file
 - Zero values are not returned (sparse representation)
 - Supports reading multiple files which are concatenated in the output
 

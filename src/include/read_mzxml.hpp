@@ -7,7 +7,6 @@
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
-#include <thread>
 #include <vector>
 
 namespace duckdb {
@@ -89,11 +88,7 @@ public:
 		size_t next_file_idx;
 
 		idx_t MaxThreads() const override {
-			auto hw_threads = std::thread::hardware_concurrency();
-			if (hw_threads == 0) {
-				hw_threads = 1;
-			}
-			return std::min<idx_t>(filepaths.size(), std::min<idx_t>(8, hw_threads));
+			return std::min<idx_t>(filepaths.size(), 8);
 		}
 
 		FileSystem &fs;

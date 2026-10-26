@@ -305,15 +305,17 @@ static size_t record_bytes(const klibpp::KSeq &rec) {
 	return rec.name.size() + rec.comment.size() + rec.seq.size() + rec.qual.size();
 }
 
-// Size the next poll so a single read_stream call materializes at most ~max_bytes worth of
-// records, rather than a fixed POLL_CHUNK_SIZE that ignores record size. Without a byte budget
-// (SIZE_MAX) or before any record is observed, fall back to POLL_CHUNK_SIZE -- preserving the
-// short-read fast path. Never exceeds POLL_CHUNK_SIZE and never returns less than 1. Capped at
-// `remaining` by the caller's batch limit.
-static int dynamic_poll_n(size_t observed_record_bytes, size_t max_bytes, int remaining) {
+// Size the next poll so a single read_stream call materializes at most ~room bytes of records,
+// where room is what is left under the caller's budget or cap, rather than a fixed
+// POLL_CHUNK_SIZE that ignores record size. The poll that reaches the budget then passes it by
+// about a record, or by up to POLL_CHUNK_SIZE records where record lengths jump. Before any
+// record is observed, or with room for POLL_CHUNK_SIZE records or more (as when there is no
+// budget), poll POLL_CHUNK_SIZE -- the short-read fast path. Never returns less than 1. Capped
+// at `remaining` by the caller's batch limit.
+static int dynamic_poll_n(size_t observed_record_bytes, size_t room, int remaining) {
 	int poll_n = POLL_CHUNK_SIZE;
-	if (observed_record_bytes > 0 && max_bytes != SIZE_MAX) {
-		const size_t by_budget = max_bytes / observed_record_bytes;
+	if (observed_record_bytes > 0) {
+		const size_t by_budget = room / observed_record_bytes;
 		if (by_budget < static_cast<size_t>(POLL_CHUNK_SIZE)) {
 			poll_n = by_budget < 1 ? 1 : static_cast<int>(by_budget);
 		}
@@ -744,7 +746,7 @@ SequenceRecordBatch SequenceReader::read_se(const int n, const size_t max_bytes)
 	// Poll the stream in chunks so the budget can short-circuit before the next I/O round.
 	while ((int)batch.size() < n && cumulative_bytes < max_bytes) {
 		const int remaining = n - (int)batch.size();
-		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
+		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes - cumulative_bytes, remaining);
 		auto more = poll(0, poll_n, max_bytes);
 		if (more.empty()) {
 			break;
@@ -838,7 +840,7 @@ SequenceRecordBatch SequenceReader::read_pe(const int n, const size_t max_bytes)
 
 	while ((int)batch.size() < n && cumulative_bytes < max_bytes) {
 		const int remaining = n - (int)batch.size();
-		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes, remaining);
+		const int poll_n = dynamic_poll_n(observed_record_bytes_, max_bytes - cumulative_bytes, remaining);
 		auto more1 = poll(0, poll_n, max_bytes);
 		auto more2 = poll(1, poll_n, max_bytes);
 

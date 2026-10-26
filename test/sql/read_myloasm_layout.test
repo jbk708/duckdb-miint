@@ -265,3 +265,34 @@ statement error
 SELECT contig_id FROM read_myloasm_layout('{TEST_DIR}/layout_round2');
 ----
 read_myloasm_layout: final_contig_graph.gfa line 186: read 's00001_lina_1000487_1016486_r+split0+split0+split0' has more than two +split levels
+
+# --- myloasm 0.6.0 ---
+
+# myloasm 0.6.0 wrote the same S and a lines as 0.7.0 from the fixture reads. Its GFA differs
+# only in its L lines and has no "# Myloasm L tags" line, so every line after the header sits
+# one earlier. Its breakpoint logs are 0.7.0's (data/myloasm/README.md), so reuse them.
+foreach dir ecoli_sim_0.6.0 ecoli_sim_0.6.0/0-cleaning_and_unitigs ecoli_sim_0.6.0/0-cleaning_and_unitigs/remap_temp
+
+statement ok
+COPY (SELECT 1 AS x) TO '{TEST_DIR}/{dir}' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
+
+endloop
+
+unzip data/myloasm/ecoli_sim_0.6.0/final_contig_graph.gfa.gz {TEST_DIR}/ecoli_sim_0.6.0/final_contig_graph.gfa
+
+foreach member 0-cleaning_and_unitigs/read_coverages.txt.gz 0-cleaning_and_unitigs/remap_temp/read_coverages.txt.gz
+
+statement ok
+COPY (SELECT line FROM read_csv('data/myloasm/ecoli_sim/{member}', columns = {'line': 'VARCHAR'}, delim = E'\x01', quote = '', escape = '', header = false, auto_detect = false))
+TO '{TEST_DIR}/ecoli_sim_0.6.0/{member}' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01', COMPRESSION gzip);
+
+endloop
+
+query II
+SELECT (SELECT count(*) FROM (
+          (SELECT * FROM read_myloasm_layout('{TEST_DIR}/ecoli_sim') EXCEPT ALL SELECT * FROM read_myloasm_layout('{TEST_DIR}/ecoli_sim_0.6.0'))
+          UNION ALL
+          (SELECT * FROM read_myloasm_layout('{TEST_DIR}/ecoli_sim_0.6.0') EXCEPT ALL SELECT * FROM read_myloasm_layout('{TEST_DIR}/ecoli_sim')))),
+       (SELECT count(*) FROM read_myloasm_layout('{TEST_DIR}/ecoli_sim_0.6.0'));
+----
+0	173
