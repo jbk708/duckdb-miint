@@ -410,7 +410,7 @@ These are invoked via `fork`/`exec` at runtime; the extension links no code for 
 
 ## 5. Vendored Source (compiled inline)
 
-Small third-party sources dropped into the tree and compiled directly into the extension (added to both `EXTENSION_SOURCES` and `TEST_SOURCES`), rather than built as a separate `ExternalProject` or included header-only.
+Small third-party sources dropped into the tree and compiled directly into the extension (added to both `MIINT_EXTENSION_SOURCES` and `MIINT_TEST_SOURCES`), rather than built as a separate `ExternalProject` or included header-only.
 
 ### microtar 0.1.0
 - **Location:** `third_party/microtar/` (`microtar.c` + `microtar.h`, vendored verbatim from https://github.com/rxi/microtar; MIT, see `third_party/microtar/LICENSE` and `README.md`)

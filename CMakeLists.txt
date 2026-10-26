@@ -10,8 +10,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 # How this build is laid out, and how to add a source or a dependency:
-# docs/internals/build-system.md. Each optional feature lives in its own
-# cmake/deps/<feature>.cmake.
+# docs/internals/build-system.md. Each embedded dependency lives in its own
+# cmake/deps/<name>.cmake.
 
 # ---------------------------------------------------------------------------
 # Features

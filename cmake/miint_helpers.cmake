@@ -28,9 +28,9 @@ endfunction()
 # three cannot drift apart; what is specific to one target is added next to its
 # call in CMakeLists.txt.
 #
-# The plain target_link_libraries signature (no PRIVATE/PUBLIC) is deliberate:
-# DuckDB's build_*_extension macros use it on the extension targets, and CMake
-# rejects mixing the two signatures on one target.
+# Uses the plain target_link_libraries signature (no PRIVATE/PUBLIC): DuckDB's
+# build_*_extension macros use it on the extension targets, and CMake rejects
+# mixing the two signatures on one target.
 function(miint_configure_target target)
   target_sources(${target} PRIVATE ${MIINT_OBJECT_SOURCES})
   target_compile_definitions(${target} PRIVATE ${MIINT_DEFINITIONS})
@@ -41,8 +41,8 @@ function(miint_configure_target target)
 endfunction()
 
 # Cross-compilation flags for the C libraries built with their own Makefiles or
-# autotools (htslib, minimap2, WFA2, vsearch, MAFFT), which do not see
-# CMAKE_C_FLAGS. At most one platform branch applies.
+# autotools, which do not see CMAKE_C_FLAGS. At most one platform branch
+# applies.
 set(MIINT_OSX_ARCH_CFLAGS "") # -arch for an osx cross build
 set(MIINT_AUTOTOOLS_HOST "") # --host= for an autotools configure
 if(EMSCRIPTEN)

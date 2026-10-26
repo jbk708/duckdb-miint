@@ -209,7 +209,7 @@ steps the computation one wave at a time.
 2. Implement `CopyFunction` with `Bind()`, `InitGlobal()`, `Sink()`, `Finalize()`
 3. Use `copy_format_common.cpp` utilities for buffering/compression
 4. Register in `LoadInternal()`
-5. Add to `EXTENSION_SOURCES`
+5. Add to `MIINT_EXTENSION_SOURCES` ([build-system.md](build-system.md))
 6. Create comprehensive SQL tests (basic, compression, edge cases)
 
 ### Adding scalar/aggregate functions
