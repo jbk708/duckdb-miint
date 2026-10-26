@@ -69,7 +69,7 @@ PAF read names carry no suffix, `+split0` or `+split1`.
 
 ### Format facts these files show
 
-These are checked against myloasm 0.7.0's source.
+These are checked against myloasm 0.6.0's and 0.7.0's source.
 - PAF tags are untyped (`shared_mini:N`, `diff_snp:N`, `shared_snp:N`).
 - For `-` alignments, PAF query coordinates are on the reverse complement of the read piece.
 - Columns 10 and 11 of the PAF are anchor spans, not residue matches and block length.
@@ -112,3 +112,31 @@ identical output. Another gzip can compress differently, so compare decompressed
 `git diff` reports a change. Other platforms have their own 0.7.0 builds (osx-arm64
 `h2797cb0_1`, osx-64 `h565ea35_1`, linux-aarch64 `ha2fee11_1`); for those, drop the build
 string. Whether those builds reproduce these files exactly has not been checked.
+
+## `ecoli_sim_0.6.0/`
+
+The same reads assembled by **myloasm 0.6.0** (bioconda build `hdcadc20_0`, linux-64), with the
+same command. Every file the readers read came out identical to `ecoli_sim/` except two, which
+are the only ones kept:
+
+| File | How it differs from `ecoli_sim/` |
+|---|---|
+| `final_contig_graph.gfa.gz` | `L` lines carry no tags, and there is no `# Myloasm L tags` comment line. `S` and `a` lines are identical. |
+| `myloasm.log.gz` | `VERSION: 0.6.0`, and its own timestamps, timings and memory figures |
+
+Between the two versions' source (`git diff v0.6.0 v0.7.0`), the code that writes the FASTA
+headers, the PAF, the breakpoint logs and the `+split` names is unchanged, and so is the
+`COMMAND`/`VERSION` logging and the `-k`, `--c`, `-c` and `--nano-r9` handling. The `L`-line
+tags are the only change to these outputs.
+
+To regenerate, follow the steps above with 0.6.0, and keep only these two files:
+
+```bash
+conda create -n myloasm-060 -c conda-forge -c bioconda myloasm=0.6.0=hdcadc20_0   # linux-64
+# ... in ../myloasm_work, as above:
+conda run -n myloasm-060 myloasm reads.fa -o run1 --hifi -t 1
+
+DEST=$REPO/data/myloasm/ecoli_sim_0.6.0
+gzip -9 -n -c run1/final_contig_graph.gfa > "$DEST/final_contig_graph.gfa.gz"
+sed -E 's/(SYSTEM HOST NAME: ).*/\1redacted/' run1/myloasm_*.log | gzip -9 -n > "$DEST/myloasm.log.gz"
+```

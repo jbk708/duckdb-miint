@@ -82,6 +82,33 @@ ORDER BY k.from_contig_id;
 u840ctg	true	true	true
 u982ctg	true	true	true
 
+# --- myloasm 0.6.0 ---
+
+# myloasm 0.6.0 assembled the same reads into the same graph, but wrote its L lines with no
+# tags (data/myloasm/README.md). Its links are 0.7.0's edges, with the evidence unknown.
+statement ok
+COPY (SELECT 1 AS x) TO '{TEST_DIR}/ecoli_sim_0.6.0' (FORMAT csv, PER_THREAD_OUTPUT true, OVERWRITE_OR_IGNORE true);
+
+unzip data/myloasm/ecoli_sim_0.6.0/final_contig_graph.gfa.gz {TEST_DIR}/ecoli_sim_0.6.0/final_contig_graph.gfa
+
+query TTTTIIIIRTTTT
+SELECT * FROM read_myloasm_links('{TEST_DIR}/ecoli_sim_0.6.0') ORDER BY from_contig_id;
+----
+u840ctg	-	u840ctg	-	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+u982ctg	-	u982ctg	-	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+
+query I
+SELECT count(*) FROM (
+  (SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim')
+   EXCEPT
+   SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim_0.6.0'))
+  UNION ALL
+  (SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim_0.6.0')
+   EXCEPT
+   SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim')));
+----
+0
+
 # --- Errors ---
 
 statement error
