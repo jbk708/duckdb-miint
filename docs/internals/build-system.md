@@ -42,7 +42,7 @@ A deps file builds its library, then appends to these lists. `include()` shares 
 **Add an embedded dependency.**
 1. Write `cmake/deps/<name>.cmake`: build or import the library, then append to the lists above. Call `miint_git_version(<NAME> ext/<dir>)` if it is a submodule.
 2. Add `option(MIINT_ENABLE_<NAME> ...)` and, if some platform cannot build it, a line in the platform matrix.
-3. Add `<NAME>` to the feature `foreach` in `CMakeLists.txt`, at its link-order position. A dependency that is always built goes in the first `foreach` instead, with no option or matrix line.
+3. Add `<NAME>` to the feature `foreach` in `CMakeLists.txt`, at its link-order position. A dependency that is always built goes in `foreach(dep htslib minimap2 wfa2 rust_glue)` instead, with no option or matrix line.
 4. Report the version and document the library: [`embedded-tools.md`](embedded-tools.md#reporting-a-new-dependencys-version).
 
 ## Rules
@@ -50,6 +50,6 @@ A deps file builds its library, then appends to these lists. `include()` shares 
 - **Include order is link order.** The linker resolves an archive's undefined symbols only from libraries after it, so a library goes after every library that uses it. zlib, expat, the compression codecs, Threads and the platform libraries are appended last, in `CMakeLists.txt`.
 - **Link by path what is outside DuckDB's export set.** The static extension is `install(EXPORT)`ed with DuckDB, which rejects link dependencies on targets outside that set. Link such a library as `$<TARGET_FILE:x>` and add `x` to `MIINT_TARGET_DEPENDENCIES` (see `abpoa.cmake`, `krepp.cmake`); feed OBJECT libraries through `MIINT_OBJECT_SOURCES`.
 - **Platform gates live only in the matrix.** A deps file may still turn its own feature off when a package is missing (`set(MIINT_ENABLE_<NAME> OFF)` then `return()`), as the tidy-check builds need.
-- **Headers whose names collide get a narrower scope.** `MIINT_INCLUDE_DIRS` reaches every target in the directory, and its order decides which of two same-named headers an angle-bracket include finds. When a library ships headers named like another's, scope them to the files that need them with `set_source_files_properties` (see `krepp.cmake`).
+- **Headers whose names collide get a narrower scope.** `MIINT_INCLUDE_DIRS` reaches every target in the directory, and its order decides which of two same-named headers an include finds when the header is not beside the including file. When a library ships headers named like another's, scope them to the files that need them with `set_source_files_properties` (see `krepp.cmake`).
 - **`tests` sources must be DuckDB-free.** `tests` has no libduckdb and is built without `MIINT_STATIC_BUILD`, so a source in both lists is compiled twice with different `#ifdef`s. That is why the lists cannot share objects.
-- **Format `cmake/` yourself.** `make format-check` covers the root `CMakeLists.txt` but nothing under `cmake/`; run `cmake-format -i` (0.6.13, the version in the `duckdb-format` environment) on what you change there. CI's `cmake-format` job checks all of `cmake/`.
+- **Format `cmake/` yourself.** `make format-check` covers the root `CMakeLists.txt` but nothing under `cmake/`; run `cmake-format -i` on what you change there, with cmake-format 0.6.13 (the version CI pins). CI's `cmake-format` job checks all of `cmake/`.

@@ -11,7 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # How this build is laid out, and how to add a source or a dependency:
 # docs/internals/build-system.md. Each embedded dependency lives in its own
-# cmake/deps/<name>.cmake.
+# cmake/deps/<name>.cmake (sylph and st3 are part of rust_glue.cmake).
 
 # ---------------------------------------------------------------------------
 # Features
