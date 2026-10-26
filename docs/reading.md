@@ -551,6 +551,8 @@ The contig graph's edges, from the GFA's `L` lines.
 - `snpmer_identity_percent` (DOUBLE, nullable): myloasm's identity estimate for the overlap; NULL when the ends share no minimizers
 - `from_read_id`, `from_split_suffix`, `to_read_id`, `to_split_suffix` (VARCHAR): The reads at the two ends that meet. Leaving a contig on `+` leaves from its last read and on `-` from its first; entering on `+` enters at its first read and on `-` at its last.
 
+myloasm 0.6.0 writes `L` lines without these tags, so for its links every column after the edge is NULL. The overlap length is unknown there, not 0: the GFA's overlap field is a `0M` placeholder in every version. A link that has some of the tags but not all of them is an error.
+
 #### `read_myloasm_splits(dir)`
 
 Every breakpoint myloasm split a read at, from both cleaning rounds' logs. Only reads with a breakpoint are listed.

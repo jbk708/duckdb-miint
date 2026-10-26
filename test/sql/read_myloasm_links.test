@@ -123,3 +123,34 @@ statement error
 SELECT from_contig_id FROM read_myloasm_links('{TEST_DIR}/links_constructed');
 ----
 read_myloasm_links: link u1ctg+ -> u2ctg+ lacks myloasm's ol/ss/sd/sm/r1/r2 tags
+
+# --- myloasm 0.6.0: links carry no tags ---
+
+# myloasm 0.6.0 writes L lines with no tags at all; the tags arrived in 0.7.0. The link's
+# topology is known, but its overlap and end reads are not: the 0M field is a placeholder in
+# both versions, so the overlap length is NULL, not 0.
+statement ok
+COPY (SELECT * FROM (VALUES
+  (E'S\tu1ctg\t*\tLN:i:5000'),
+  (E'S\tu2ctg\t*\tLN:i:5000'),
+  (E'L\tu1ctg\t+\tu2ctg\t-\t0M')) t(line))
+TO '{TEST_DIR}/links_constructed/final_contig_graph.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+query TTTTIIIIRTTTT
+SELECT * FROM read_myloasm_links('{TEST_DIR}/links_constructed');
+----
+u1ctg	+	u2ctg	-	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+
+# A link with any of myloasm's tags is the 0.7.0 form, so it must carry all of them. fs alone
+# is not the tagless form.
+statement ok
+COPY (SELECT * FROM (VALUES
+  (E'S\tu1ctg\t*\tLN:i:5000'),
+  (E'S\tu2ctg\t*\tLN:i:5000'),
+  (E'L\tu1ctg\t+\tu2ctg\t+\t0M\tfs:f:100.0')) t(line))
+TO '{TEST_DIR}/links_constructed/final_contig_graph.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT from_contig_id FROM read_myloasm_links('{TEST_DIR}/links_constructed');
+----
+read_myloasm_links: link u1ctg+ -> u2ctg+ lacks myloasm's ol/ss/sd/sm/r1/r2 tags

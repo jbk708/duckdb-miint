@@ -420,6 +420,8 @@ const std::string READ_MYLOASM_LAYOUT = // NOLINT
 // read_myloasm_links(dir): the GFA's L lines with myloasm's tags (described on the GFA's
 // second line). r1/r2 are the reads at the two contig ends that meet; fs is omitted when the
 // contigs share no minimizers. The overlap field is a 0M placeholder and is dropped.
+// myloasm 0.6.0 writes L lines with none of these tags, so their columns are NULL; a link
+// with some of the tags but not all is not myloasm's.
 const std::string READ_MYLOASM_LINKS = // NOLINT
     "CREATE OR REPLACE MACRO read_myloasm_links(dir) AS TABLE "
     "SELECT from_segment AS from_contig_id, from_orientation, to_segment AS to_contig_id, to_orientation, "
@@ -434,6 +436,9 @@ const std::string READ_MYLOASM_LINKS = // NOLINT
     "       _miint_myloasm_split_suffix(tags['r2']) AS to_split_suffix "
     "FROM read_gfa_links(_miint_myloasm_path(dir, 'final_contig_graph.gfa')) "
     "WHERE CASE "
+    "        WHEN tags['ol'] IS NULL AND tags['ss'] IS NULL AND tags['sd'] IS NULL AND tags['sm'] IS NULL "
+    "          AND tags['fs'] IS NULL AND tags['r1'] IS NULL AND tags['r2'] IS NULL "
+    "        THEN TRUE "
     "        WHEN TRY_CAST(tags['ol'] AS BIGINT) IS NULL OR TRY_CAST(tags['ss'] AS BIGINT) IS NULL "
     "          OR TRY_CAST(tags['sd'] AS BIGINT) IS NULL OR TRY_CAST(tags['sm'] AS BIGINT) IS NULL "
     "          OR (tags['fs'] IS NOT NULL AND TRY_CAST(tags['fs'] AS DOUBLE) IS NULL) "
