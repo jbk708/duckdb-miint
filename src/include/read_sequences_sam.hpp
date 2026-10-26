@@ -82,7 +82,9 @@ public:
 			// pool), so we deliberately leave the multi-file path single-threaded per file.
 			// The pool is sized from DuckDB's `threads` setting: up to 4 threads beside the one
 			// running the scan (set_threads starts no pool for fewer than 2). HTSlib adds one
-			// more thread that reads the compressed blocks and hands them to the pool.
+			// more thread that reads the compressed blocks and hands them to the pool. db_threads is
+			// 0 only when `external_threads` is 0 and the OS refused every scheduler thread; the -1
+			// that gives starts no pool either.
 			if (readers.size() == 1 && !uses_stdin) {
 				readers[0]->set_threads(std::min(db_threads - 1, 4));
 			}
