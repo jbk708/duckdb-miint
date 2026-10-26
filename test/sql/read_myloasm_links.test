@@ -100,11 +100,11 @@ u982ctg	-	u982ctg	-	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
 query I
 SELECT count(*) FROM (
   (SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim')
-   EXCEPT
+   EXCEPT ALL
    SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim_0.6.0'))
   UNION ALL
   (SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim_0.6.0')
-   EXCEPT
+   EXCEPT ALL
    SELECT from_contig_id, from_orientation, to_contig_id, to_orientation FROM read_myloasm_links('{TEST_DIR}/ecoli_sim')));
 ----
 0
@@ -149,7 +149,7 @@ TO '{TEST_DIR}/links_constructed/final_contig_graph.gfa' (FORMAT csv, HEADER fal
 statement error
 SELECT from_contig_id FROM read_myloasm_links('{TEST_DIR}/links_constructed');
 ----
-read_myloasm_links: link u1ctg+ -> u2ctg+ lacks myloasm's ol/ss/sd/sm/r1/r2 tags
+read_myloasm_links: link u1ctg+ -> u2ctg+ has some of myloasm's tags but not all of ol/ss/sd/sm/r1/r2 with valid values
 
 # --- myloasm 0.6.0: links carry no tags ---
 
@@ -180,4 +180,33 @@ TO '{TEST_DIR}/links_constructed/final_contig_graph.gfa' (FORMAT csv, HEADER fal
 statement error
 SELECT from_contig_id FROM read_myloasm_links('{TEST_DIR}/links_constructed');
 ----
-read_myloasm_links: link u1ctg+ -> u2ctg+ lacks myloasm's ol/ss/sd/sm/r1/r2 tags
+read_myloasm_links: link u1ctg+ -> u2ctg+ has some of myloasm's tags but not all of ol/ss/sd/sm/r1/r2 with valid values
+
+# Without tags, the 0M placeholder is what makes a link myloasm's; a tagless link with a real
+# overlap is another assembler's, and its overlap would be lost.
+statement ok
+COPY (SELECT * FROM (VALUES
+  (E'S\tu1ctg\t*\tLN:i:5000'),
+  (E'S\tu2ctg\t*\tLN:i:5000'),
+  (E'L\tu1ctg\t+\tu2ctg\t-\t150M')) t(line))
+TO '{TEST_DIR}/links_constructed/final_contig_graph.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT from_contig_id FROM read_myloasm_links('{TEST_DIR}/links_constructed');
+----
+read_myloasm_links: link u1ctg+ -> u2ctg- has no tags and overlap 150M, not myloasm's 0M placeholder
+
+# One myloasm version wrote the whole file, so it has tagged links or tagless ones, not both.
+# A tagless link among tagged ones would read as a 0.6.0 link with unknown evidence.
+statement ok
+COPY (SELECT * FROM (VALUES
+  (E'S\tu1ctg\t*\tLN:i:5000'),
+  (E'S\tu2ctg\t*\tLN:i:5000'),
+  (E'L\tu1ctg\t+\tu2ctg\t+\t0M\tol:i:900\tsd:i:0\tss:i:0\tsm:i:0\tr1:Z:a\tr2:Z:b'),
+  (E'L\tu2ctg\t+\tu1ctg\t+\t0M')) t(line))
+TO '{TEST_DIR}/links_constructed/final_contig_graph.gfa' (FORMAT csv, HEADER false, QUOTE '', ESCAPE '', DELIMITER E'\x01');
+
+statement error
+SELECT from_contig_id FROM read_myloasm_links('{TEST_DIR}/links_constructed');
+----
+read_myloasm_links: final_contig_graph.gfa has links with myloasm's tags (0.7.0) and links without them (0.6.0)
