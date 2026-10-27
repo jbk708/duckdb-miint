@@ -3,6 +3,7 @@
 #include "SAMRecord.hpp"
 #include "remote_file_helper.hpp"
 #include "hfile_duckdb.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types.hpp"
@@ -130,7 +131,7 @@ public:
 					}
 				}
 			} catch (std::exception &e) {
-				throw IOException("Error opening '%s': %s", path, e.what());
+				throw IOException("Error opening '%s': %s", path, ErrorData(e).RawMessage());
 			}
 		}
 	};

@@ -26,6 +26,27 @@ TEST_CASE("IsRemotePath returns false for local paths", "[remote]") {
 	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath(""));
 }
 
+// A remote path taken for a local one goes to open(2), which fails as a missing local file or
+// writes one. Every URI scheme but file:// belongs to DuckDB's file systems, including schemes miint
+// has never heard of: DuckDB reports what it cannot open.
+TEST_CASE("IsRemotePath treats every URI scheme but file:// as remote", "[remote]") {
+	CHECK(miint::RemoteFileHelper::IsRemotePath("az://container/file.fq"));
+	CHECK(miint::RemoteFileHelper::IsRemotePath("azure://container/file.fq"));
+	CHECK(miint::RemoteFileHelper::IsRemotePath("abfss://container@account.dfs.core.windows.net/file.fq"));
+	CHECK(miint::RemoteFileHelper::IsRemotePath("S3://bucket/file.fq"));
+	CHECK(miint::RemoteFileHelper::IsRemotePath("foo+bar.v2://host/file.fq"));
+}
+
+TEST_CASE("IsRemotePath keeps file:// URIs, drive letters and colons in names local", "[remote]") {
+	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath("file:///tmp/file.fq"));
+	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath("FILE:///tmp/file.fq"));
+	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath("C://data/file.fq"));
+	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath("C:/data/file.fq"));
+	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath("sample:1/file.fq"));
+	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath("dir/s3://bucket/file.fq"));
+	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath("2x://host/file.fq"));
+}
+
 // ===== ResolvedFile / ResolvedFileSet =====
 
 TEST_CASE("ResolvedFileSet deletes temp files on destruction", "[remote]") {

@@ -279,6 +279,12 @@ COPY (SELECT read_id, sequence1, qual1 FROM varied) TO 's3://miint-no-such-bucke
 ----
 COMPRESSION_LEVEL applies only to local gzip output
 
+# Any URI scheme is remote, not only the ones miint lists: az:// is DuckDB's Azure file system.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO 'az://miint-no-such-container/level.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to local gzip output
+
 statement ok
 DROP TABLE varied;
 

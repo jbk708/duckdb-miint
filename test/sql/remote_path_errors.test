@@ -1,0 +1,34 @@
+# name: test/sql/remote_path_errors.test
+# description: A URI no file system can open fails with DuckDB's reason, in readers and in COPY, never as a local open
+# group: [sql]
+
+require miint
+
+# A scheme no DuckDB file system handles goes to DuckDB, which reports it as it does for its own
+# formats (compare COPY ... TO 'foo://...csv'), instead of to a local open of a path named "foo:".
+statement error
+COPY (SELECT 1 AS a) TO 'foo://miint-test/x.csv';
+----
+Cannot open file "foo://miint-test/x.csv"
+
+statement error
+COPY (SELECT 'r' AS read_id, 'ACGT' AS sequence1) TO 'foo://miint-test/x.fa.gz' (FORMAT FASTA);
+----
+Cannot open file "foo://miint-test/x.fa.gz"
+
+statement error
+SELECT * FROM read_fastx('foo://miint-test/x.fq');
+----
+Cannot open file "foo://miint-test/x.fq"
+
+# The SAM/BAM readers name the file and give DuckDB's reason, as plain text rather than DuckDB's
+# serialized error.
+statement error
+SELECT * FROM read_alignments('foo://miint-test/x.sam');
+----
+Error opening 'foo://miint-test/x.sam': Cannot open file "foo://miint-test/x.sam"
+
+statement error
+SELECT * FROM read_sequences_sam('foo://miint-test/x.sam');
+----
+Error opening 'foo://miint-test/x.sam': Cannot open file "foo://miint-test/x.sam"
