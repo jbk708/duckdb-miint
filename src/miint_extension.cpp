@@ -170,8 +170,10 @@ void SetDependencyLogging() {
 	// exact benefit, we will defer that decision for the future.
 	hts_set_log_level(HTS_LOG_ERROR);
 #ifdef MIINT_HAS_HDF5
-	std::lock_guard<std::mutex> hdf5_guard(miint::g_hdf5_mutex);
-	H5Eset_auto(H5E_DEFAULT, nullptr, nullptr);
+	{
+		std::lock_guard<std::mutex> hdf5_guard(miint::g_hdf5_mutex);
+		H5Eset_auto(H5E_DEFAULT, nullptr, nullptr);
+	}
 #endif
 }
 

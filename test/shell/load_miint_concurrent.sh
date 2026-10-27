@@ -13,7 +13,7 @@ THREADS=16
 LOADS=20
 
 if [ -z "${DUCKDB_PYTHON_AVAILABLE:-}" ]; then
-    echo "DUCKDB_PYTHON_AVAILABLE not set, skipping concurrent LOAD tests"
+    echo "DUCKDB_PYTHON_AVAILABLE not set (opt in with MIINT_LOAD_RACE_TEST=1), skipping concurrent LOAD tests"
     exit 0
 fi
 if [ -z "${HDF5_AVAILABLE:-}" ]; then

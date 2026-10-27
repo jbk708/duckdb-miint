@@ -209,8 +209,10 @@ jobs:
           # miint's cache, where run_tests.sh finds it. error() fails the step.
           ./build/release/duckdb -c "SELECT CASE WHEN r.installed THEN r.message ELSE error(r.message) END AS install_skb_arrow FROM (SELECT install_skb_arrow() AS r);"
 
-      # Python-driven tests load this build's extension, so the wheel must be the same DuckDB version.
+      # test/shell/load_miint_concurrent.sh loads this build's extension from Python, so the
+      # wheel must be the same DuckDB version. It runs only nightly (MIINT_LOAD_RACE_TEST).
       - name: Install the duckdb Python package
+        if: github.event_name == 'schedule'
         shell: bash -el {0}
         run: python3 -m pip install --user "duckdb==$(./build/release/duckdb -csv -noheader -c "SELECT ltrim(version(), 'v');")"
 
@@ -218,6 +220,8 @@ jobs:
         shell: bash -el {0}
         env:
           MIINT_ENA_LIVE_TEST: ${{ github.event_name == 'schedule' && '1' || '0' }}
+          MIINT_LOAD_RACE_TEST: ${{ github.event_name == 'schedule' && '1' || '0' }}
+          MIINT_LOAD_RACE_PROCS: '100'
         run: bash run_tests.sh
 
   # The tutorials in a job of their own, from test-with-bowtie2's build, so that
