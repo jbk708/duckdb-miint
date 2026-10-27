@@ -62,6 +62,14 @@ TEST_CASE("BgzfWriteMode keeps O_EXCL only for regular files", "[copy][bgzf][pip
 	REQUIRE(std::string(miint::BgzfWriteMode("/tmp/miint_nonexistent_xyz.fq.gz")) == "wx6");
 }
 
+TEST_CASE("BgzfWriteMode carries COMPRESSION_LEVEL into the mode, with or without O_EXCL", "[copy][bgzf]") {
+	// htslib reads the level from the mode's digit; a level that never reaches it is silently 6.
+	REQUIRE(miint::BgzfWriteMode("/dev/null", 1) == "w1");
+	REQUIRE(miint::BgzfWriteMode("-", 0) == "w0");
+	REQUIRE(miint::BgzfWriteMode("/tmp/miint_nonexistent_xyz.fq.gz", 9) == "wx9");
+	REQUIRE(miint::BgzfWriteMode("/tmp/miint_nonexistent_xyz.fq.gz", 1) == "wx1");
+}
+
 TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgzf][pipe]") {
 	char dir_tmpl[] = "/tmp/miint_pipe_XXXXXX";
 	const char *dir = mkdtemp(dir_tmpl);
@@ -82,7 +90,7 @@ TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgz
 
 	// Open + write through the real bgzf path using the production-selected mode. Pre-fix, "wx6" on
 	// the existing FIFO returned a null handle (EEXIST); the REQUIRE below would have failed.
-	BGZF *bg = bgzf_open(fifo.c_str(), miint::BgzfWriteMode(fifo));
+	BGZF *bg = bgzf_open(fifo.c_str(), miint::BgzfWriteMode(fifo).c_str());
 	REQUIRE(bg != nullptr);
 	REQUIRE(bgzf_write(bg, payload.data(), payload.size()) == static_cast<ssize_t>(payload.size()));
 	REQUIRE(bgzf_close(bg) == 0);

@@ -10,6 +10,7 @@
 // UUID::ToString, AllowedIdTypeList, exception types, and UnifiedVectorFormat --
 // id_column_utils.hpp transitively provides all of them.
 #include "id_column_utils.hpp"
+#include "bgzf_write_mode.hpp"
 
 // htslib's BGZF handle; defined in <htslib/bgzf.h>, only included in the .cpp.
 struct BGZF;
@@ -29,8 +30,9 @@ public:
 	// compression_threads > 1 enables htslib bgzf multithreaded compression for
 	// LOCAL gzip output (bgzf is gzip-compatible and bgzf_mt preserves block
 	// order). Uncompressed output and remote (scheme://) gzip targets keep the
-	// BufferedFileWriter path.
-	CopyFileHandle(FileSystem &fs, const string &path, FileCompressionType compression, int compression_threads = 1);
+	// BufferedFileWriter path. compression_level applies to local gzip output only.
+	CopyFileHandle(FileSystem &fs, const string &path, FileCompressionType compression, int compression_threads = 1,
+	               int compression_level = ::miint::DEFAULT_GZIP_LEVEL);
 	~CopyFileHandle();
 
 	void Write(const_data_ptr_t data, idx_t size);
@@ -93,6 +95,7 @@ struct CommonCopyParameters {
 	bool id_as_sequence_index = false;
 	bool include_comment = false;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
+	int compression_level = ::miint::DEFAULT_GZIP_LEVEL;
 	idx_t flush_size = DEFAULT_COPY_FLUSH_SIZE;
 
 	void ParseFromOptions(const identifier_map_t<vector<Value>> &options, const string &file_path);
@@ -184,6 +187,7 @@ struct SequenceCopyBindData : public FunctionData {
 	bool id_as_sequence_index = false;
 	bool include_comment = false;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
+	int compression_level = ::miint::DEFAULT_GZIP_LEVEL; // COMPRESSION_LEVEL, for local gzip output
 	idx_t flush_size = DEFAULT_COPY_FLUSH_SIZE;
 	string file_path;
 	// Whether the input *schema* carries R2 columns (sequence2 [+ qual2 for FASTQ]). This does
@@ -213,9 +217,10 @@ struct SequenceCopyGlobalState : public GlobalFunctionData {
 	FileSystem *fs = nullptr;
 	string r2_path;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
-	// Worker threads for bgzf gzip compression (follows DuckDB's thread count);
-	// captured at global-init so the lazily-created R2 file uses the same value.
+	// Worker threads for bgzf gzip compression (follows DuckDB's thread count) and the gzip level;
+	// captured at global-init so the lazily-created R2 file uses the same values.
 	int compression_threads = 1;
+	int compression_level = ::miint::DEFAULT_GZIP_LEVEL;
 	// Consistency tracking across all threads: a single COPY must be either all single-end or
 	// all paired-end. Both set true -> inconsistent input (checked at finalize).
 	bool saw_paired = false;

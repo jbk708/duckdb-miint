@@ -72,8 +72,8 @@ void FlushR2Buffer(FormatWriterState &local_state, SequenceCopyGlobalState &gsta
 	if (!gstate.file_r2) {
 		// First non-NULL R2 record across all threads -> create the R2 file now. This is what
 		// keeps an all-single-end dataset from producing an empty R2 file in split mode.
-		gstate.file_r2 =
-		    make_uniq<CopyFileHandle>(*gstate.fs, gstate.r2_path, gstate.compression, gstate.compression_threads);
+		gstate.file_r2 = make_uniq<CopyFileHandle>(*gstate.fs, gstate.r2_path, gstate.compression,
+		                                           gstate.compression_threads, gstate.compression_level);
 	}
 	WriteBufferToFile(*gstate.file_r2, local_state);
 }
@@ -82,7 +82,7 @@ void FlushR2Buffer(FormatWriterState &local_state, SequenceCopyGlobalState &gsta
 // CopyFileHandle Implementation
 //===--------------------------------------------------------------------===//
 CopyFileHandle::CopyFileHandle(FileSystem &fs, const string &path, FileCompressionType compression_p,
-                               int compression_threads) {
+                               int compression_threads, int compression_level) {
 	// Local gzip output goes through htslib bgzf: it is gzip-compatible (reads back through any gzip
 	// reader, including read_fastx) and bgzf_mt parallelizes deflate while emitting blocks in order,
 	// so a single-threaded in-order feed still produces a deterministically-ordered file. DuckDB's
@@ -91,11 +91,11 @@ CopyFileHandle::CopyFileHandle(FileSystem &fs, const string &path, FileCompressi
 	// the same RemoteFileHelper::IsRemotePath test the reader (read_fastx) uses so writer and reader
 	// agree on what counts as local.
 	if (compression_p == FileCompressionType::GZIP && !miint::RemoteFileHelper::IsRemotePath(path)) {
-		// BgzfWriteMode picks "wx6" for regular files (atomic no-clobber/no-TOCTOU, the
-		// FILE_CREATE_NEW contract) and "w6" for stdout / pipes / devices, which always exist and
+		// BgzfWriteMode picks "wx<level>" for regular files (atomic no-clobber/no-TOCTOU, the
+		// FILE_CREATE_NEW contract) and "w<level>" for stdout / pipes / devices, which always exist and
 		// would otherwise fail O_EXCL with EEXIST. bgzf_open maps "-" (and /dev/stdout) to stdout.
 		errno = 0;
-		bgzf_file = bgzf_open(path.c_str(), miint::BgzfWriteMode(path));
+		bgzf_file = bgzf_open(path.c_str(), miint::BgzfWriteMode(path, compression_level).c_str());
 		if (!bgzf_file) {
 			if (errno == EEXIST) {
 				throw IOException("Failed to open \"%s\" for writing: file already exists", path);
@@ -240,6 +240,7 @@ void CommonCopyParameters::ParseFromOptions(const identifier_map_t<vector<Value>
 	Value id_as_sequence_index_param;
 	Value include_comment_param;
 	Value compression_param;
+	Value compression_level_param;
 
 	for (auto &option : options) {
 		if (option.first == "interleave") {
@@ -250,6 +251,8 @@ void CommonCopyParameters::ParseFromOptions(const identifier_map_t<vector<Value>
 			include_comment_param = option.second[0];
 		} else if (option.first == "compression") {
 			compression_param = option.second[0];
+		} else if (option.first == "compression_level") {
+			compression_level_param = option.second[0];
 		}
 	}
 
@@ -266,6 +269,21 @@ void CommonCopyParameters::ParseFromOptions(const identifier_map_t<vector<Value>
 	}
 
 	compression = DetectCompressionType(file_path, compression_param);
+
+	if (!compression_level_param.IsNull()) {
+		compression_level = compression_level_param.GetValue<int32_t>();
+		if (compression_level < 0 || compression_level > 9) {
+			throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", compression_level);
+		}
+		// Refused rather than ignored where it would not apply.
+		if (compression != FileCompressionType::GZIP) {
+			throw BinderException("COMPRESSION_LEVEL applies only to gzip output");
+		}
+		if (miint::RemoteFileHelper::IsRemotePath(file_path)) {
+			throw BinderException("COMPRESSION_LEVEL applies only to local gzip output; remote targets are written "
+			                      "with DuckDB's gzip writer, which takes no level");
+		}
+	}
 }
 
 //===--------------------------------------------------------------------===//
@@ -361,8 +379,10 @@ unique_ptr<GlobalFunctionData> SequenceCopyInitializeGlobal(ClientContext &conte
 
 	// R1 is always written. SubstituteOrientation is a no-op when {ORIENTATION} is absent, so this
 	// resolves to the raw path for single-file/interleaved output and to the R1 file in split mode.
+	gstate->compression_level = fdata.compression_level;
 	string path_r1 = SubstituteOrientation(file_path, "R1");
-	gstate->file_r1 = make_uniq<CopyFileHandle>(fs, path_r1, fdata.compression, gstate->compression_threads);
+	gstate->file_r1 = make_uniq<CopyFileHandle>(fs, path_r1, fdata.compression, gstate->compression_threads,
+	                                            gstate->compression_level);
 
 	if (fdata.split_output) {
 		// R2 file is created lazily on the first non-NULL R2 record (see FlushR2Buffer), so a
