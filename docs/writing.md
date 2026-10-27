@@ -7,6 +7,14 @@ COPY (SELECT * FROM read_fastx('some_file.fastq'))
 TO 'some_other_file.fasta' (FORMAT FASTA);
 ```
 
+Options follow DuckDB's rules for COPY options in every format here, as they do for CSV and Parquet:
+
+- A boolean option given alone means true: `(FORMAT FASTQ, INTERLEAVE)` is `INTERLEAVE true`.
+- A misspelled or unsupported option is refused, and the error names the closest options the format has.
+- Other values are cast to the option's type, so `COMPRESSION_LEVEL '3'` is level 3 and `COMPRESSION_LEVEL 1.6` is level 2. An option with no value or a NULL value is refused.
+
+A path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) is opened through DuckDB's file systems, which load the extension that serves it or say why they cannot.
+
 ## Table of Contents
 
 - [FASTQ](#fastq) - Write FASTQ sequence files
@@ -485,6 +493,7 @@ Write query results to Newick phylogenetic tree format. Reconstructs a tree from
   - `'gzip'`: Enable gzip compression
   - `'none'`: No compression
   - Auto-detected from `.gz` extension
+- `COMPRESSION_LEVEL` (0-9, default: 6): BGZF compression level for local `.gz` output, as for FASTQ and FASTA. Refused for uncompressed output and for remote targets, whose gzip writer takes no level.
 - `PLACEMENTS` (VARCHAR): Name of a table containing phylogenetic placement data to insert
   - Inserts fragment sequences into the tree at their placement locations
   - Requires tree to have `edge_id` column with valid edge identifiers
