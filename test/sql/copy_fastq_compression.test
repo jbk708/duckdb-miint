@@ -102,8 +102,8 @@ FROM read_fastx('{TEST_DIR}/backward_compat.fq.gz') ORDER BY sequence_index;
 1	read_a1	AAAA	[40, 40, 40, 40]	NULL
 2	read_a2	TTTT	[39, 39, 39, 39]	NULL
 
-# The records vary (md5-derived bases, hashed qualities) so deflate has work to do at every level,
-# and span dozens of bgzf blocks.
+# The records vary (md5-derived bases, hashed qualities) so levels 1-9 write different sizes, and
+# span dozens of bgzf blocks.
 statement ok
 CREATE TABLE varied AS
 SELECT i AS sequence_index, 'r' || i AS read_id,
@@ -128,7 +128,15 @@ COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
 TO '{TEST_DIR}/level_default.fq.gz' (FORMAT FASTQ);
 
 # Level 0 stores blocks without deflating them, on the multi-threaded writer and on the
-# single-threaded one alike.
+# single-threaded one alike (htslib has a level-0 path in each), so each file is larger than the
+# same records written uncompressed.
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/plain.fq' (FORMAT FASTQ);
+
+statement ok
+SET threads = 4;
+
 statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
 TO '{TEST_DIR}/level0.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 0);
@@ -155,11 +163,12 @@ SELECT (SELECT size FROM read_blob('{TEST_DIR}/level_default.fq.gz')) = (SELECT 
 ----
 true
 
-# Stored blocks are larger than level 1's deflated ones.
-query I
-SELECT (SELECT size FROM read_blob('{TEST_DIR}/level0.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz'));
+query III
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/level0.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/plain.fq')),
+       (SELECT size FROM read_blob('{TEST_DIR}/level0_t1.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/plain.fq')),
+       (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz')) < (SELECT size FROM read_blob('{TEST_DIR}/plain.fq'));
 ----
-true
+true	true	true
 
 # Every level is lossless: each file reads back as exactly the records written.
 query IIII
@@ -167,6 +176,14 @@ SELECT (SELECT count(*) FROM read_fastx('{TEST_DIR}/level1.fq.gz')),
        (SELECT count(*) FROM read_fastx('{TEST_DIR}/level9.fq.gz')),
        (SELECT count(*) FROM read_fastx('{TEST_DIR}/level0.fq.gz')),
        (SELECT count(*) FROM read_fastx('{TEST_DIR}/level0_t1.fq.gz'));
+----
+20000	20000	20000	20000
+
+query IIII
+SELECT (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level1.fq.gz')),
+       (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level9.fq.gz')),
+       (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level0.fq.gz')),
+       (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level0_t1.fq.gz'));
 ----
 20000	20000	20000	20000
 

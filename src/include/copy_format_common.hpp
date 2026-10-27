@@ -22,7 +22,8 @@ namespace duckdb {
 constexpr idx_t DEFAULT_COPY_FLUSH_SIZE = 1024 * 1024; // 1MB default buffer size
 // FASTQ/FASTA gzip level when COMPRESSION_LEVEL is not given. COPY usually writes whole read sets,
 // such as every read that survives a host filter; there, level 1 compressed about three times as fast
-// as level 6 (wall time; 10 M read pairs, 8 threads, libdeflate) and wrote files about 9% larger.
+// as level 6 (wall time of a COPY from read_fastx; 10 M pairs of 150 bp reads, split R1/R2 output,
+// 8 threads, libdeflate) and wrote files about 9% larger.
 constexpr int SEQUENCE_DEFAULT_GZIP_LEVEL = 1;
 
 //===--------------------------------------------------------------------===//
