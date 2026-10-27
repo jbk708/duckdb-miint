@@ -1,0 +1,169 @@
+# name: test/sql/copy_options.test
+# description: Every miint COPY format takes its options under DuckDB's rules, so a mistake gets the same error in every format
+# group: [sql]
+
+require miint
+
+statement ok
+CREATE TABLE fq AS SELECT * FROM (VALUES
+    ('r1', 'ACGTACGT', [30, 30, 30, 30, 30, 30, 30, 30]::UTINYINT[], 'TTGGCCAA', [20, 20, 20, 20, 20, 20, 20, 20]::UTINYINT[])
+) AS t(read_id, sequence1, qual1, sequence2, qual2);
+
+statement ok
+CREATE TABLE sam_test AS SELECT * FROM read_alignments('data/sam/foo_has_header.sam');
+
+statement ok
+CREATE TABLE ref_table AS SELECT 'G1234' AS name, 20 AS length UNION ALL SELECT 'G000144735', 90;
+
+statement ok
+CREATE TABLE tree1 AS SELECT * FROM read_newick('data/newick/simple.nwk');
+
+# A bare boolean option means true, as DuckDB's HEADER does for CSV. It used to raise an INTERNAL
+# error, which invalidates the database.
+statement ok
+COPY fq TO '{TEST_DIR}/bare_interleave.fq' (FORMAT FASTQ, INTERLEAVE);
+
+statement ok
+COPY fq TO '{TEST_DIR}/true_interleave.fq' (FORMAT FASTQ, INTERLEAVE true);
+
+query I
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/bare_interleave.fq')) = (SELECT content FROM read_blob('{TEST_DIR}/true_interleave.fq'));
+----
+true
+
+statement ok
+COPY (SELECT read_id, sequence1, sequence2 FROM fq) TO '{TEST_DIR}/bare_interleave.fa' (FORMAT FASTA, INTERLEAVE);
+
+statement ok
+COPY (SELECT read_id, sequence1, sequence2 FROM fq) TO '{TEST_DIR}/true_interleave.fa' (FORMAT FASTA, INTERLEAVE true);
+
+query I
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/bare_interleave.fa')) = (SELECT content FROM read_blob('{TEST_DIR}/true_interleave.fa'));
+----
+true
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/bare_header.sam' (FORMAT SAM, INCLUDE_HEADER, REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/true_header.sam' (FORMAT SAM, INCLUDE_HEADER true, REFERENCE_LENGTHS 'ref_table');
+
+query I
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/bare_header.sam')) = (SELECT content FROM read_blob('{TEST_DIR}/true_header.sam'));
+----
+true
+
+# Bare EDGE_IDS reads as true, which asks for the edge_id column this selection leaves out.
+statement error
+COPY (SELECT node_index, name, branch_length, parent_index FROM tree1) TO '{TEST_DIR}/bare_edge_ids.nwk' (FORMAT NEWICK, EDGE_IDS);
+----
+EDGE_IDS option requires 'edge_id' column in input
+
+# An option a format does not have is refused by DuckDB, with the closest names it does have.
+statement error
+COPY fq TO '{TEST_DIR}/unknown.fq' (FORMAT FASTQ, INTERLEAV true);
+----
+<REGEX>:(?s).*Unrecognized option "interleav".*"interleave".*
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/unknown.fa' (FORMAT FASTA, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+statement error
+COPY sam_test TO '{TEST_DIR}/unknown.sam' (FORMAT SAM, BOGUS 1, REFERENCE_LENGTHS 'ref_table');
+----
+Unrecognized option "bogus"
+
+statement error
+COPY sam_test TO '{TEST_DIR}/unknown.bam' (FORMAT BAM, BOGUS 1, REFERENCE_LENGTHS 'ref_table');
+----
+Unrecognized option "bogus"
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/unknown_ubam.bam' (FORMAT UBAM, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+statement error
+COPY tree1 TO '{TEST_DIR}/unknown.nwk' (FORMAT NEWICK, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+# COMPRESSION_LEVEL follows one rule in every format that takes it: a bare or NULL level is
+# refused, a level outside 0-9 is refused with the same message, and a quoted or fractional level is
+# cast as DuckDB casts its own options (Parquet's COMPRESSION_LEVEL included).
+statement error
+COPY fq TO '{TEST_DIR}/bare.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/bare.fa.gz' (FORMAT FASTA, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY sam_test TO '{TEST_DIR}/bare.bam' (FORMAT BAM, COMPRESSION_LEVEL, REFERENCE_LENGTHS 'ref_table');
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bare_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY fq TO '{TEST_DIR}/null.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL NULL);
+----
+NULL is not supported as a valid option for COPY option
+
+statement error
+COPY sam_test TO '{TEST_DIR}/null.bam' (FORMAT BAM, COMPRESSION_LEVEL NULL, REFERENCE_LENGTHS 'ref_table');
+----
+NULL is not supported as a valid option for COPY option
+
+statement error
+COPY fq TO '{TEST_DIR}/ten.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/ten.fa.gz' (FORMAT FASTA, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+statement error
+COPY sam_test TO '{TEST_DIR}/ten.bam' (FORMAT BAM, COMPRESSION_LEVEL 10, REFERENCE_LENGTHS 'ref_table');
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/ten_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+# '3' is level 3 and 1.6 is level 2: the files match the ones written with those levels.
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 3);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_str3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL '3');
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level2.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 2);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_frac.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1.6);
+
+query II
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/level_str3.fq.gz')) = (SELECT content FROM read_blob('{TEST_DIR}/level3.fq.gz')),
+       (SELECT content FROM read_blob('{TEST_DIR}/level_frac.fq.gz')) = (SELECT content FROM read_blob('{TEST_DIR}/level2.fq.gz'));
+----
+true	true
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/level_str3.bam' (FORMAT BAM, COMPRESSION_LEVEL '3', REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_str3_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL '3');

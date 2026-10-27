@@ -236,64 +236,47 @@ void ColumnIndices::FindIndices(const vector<string> &names) {
 // CommonCopyParameters Implementation
 //===--------------------------------------------------------------------===//
 void CommonCopyParameters::ParseFromOptions(const identifier_map_t<vector<Value>> &options, const string &file_path) {
-	Value interleave_param;
-	Value id_as_sequence_index_param;
-	Value include_comment_param;
 	Value compression_param;
-	Value compression_level_param;
+	const vector<Value> *compression_level_values = nullptr;
 
 	for (auto &option : options) {
 		if (option.first == "interleave") {
-			interleave_param = option.second[0];
+			interleave = CopyOptionFlag(option.second);
 		} else if (option.first == "id_as_sequence_index") {
-			id_as_sequence_index_param = option.second[0];
+			id_as_sequence_index = CopyOptionFlag(option.second);
 		} else if (option.first == "include_comment") {
-			include_comment_param = option.second[0];
+			include_comment = CopyOptionFlag(option.second);
 		} else if (option.first == "compression") {
 			compression_param = option.second[0];
 		} else if (option.first == "compression_level") {
-			// A bare or NULL level names no level; refused rather than read as the default.
-			if (option.second.size() != 1 || option.second[0].IsNull()) {
-				throw BinderException("COMPRESSION_LEVEL needs a level between 0 and 9");
-			}
-			compression_level_param = option.second[0];
+			compression_level_values = &option.second;
 		}
-	}
-
-	if (!interleave_param.IsNull()) {
-		interleave = interleave_param.GetValue<bool>();
-	}
-
-	if (!id_as_sequence_index_param.IsNull()) {
-		id_as_sequence_index = id_as_sequence_index_param.GetValue<bool>();
-	}
-
-	if (!include_comment_param.IsNull()) {
-		include_comment = include_comment_param.GetValue<bool>();
 	}
 
 	compression = DetectCompressionType(file_path, compression_param);
-
-	if (!compression_level_param.IsNull()) {
-		// A cast would round a fractional level to a neighbouring one.
-		if (!compression_level_param.type().IsIntegral()) {
-			throw BinderException("COMPRESSION_LEVEL must be a whole number between 0 and 9, got %s",
-			                      compression_level_param.ToSQLString());
-		}
-		const auto level = compression_level_param.GetValue<int64_t>();
-		if (level < 0 || level > 9) {
-			throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", level);
-		}
-		compression_level = static_cast<int>(level);
-		// Refused rather than ignored where it would not apply.
-		if (compression != FileCompressionType::GZIP) {
-			throw BinderException("COMPRESSION_LEVEL applies only to gzip output");
-		}
-		if (miint::RemoteFileHelper::IsRemotePath(file_path)) {
-			throw BinderException("COMPRESSION_LEVEL applies only to local gzip output; remote targets are written "
-			                      "with DuckDB's gzip writer, which takes no level");
-		}
+	if (compression_level_values) {
+		compression_level = GzipCompressionLevel(*compression_level_values, compression, file_path);
 	}
+}
+
+void DeclareSequenceCopyOptions(CopyOptionsInput &input) {
+	DeclareCopyOption(input, "interleave", LogicalType::BOOLEAN);
+	DeclareCopyOption(input, "id_as_sequence_index", LogicalType::BOOLEAN);
+	DeclareCopyOption(input, "include_comment", LogicalType::BOOLEAN);
+	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
+	DeclareCopyOption(input, "compression_level", LogicalType::BIGINT);
+}
+
+int GzipCompressionLevel(const vector<Value> &values, FileCompressionType compression, const string &file_path) {
+	const int level = CopyOptionCompressionLevel(values);
+	if (compression != FileCompressionType::GZIP) {
+		throw BinderException("COMPRESSION_LEVEL applies only to gzip output");
+	}
+	if (miint::RemoteFileHelper::IsRemotePath(file_path)) {
+		throw BinderException("COMPRESSION_LEVEL applies only to local gzip output; remote targets are written "
+		                      "with DuckDB's gzip writer, which takes no level");
+	}
+	return level;
 }
 
 //===--------------------------------------------------------------------===//

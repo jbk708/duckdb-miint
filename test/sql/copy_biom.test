@@ -276,6 +276,18 @@ TO '{TEST_DIR}/output_overwrite_test.biom' (FORMAT BIOM);
 Cannot overwrite existing file
 
 # Cleanup
+# Options follow DuckDB's rules, as in every miint COPY format (copy_options.test): an unknown option
+# is named, and a bare one is refused instead of raising an INTERNAL error.
+statement error
+COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO '{TEST_DIR}/bogus.biom' (FORMAT BIOM, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+statement error
+COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO '{TEST_DIR}/bare.biom' (FORMAT BIOM, GENERATED_BY);
+----
+<REGEX>:.*Copy option "?generated_by"? requires an argument of type VARCHAR.*
+
 statement ok
 DROP TABLE test_biom_basic;
 

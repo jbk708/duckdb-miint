@@ -94,10 +94,6 @@ static unique_ptr<FunctionData> FastqCopyBind(ClientContext &context, CopyFuncti
 	for (auto &option : input.info.options) {
 		if (option.first == "qual_offset") {
 			qual_offset_param = option.second[0];
-		} else if (!(option.first == "interleave") && !(option.first == "id_as_sequence_index") &&
-		           !(option.first == "include_comment") && !(option.first == "compression") &&
-		           !(option.first == "compression_level")) {
-			throw BinderException("Unknown option for COPY FORMAT FASTQ: %s", option.first.GetIdentifierName());
 		}
 	}
 
@@ -373,8 +369,14 @@ static void FastqCopyFinalize(ClientContext &context, FunctionData &bind_data, G
 //===--------------------------------------------------------------------===//
 // Register Function
 //===--------------------------------------------------------------------===//
+static void FastqCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareSequenceCopyOptions(input);
+	DeclareCopyOption(input, "qual_offset", LogicalType::BIGINT);
+}
+
 CopyFunction CopyFastqFunction::GetFunction() {
 	CopyFunction func("fastq");
+	func.copy_options = FastqCopyOptions;
 	func.copy_to_bind = FastqCopyBind;
 	func.copy_to_initialize_local = FastqCopyInitializeLocal;
 	func.copy_to_initialize_global = FastqCopyInitializeGlobal;

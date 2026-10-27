@@ -249,27 +249,17 @@ COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_neg.fq.
 ----
 COMPRESSION_LEVEL must be between 0 and 9, got -1
 
-# A level that is missing, NULL or fractional names no level, so it is refused rather than read as
-# the default or rounded to a neighbouring level.
+# A missing or NULL level names no level, so it is refused rather than read as the default.
+# copy_options.test has the rest of the rule every format shares.
 statement error
 COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_bare.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL);
 ----
-COMPRESSION_LEVEL needs a level between 0 and 9
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
 
 statement error
 COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_null.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL NULL);
 ----
-COMPRESSION_LEVEL needs a level between 0 and 9
-
-statement error
-COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_frac.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1.6);
-----
-COMPRESSION_LEVEL must be a whole number between 0 and 9, got 1.6
-
-statement error
-COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_str.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL '1');
-----
-COMPRESSION_LEVEL must be a whole number between 0 and 9, got '1'
+NULL is not supported as a valid option for COPY option
 
 # A level on output that is not compressed would be ignored, so it is refused.
 statement error

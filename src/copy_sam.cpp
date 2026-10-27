@@ -1,4 +1,5 @@
 #include "copy_sam.hpp"
+#include "copy_option_parsing.hpp"
 #include "htslib_raii.hpp"
 #include "id_column_codec.hpp"
 #include "id_column_utils.hpp"
@@ -234,7 +235,7 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 	bool compression_specified = false;
 	for (auto &option : input.info.options) {
 		if (option.first == "include_header") {
-			result->include_header = option.second[0].GetValue<bool>();
+			result->include_header = CopyOptionFlag(option.second);
 		} else if (option.first == "compression") {
 			compression_specified = true;
 			auto comp_value = option.second[0].ToString();
@@ -247,17 +248,9 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 				                      comp_value);
 			}
 		} else if (option.first == "compression_level") {
-			result->compression_level = option.second[0].GetValue<int32_t>();
-			if (result->compression_level < 0 || result->compression_level > 9) {
-				throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", result->compression_level);
-			}
+			result->compression_level = CopyOptionCompressionLevel(option.second);
 		} else if (option.first == "reference_lengths") {
-			const auto &table_value = option.second[0];
-			if (table_value.type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("reference_lengths must be a VARCHAR (table or view name)");
-			}
-
-			result->reference_lengths_table = table_value.ToString();
+			result->reference_lengths_table = option.second[0].ToString();
 
 			// Validate table or view exists (use TABLE_ENTRY lookup which returns either)
 			EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY,
@@ -271,12 +264,7 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 				throw BinderException("'%s' is not a table or view", result->reference_lengths_table.value());
 			}
 		} else if (option.first == "sequence_data") {
-			const auto &table_value = option.second[0];
-			if (table_value.type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("SEQUENCE_DATA must be a VARCHAR (table or view name)");
-			}
-
-			result->sequence_data_table = table_value.ToString();
+			result->sequence_data_table = option.second[0].ToString();
 
 			// Validate table or view exists
 			EntryLookupInfo sd_lookup(CatalogType::TABLE_ENTRY,
@@ -289,8 +277,6 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 			if (sd_entry->type != CatalogType::TABLE_ENTRY && sd_entry->type != CatalogType::VIEW_ENTRY) {
 				throw BinderException("'%s' is not a table or view", result->sequence_data_table.value());
 			}
-		} else {
-			throw BinderException("Unknown option for COPY FORMAT SAM: %s", option.first.GetIdentifierName());
 		}
 	}
 
@@ -975,8 +961,17 @@ static void SAMCopyFinalize(ClientContext &context, FunctionData &bind_data, Glo
 //===--------------------------------------------------------------------===//
 // Function Definition
 //===--------------------------------------------------------------------===//
+static void SAMCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareCopyOption(input, "include_header", LogicalType::BOOLEAN);
+	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
+	DeclareCopyOption(input, "compression_level", LogicalType::BIGINT);
+	DeclareCopyOption(input, "reference_lengths", LogicalType::VARCHAR);
+	DeclareCopyOption(input, "sequence_data", LogicalType::VARCHAR);
+}
+
 CopyFunction CopySAMFunction::GetFunction() {
 	CopyFunction function("sam");
+	function.copy_options = SAMCopyOptions;
 	function.copy_to_bind = SAMCopyBind;
 	function.copy_to_initialize_global = SAMCopyInitializeGlobal;
 	function.copy_to_initialize_local = SAMCopyInitializeLocal;
@@ -990,6 +985,7 @@ CopyFunction CopySAMFunction::GetFunction() {
 
 CopyFunction CopySAMFunction::GetBAMFunction() {
 	CopyFunction function("bam");
+	function.copy_options = SAMCopyOptions;
 	function.copy_to_bind = BAMCopyBind;
 	function.copy_to_initialize_global = SAMCopyInitializeGlobal;
 	function.copy_to_initialize_local = SAMCopyInitializeLocal;

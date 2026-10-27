@@ -10,6 +10,7 @@
 // UUID::ToString, AllowedIdTypeList, exception types, and UnifiedVectorFormat --
 // id_column_utils.hpp transitively provides all of them.
 #include "id_column_utils.hpp"
+#include "copy_option_parsing.hpp"
 
 // htslib's BGZF handle; defined in <htslib/bgzf.h>, only included in the .cpp.
 struct BGZF;
@@ -105,6 +106,13 @@ struct CommonCopyParameters {
 
 	void ParseFromOptions(const identifier_map_t<vector<Value>> &options, const string &file_path);
 };
+
+//! The options COPY FORMAT FASTQ and FASTA share, for their copy_options.
+void DeclareSequenceCopyOptions(CopyOptionsInput &input);
+
+//! COMPRESSION_LEVEL for output written through CopyFileHandle. Refused where it would be ignored:
+//! uncompressed output, and remote targets, which DuckDB's gzip writer compresses at its own level.
+int GzipCompressionLevel(const vector<Value> &values, FileCompressionType compression, const string &file_path);
 
 //===--------------------------------------------------------------------===//
 // Common Validation Functions

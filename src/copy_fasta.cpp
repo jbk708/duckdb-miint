@@ -77,15 +77,6 @@ static unique_ptr<FunctionData> FastaCopyBind(ClientContext &context, CopyFuncti
 
 	// Parse common parameters
 	CommonCopyParameters common_params;
-
-	for (auto &option : input.info.options) {
-		if (!(option.first == "interleave") && !(option.first == "id_as_sequence_index") &&
-		    !(option.first == "include_comment") && !(option.first == "compression") &&
-		    !(option.first == "compression_level")) {
-			throw BinderException("Unknown option for COPY FORMAT FASTA: %s", option.first.GetIdentifierName());
-		}
-	}
-
 	common_params.ParseFromOptions(input.info.options, result->file_path);
 
 	result->interleave = common_params.interleave;
@@ -313,8 +304,13 @@ static void FastaCopyFinalize(ClientContext &context, FunctionData &bind_data, G
 //===--------------------------------------------------------------------===//
 // Register Function
 //===--------------------------------------------------------------------===//
+static void FastaCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareSequenceCopyOptions(input);
+}
+
 CopyFunction CopyFastaFunction::GetFunction() {
 	CopyFunction func("fasta");
+	func.copy_options = FastaCopyOptions;
 	func.copy_to_bind = FastaCopyBind;
 	func.copy_to_initialize_local = FastaCopyInitializeLocal;
 	func.copy_to_initialize_global = FastaCopyInitializeGlobal;

@@ -127,27 +127,15 @@ static unique_ptr<FunctionData> NewickCopyBind(ClientContext &context, CopyFunct
 	bool edge_ids_specified = false;
 	std::optional<std::string> placements_table;
 	for (auto &option : input.info.options) {
-		auto loption = StringUtil::Lower(option.first.GetIdentifierName());
-		if (loption == "edge_ids") {
-			if (option.second.size() != 1 || option.second[0].type().id() != LogicalTypeId::BOOLEAN) {
-				throw BinderException("EDGE_IDS option requires a boolean value");
-			}
-			result->include_edge_ids = BooleanValue::Get(option.second[0]);
+		if (option.first == "edge_ids") {
+			result->include_edge_ids = CopyOptionFlag(option.second);
 			edge_ids_specified = true;
-		} else if (loption == "compression") {
-			if (option.second.size() != 1 || option.second[0].type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("COMPRESSION option requires a string value");
-			}
+		} else if (option.first == "compression") {
 			compression_param = option.second[0];
-		} else if (loption == "placements") {
-			if (option.second.size() != 1 || option.second[0].type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("PLACEMENTS option requires a string value (table or view name)");
-			}
+		} else if (option.first == "placements") {
 			placements_table = option.second[0].ToString();
 			// Validate placements table/view exists and has correct schema
 			ValidatePlacementTableSchema(context, placements_table.value());
-		} else {
-			throw BinderException("Unknown option for COPY FORMAT NEWICK: %s", option.first.GetIdentifierName());
 		}
 	}
 
@@ -369,8 +357,15 @@ static void NewickCopyFinalize(ClientContext &context, FunctionData &bind_data, 
 //===--------------------------------------------------------------------===//
 // Register Function
 //===--------------------------------------------------------------------===//
+static void NewickCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareCopyOption(input, "edge_ids", LogicalType::BOOLEAN);
+	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
+	DeclareCopyOption(input, "placements", LogicalType::VARCHAR);
+}
+
 CopyFunction CopyNewickFunction::GetFunction() {
 	CopyFunction func("newick");
+	func.copy_options = NewickCopyOptions;
 	func.copy_to_bind = NewickCopyBind;
 	func.copy_to_initialize_local = NewickCopyInitializeLocal;
 	func.copy_to_initialize_global = NewickCopyInitializeGlobal;

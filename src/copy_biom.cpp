@@ -1,4 +1,5 @@
 #include "copy_biom.hpp"
+#include "copy_option_parsing.hpp"
 #include "BIOMTable.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -115,8 +116,6 @@ static unique_ptr<FunctionData> BiomCopyBind(ClientContext &context, CopyFunctio
 			result->id = values[0].ToString();
 		} else if (key == "generated_by") {
 			result->generated_by = values[0].ToString();
-		} else {
-			throw BinderException("Unknown option for COPY FORMAT BIOM: %s", key.GetIdentifierName());
 		}
 	}
 
@@ -468,8 +467,15 @@ static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 //===--------------------------------------------------------------------===//
 // Register Function
 //===--------------------------------------------------------------------===//
+static void BiomCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
+	DeclareCopyOption(input, "id", LogicalType::VARCHAR);
+	DeclareCopyOption(input, "generated_by", LogicalType::VARCHAR);
+}
+
 CopyFunction CopyBiomFunction::GetFunction() {
 	CopyFunction func("biom");
+	func.copy_options = BiomCopyOptions;
 	func.copy_to_bind = BiomCopyBind;
 	func.copy_to_initialize_local = BiomCopyInitializeLocal;
 	func.copy_to_initialize_global = BiomCopyInitializeGlobal;

@@ -242,7 +242,7 @@ CREATE TABLE tree_opt AS SELECT * FROM read_newick('data/newick/simple.nwk');
 statement error
 COPY tree_opt TO '{TEST_DIR}/opt.nwk' (FORMAT NEWICK, UNKNOWN_OPT true);
 ----
-Unknown option
+Unrecognized option "unknown_opt"
 
 statement ok
 DROP TABLE tree_opt;
