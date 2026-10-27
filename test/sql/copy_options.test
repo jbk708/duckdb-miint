@@ -114,6 +114,11 @@ COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bare_ubam.bam' (F
 <REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
 
 statement error
+COPY tree1 TO '{TEST_DIR}/bare.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
 COPY fq TO '{TEST_DIR}/null.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL NULL);
 ----
 NULL is not supported as a valid option for COPY option
@@ -143,6 +148,11 @@ COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/ten_ubam.bam' (FO
 ----
 COMPRESSION_LEVEL must be between 0 and 9, got 10
 
+statement error
+COPY tree1 TO '{TEST_DIR}/ten.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
 # '3' is level 3 and 1.6 is level 2: the files match the ones written with those levels.
 statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 3);
@@ -167,3 +177,36 @@ COPY sam_test TO '{TEST_DIR}/level_str3.bam' (FORMAT BAM, COMPRESSION_LEVEL '3',
 
 statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_str3_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL '3');
+
+# NEWICK takes COMPRESSION_LEVEL too. Level 0 stores the tree as written, so its text appears in the
+# .gz bytes; at level 9 it is compressed and does not.
+statement ok
+COPY tree1 TO '{TEST_DIR}/tree_plain.nwk' (FORMAT NEWICK);
+
+statement ok
+COPY tree1 TO '{TEST_DIR}/tree_level0.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 0);
+
+statement ok
+COPY tree1 TO '{TEST_DIR}/tree_level9.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 9);
+
+query II
+SELECT contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_level0.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk')))),
+       contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_level9.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk'))));
+----
+true	false
+
+query I
+SELECT count(*) FROM read_newick('{TEST_DIR}/tree_level0.nwk.gz');
+----
+5
+
+# As for FASTQ and FASTA, a level is refused where it would be ignored.
+statement error
+COPY tree1 TO '{TEST_DIR}/tree_plain_level.nwk' (FORMAT NEWICK, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to gzip output
+
+statement error
+COPY tree1 TO 's3://miint-no-such-bucket/tree.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to local gzip output
