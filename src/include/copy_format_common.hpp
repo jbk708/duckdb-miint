@@ -10,7 +10,6 @@
 // UUID::ToString, AllowedIdTypeList, exception types, and UnifiedVectorFormat --
 // id_column_utils.hpp transitively provides all of them.
 #include "id_column_utils.hpp"
-#include "bgzf_write_mode.hpp"
 
 // htslib's BGZF handle; defined in <htslib/bgzf.h>, only included in the .cpp.
 struct BGZF;
@@ -34,9 +33,10 @@ public:
 	// compression_threads > 1 enables htslib bgzf multithreaded compression for
 	// LOCAL gzip output (bgzf is gzip-compatible and bgzf_mt preserves block
 	// order). Uncompressed output and remote (scheme://) gzip targets keep the
-	// BufferedFileWriter path. compression_level applies to local gzip output only.
-	CopyFileHandle(FileSystem &fs, const string &path, FileCompressionType compression, int compression_threads = 1,
-	               int compression_level = ::miint::DEFAULT_GZIP_LEVEL);
+	// BufferedFileWriter path. compression_level applies to local gzip output only; it has no
+	// default, so no caller silently gets a level it did not choose.
+	CopyFileHandle(FileSystem &fs, const string &path, FileCompressionType compression, int compression_threads,
+	               int compression_level);
 	~CopyFileHandle();
 
 	void Write(const_data_ptr_t data, idx_t size);

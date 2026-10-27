@@ -252,6 +252,10 @@ void CommonCopyParameters::ParseFromOptions(const identifier_map_t<vector<Value>
 		} else if (option.first == "compression") {
 			compression_param = option.second[0];
 		} else if (option.first == "compression_level") {
+			// A bare or NULL level names no level; refused rather than read as the default.
+			if (option.second.size() != 1 || option.second[0].IsNull()) {
+				throw BinderException("COMPRESSION_LEVEL needs a level between 0 and 9");
+			}
 			compression_level_param = option.second[0];
 		}
 	}
@@ -271,10 +275,16 @@ void CommonCopyParameters::ParseFromOptions(const identifier_map_t<vector<Value>
 	compression = DetectCompressionType(file_path, compression_param);
 
 	if (!compression_level_param.IsNull()) {
-		compression_level = compression_level_param.GetValue<int32_t>();
-		if (compression_level < 0 || compression_level > 9) {
-			throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", compression_level);
+		// A cast would round a fractional level to a neighbouring one.
+		if (!compression_level_param.type().IsIntegral()) {
+			throw BinderException("COMPRESSION_LEVEL must be a whole number between 0 and 9, got %s",
+			                      compression_level_param.ToString());
 		}
+		const auto level = compression_level_param.GetValue<int64_t>();
+		if (level < 0 || level > 9) {
+			throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", level);
+		}
+		compression_level = static_cast<int>(level);
 		// Refused rather than ignored where it would not apply.
 		if (compression != FileCompressionType::GZIP) {
 			throw BinderException("COMPRESSION_LEVEL applies only to gzip output");

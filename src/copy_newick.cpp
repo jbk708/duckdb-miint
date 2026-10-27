@@ -1,5 +1,6 @@
 #include "copy_newick.hpp"
 #include "copy_format_common.hpp"
+#include "bgzf_write_mode.hpp"
 #include "NewickTree.hpp"
 #include "placement_table_reader.hpp"
 #include "duckdb/common/exception.hpp"
@@ -360,7 +361,7 @@ static void NewickCopyFinalize(ClientContext &context, FunctionData &bind_data, 
 
 	// Open file and write (CopyFileHandle handles compression)
 	auto &fs = FileSystem::GetFileSystem(context);
-	gstate.file = make_uniq<CopyFileHandle>(fs, gstate.file_path, gstate.compression);
+	gstate.file = make_uniq<CopyFileHandle>(fs, gstate.file_path, gstate.compression, 1, ::miint::DEFAULT_GZIP_LEVEL);
 	gstate.file->WriteString(newick);
 	gstate.file->Close();
 }
