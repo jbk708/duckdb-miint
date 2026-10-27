@@ -278,7 +278,7 @@ void CommonCopyParameters::ParseFromOptions(const identifier_map_t<vector<Value>
 		// A cast would round a fractional level to a neighbouring one.
 		if (!compression_level_param.type().IsIntegral()) {
 			throw BinderException("COMPRESSION_LEVEL must be a whole number between 0 and 9, got %s",
-			                      compression_level_param.ToString());
+			                      compression_level_param.ToSQLString());
 		}
 		const auto level = compression_level_param.GetValue<int64_t>();
 		if (level < 0 || level > 9) {

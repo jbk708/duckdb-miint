@@ -3,7 +3,7 @@
 // Open-mode selection for the local bgzf gzip writer (COPY ... COMPRESSION gzip).
 //
 // Returns the htslib bgzf_open mode string. Regular-file (or not-yet-existing) targets get "wx<level>"
-// -- write, exclusive-create (O_EXCL), gzip `level` (the COPY's COMPRESSION_LEVEL) -- which
+// -- write, exclusive-create (O_EXCL), compression `level` (the caller's) -- which
 // preserves the FILE_CREATE_NEW "fail if the file already exists" contract atomically (no TOCTOU).
 // Targets that ALWAYS already exist -- stdout/stderr, /dev/fd aliases, and pre-created pipes/devices --
 // must NOT get O_EXCL, or the open fails with EEXIST and breaks gzip streaming to a pipe or
@@ -18,8 +18,7 @@
 
 namespace miint {
 
-// htslib's and gzip's default level. COPY FORMAT FASTQ and FASTA default to 1 instead
-// (SEQUENCE_DEFAULT_GZIP_LEVEL in copy_format_common.hpp).
+// htslib's and gzip's default level.
 constexpr int DEFAULT_GZIP_LEVEL = 6;
 
 inline std::string BgzfWriteMode(const std::string &path, int level = DEFAULT_GZIP_LEVEL) {

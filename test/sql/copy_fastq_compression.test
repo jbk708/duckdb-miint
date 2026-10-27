@@ -102,9 +102,8 @@ FROM read_fastx('{TEST_DIR}/backward_compat.fq.gz') ORDER BY sequence_index;
 1	read_a1	AAAA	[40, 40, 40, 40]	NULL
 2	read_a2	TTTT	[39, 39, 39, 39]	NULL
 
-# COMPRESSION_LEVEL trades output size for compression time; level 6 is 3-4x the CPU of level 1,
-# which matters when most reads survive a filter. The records vary (md5-derived bases, hashed
-# qualities) so deflate has work to do at every level, and span dozens of bgzf blocks.
+# The records vary (md5-derived bases, hashed qualities) so deflate has work to do at every level,
+# and span dozens of bgzf blocks.
 statement ok
 CREATE TABLE varied AS
 SELECT i AS sequence_index, 'r' || i AS read_id,
@@ -128,25 +127,48 @@ statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
 TO '{TEST_DIR}/level_default.fq.gz' (FORMAT FASTQ);
 
+# Level 0 stores blocks without deflating them, on the multi-threaded writer and on the
+# single-threaded one alike.
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/level0.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 0);
+
+statement ok
+SET threads = 1;
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/level0_t1.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 0);
+
+statement ok
+RESET threads;
+
 # The level reaches the compressor: were it parsed and dropped, both files would be the same size.
 query I
 SELECT (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/level9.fq.gz'));
 ----
 true
 
-# Leaving it out writes level 1: FASTQ is mostly written whole, often what survives a filter, and
-# level 6 costs about three times the compression time for files about 9% smaller.
+# Leaving COMPRESSION_LEVEL out writes level 1.
 query I
 SELECT (SELECT size FROM read_blob('{TEST_DIR}/level_default.fq.gz')) = (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz'));
 ----
 true
 
-# Every level is lossless: each file reads back as exactly the records written.
-query II
-SELECT (SELECT count(*) FROM read_fastx('{TEST_DIR}/level1.fq.gz')),
-       (SELECT count(*) FROM read_fastx('{TEST_DIR}/level9.fq.gz'));
+# Stored blocks are larger than level 1's deflated ones.
+query I
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/level0.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz'));
 ----
-20000	20000
+true
+
+# Every level is lossless: each file reads back as exactly the records written.
+query IIII
+SELECT (SELECT count(*) FROM read_fastx('{TEST_DIR}/level1.fq.gz')),
+       (SELECT count(*) FROM read_fastx('{TEST_DIR}/level9.fq.gz')),
+       (SELECT count(*) FROM read_fastx('{TEST_DIR}/level0.fq.gz')),
+       (SELECT count(*) FROM read_fastx('{TEST_DIR}/level0_t1.fq.gz'));
+----
+20000	20000	20000	20000
 
 query I
 SELECT count(*) FROM (
@@ -154,6 +176,12 @@ SELECT count(*) FROM (
    EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
   UNION ALL
   (SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/level9.fq.gz')
+   EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
+  UNION ALL
+  (SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/level0.fq.gz')
+   EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
+  UNION ALL
+  (SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/level0_t1.fq.gz')
    EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
 );
 ----
@@ -174,6 +202,11 @@ SELECT (SELECT size FROM read_blob('{TEST_DIR}/split1.R1.fq.gz')) > (SELECT size
 ----
 true	true
 
+query II
+SELECT count(*), count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/split1.R1.fq.gz', sequence2 := '{TEST_DIR}/split1.R2.fq.gz');
+----
+20000	20000
+
 query I
 SELECT count(*) FROM (
   SELECT read_id, sequence1, qual1, sequence2, qual2
@@ -183,11 +216,16 @@ SELECT count(*) FROM (
 ----
 0
 
-# Refused at bind, before any file is opened: a level outside gzip's 0-9.
+# Refused at bind, before any file is opened: a level outside 0-9.
 statement error
 COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level10.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 10);
 ----
 COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/level10.fq.gz');
+----
+0
 
 statement error
 COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_neg.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL -1);
@@ -210,6 +248,11 @@ statement error
 COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_frac.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1.6);
 ----
 COMPRESSION_LEVEL must be a whole number between 0 and 9, got 1.6
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_str.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL '1');
+----
+COMPRESSION_LEVEL must be a whole number between 0 and 9, got '1'
 
 # A level on output that is not compressed would be ignored, so it is refused.
 statement error

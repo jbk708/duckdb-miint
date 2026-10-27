@@ -64,8 +64,8 @@ FROM read_fastx('{TEST_DIR}/backward_compat.fa.gz') ORDER BY sequence_index;
 1	seq1	ATGCATGCATGC	NULL
 2	seq2	GGCCGGCCGGCC	NULL
 
-# COMPRESSION_LEVEL reaches FASTA's compressor as it does FASTQ's (copy_fastq_compression.test has
-# the full set): on records deflate has work to do, level 1 writes a larger file than level 9.
+# COMPRESSION_LEVEL reaches FASTA's compressor: on records deflate has work to do, level 1 writes a
+# larger file than level 9. FASTA shares FASTQ's option parsing, where each refusal is tested.
 statement ok
 CREATE TABLE varied AS
 SELECT i AS sequence_index, 'r' || i AS read_id,
@@ -86,8 +86,7 @@ SELECT (SELECT size FROM read_blob('{TEST_DIR}/level1.fa.gz')) > (SELECT size FR
 ----
 true
 
-# Leaving it out writes level 1, as for FASTQ: level 6 costs about three times the compression time
-# for files about 9% smaller.
+# Leaving COMPRESSION_LEVEL out writes level 1.
 statement ok
 COPY (SELECT read_id, sequence1 FROM varied ORDER BY sequence_index)
 TO '{TEST_DIR}/level_default.fa.gz' (FORMAT FASTA);
@@ -96,6 +95,11 @@ query I
 SELECT (SELECT size FROM read_blob('{TEST_DIR}/level_default.fa.gz')) = (SELECT size FROM read_blob('{TEST_DIR}/level1.fa.gz'));
 ----
 true
+
+query II
+SELECT count(*), count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level1.fa.gz');
+----
+20000	20000
 
 query I
 SELECT count(*) FROM (
