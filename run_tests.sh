@@ -296,6 +296,18 @@ if conda run -n massql python3 -c "from massql import msql_engine" 2>/dev/null; 
     export MASSQL_PYTHON_AVAILABLE=1
 fi
 
+# An extension loads only into the DuckDB version it was built for, so Python's duckdb must match.
+export MIINT_TEST_PYTHON="${MIINT_TEST_PYTHON:-python3}"
+if [ "v$("$MIINT_TEST_PYTHON" -c 'import duckdb; print(duckdb.__version__)' 2>/dev/null)" = \
+    "$(./build/release/duckdb -csv -noheader -c 'SELECT version();' 2>/dev/null)" ]; then
+    export DUCKDB_PYTHON_AVAILABLE=1
+elif [ -n "${CI:-}" ]; then
+    echo "ERROR: $MIINT_TEST_PYTHON has no duckdb matching this build; CI must run load_miint_concurrent.sh" >&2
+    exit 1
+else
+    echo "Warning: $MIINT_TEST_PYTHON has no duckdb matching this build (set MIINT_TEST_PYTHON); skipping load_miint_concurrent.sh"
+fi
+
 # Download and cache MassQL test data if not present
 CACHE_DIR="data/cache"
 mkdir -p "$CACHE_DIR"
