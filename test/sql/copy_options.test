@@ -59,7 +59,7 @@ COPY (SELECT node_index, name, branch_length, parent_index FROM tree1) TO '{TEST
 ----
 EDGE_IDS option requires 'edge_id' column in input
 
-# READ_GROUP and TAGS are structs, which DuckDB passes to the format unchecked; the format refuses a
+# READ_GROUP and TAGS are structs, whose arguments DuckDB does not count; the format refuses a
 # READ_GROUP with no value or with more than one.
 statement error
 COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bare_rg.bam' (FORMAT UBAM, READ_GROUP);
@@ -205,8 +205,8 @@ statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_str3_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL '3');
 
 # NEWICK takes COMPRESSION_LEVEL too. Level 0 stores the tree as written, so its text appears in the
-# .gz bytes; the default level and level 9 compress it, so it does not. The tree has 2,000 tips: deflate
-# stores a tree of a few tips at every level.
+# .gz bytes; the default level and level 9 compress it, so it does not. The tree has 2,000 tips: at the
+# default level, a tree of a few tips is stored uncompressed too.
 statement ok
 CREATE TABLE star AS
 SELECT 0::BIGINT AS node_index, NULL::VARCHAR AS name, NULL::DOUBLE AS branch_length, NULL::BIGINT AS parent_index

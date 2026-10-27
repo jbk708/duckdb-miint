@@ -1,6 +1,5 @@
 #include "copy_sam.hpp"
 #include "copy_option_parsing.hpp"
-#include "remote_file_helper.hpp"
 #include "htslib_raii.hpp"
 #include "id_column_codec.hpp"
 #include "id_column_utils.hpp"
@@ -165,10 +164,7 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 	result->names = IdentifiersToStrings(names);
 	result->format = default_format;
 	const char *format_name = default_format == SAMOutputFormat::BAM ? "BAM" : "SAM";
-	// htslib writes local files only: it is built without libcurl.
-	if (miint::RemoteFileHelper::IsRemotePath(result->file_path)) {
-		throw BinderException("COPY FORMAT %s writes local files only, not '%s'", format_name, result->file_path);
-	}
+	RefuseRemoteCopyTarget(format_name, result->file_path);
 
 	// Detect and cache column indices
 	result->indices.FindIndices(IdentifiersToStrings(names));

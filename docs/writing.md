@@ -10,10 +10,10 @@ TO 'some_other_file.fasta' (FORMAT FASTA);
 Options follow DuckDB's rules for COPY options in every format here, as they do for CSV and Parquet:
 
 - A boolean option given alone means true: `(FORMAT FASTQ, INTERLEAVE)` is `INTERLEAVE true`.
-- An option the format does not have is refused, and the error may suggest options with similar names. DuckDB's own COPY options, such as `OVERWRITE` and `PER_THREAD_OUTPUT`, are accepted by every format.
+- An option the format does not have is refused, and the error may suggest options with similar names. The names of DuckDB's own COPY options, such as `OVERWRITE`, are not refused as unknown; DuckDB handles them, and refuses those a format cannot support, such as `FILE_SIZE_BYTES`.
 - Other values are cast to the option's type, so `COMPRESSION_LEVEL '3'` is level 3 and `COMPRESSION_LEVEL 1.6` is level 2. An option with no value or a NULL value is refused.
 
-FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, and the COPY fails as it would for DuckDB's own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target.
+FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, as it does for its own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target.
 
 ## Table of Contents
 
@@ -171,6 +171,8 @@ Note that these validation errors, like the pre-existing position checks, fire m
 - `tag_as`, `tag_xs`, `tag_ys`, `tag_xn`, `tag_xm`, `tag_xo`, `tag_xg`, `tag_nm` (BIGINT): Optional integer tags
 - `tag_yt`, `tag_md`, `tag_sa` (VARCHAR): Optional string tags
 
+SAM and BAM are written to local files only; a remote target (`s3://...`) is refused.
+
 **Parameters:**
 - `INCLUDE_HEADER` (default: true): Include header with reference sequences
   - **Note:** BAM format requires `INCLUDE_HEADER=true` (headers are mandatory in BAM files)
@@ -319,6 +321,8 @@ Every record is written unmapped (`FLAG=4`), with no `@SQ` header and no referen
 
 Single-end only (no `sequence2`/`qual2`). Any additional projected columns are ignored unless referenced by `TAGS`.
 
+UBAM is written to local files only; a remote target is refused.
+
 **Parameters:**
 - `READ_GROUP` (STRUCT, optional): Emits an `@RG` header line and a per-record `RG:Z` tag. An `ID` field is required; any other fields (`PL`, `DS`, `SM`, `LB`, `PU`, `CN`, …) are passed through. Field names are case-insensitive (upper-cased to the SAM codes). Example: `READ_GROUP {ID: 'qiita', PL: 'PACBIO', DS: 'READTYPE=CCS'}`. `DS:READTYPE=CCS` is the field `lima` keys on to treat the input as CCS.
 - `TAGS` (STRUCT, optional): Maps a 2-character BAM aux tag to a projected **integer** column, written as a signed 32-bit (`i`) tag per record. A NULL cell omits the tag for that record. Example: `TAGS {zm: 'zmw'}` writes `zm:i:<zmw>` (PacBio ZMW hole number). Non-integer columns are rejected at bind. Note: struct keys are lower-cased unless quoted, so an uppercase tag needs a quoted key (e.g. `TAGS {'NM': 'edit_distance'}`); the `RG` tag is reserved for `READ_GROUP`.
@@ -353,10 +357,12 @@ Write query results to BIOM (Biological Observation Matrix) format files. BIOM i
 - `sample_id` (VARCHAR): Sample identifier
 - `value` (DOUBLE): Abundance/count value
 
+BIOM is written to local files only; a remote target is refused.
+
 **Parameters:**
-- `COMPRESSION` (default: none): HDF5 internal compression ('gzip' or 'none')
-- `ID` (default: auto-generated): Custom table identifier for BIOM metadata
-- `GENERATED_BY` (default: 'DuckDB-MIINT'): Tool/version string for provenance tracking
+- `COMPRESSION` (default: 'gzip'): HDF5 internal compression ('gzip' or 'none')
+- `ID` (default: 'No Table ID'): Custom table identifier for BIOM metadata
+- `GENERATED_BY` (default: 'miint'): Tool/version string for provenance tracking
 
 **Behavior:**
 - **Automatic deduplication**: Duplicate (feature_id, sample_id) pairs are automatically summed

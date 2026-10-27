@@ -1,12 +1,14 @@
 #pragma once
 
 // How every miint COPY format reads its options. Each format declares its options, with DeclareCopyOption,
-// in its CopyFunction::copy_options callback, and DuckDB refuses an option the format does not declare.
-// For an option declared with a type, DuckDB also refuses a NULL, a list, or an argument that does not
-// cast to the type, with the same errors as for its own formats, and casts the rest before the format's
-// bind sees them. An option declared ANY reaches the bind as written; read it with CopyOptionValue.
+// in its CopyFunction::copy_options callback, and DuckDB refuses an option the format does not declare,
+// and a NULL for any option. For an option declared with a type, DuckDB also refuses no argument (unless
+// BOOLEAN), a list, or an argument that does not cast to the type, with the same errors as for its own
+// formats, and casts the rest before the format's bind sees them. An option declared ANY reaches the bind
+// with its arguments as written; read it with CopyOptionValue.
 
 #include "duckdb/function/copy_function.hpp"
+#include "remote_file_helper.hpp"
 
 namespace duckdb {
 
@@ -15,7 +17,7 @@ inline bool CopyOptionFlag(const vector<Value> &values) {
 	return values.empty() || BooleanValue::Get(values[0]);
 }
 
-//! An option declared ANY, which DuckDB passes through without checking its argument.
+//! An option declared ANY, whose arguments DuckDB does not count or type-check.
 inline const Value &CopyOptionValue(const Identifier &name, const vector<Value> &values) {
 	if (values.size() != 1) {
 		throw BinderException("Copy option \"%s\" requires a single argument", name.GetIdentifierName());
@@ -39,6 +41,14 @@ inline int CopyOptionCompressionLevel(const vector<Value> &values) {
 		throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", level);
 	}
 	return static_cast<int>(level);
+}
+
+//! For formats whose writer opens the target itself and can write only local files: htslib (SAM, BAM,
+//! UBAM), built without libcurl, and HDF5 (BIOM). miint's DuckDB-backed hFILE reads only.
+inline void RefuseRemoteCopyTarget(const char *format, const string &file_path) {
+	if (miint::RemoteFileHelper::IsRemotePath(file_path)) {
+		throw BinderException("COPY FORMAT %s writes local files only, not '%s'", format, file_path);
+	}
 }
 
 //! For the end of a bind's if-chain: an option the format declares but no branch reads.
