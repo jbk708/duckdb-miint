@@ -13,11 +13,6 @@
 
 namespace duckdb {
 
-// gzip level when COMPRESSION_LEVEL is not given. FASTQ is mostly written whole (often what
-// survives a filter), where level 6 costs about three times level 1's compression time for files
-// about 9% smaller.
-static constexpr int FASTQ_DEFAULT_GZIP_LEVEL = 1;
-
 //===--------------------------------------------------------------------===//
 // Bind Data
 //===--------------------------------------------------------------------===//
@@ -93,7 +88,6 @@ static unique_ptr<FunctionData> FastqCopyBind(ClientContext &context, CopyFuncti
 
 	// Parse common parameters
 	CommonCopyParameters common_params;
-	common_params.compression_level = FASTQ_DEFAULT_GZIP_LEVEL;
 
 	Value qual_offset_param;
 

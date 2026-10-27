@@ -21,6 +21,10 @@ namespace duckdb {
 // Constants
 //===--------------------------------------------------------------------===//
 constexpr idx_t DEFAULT_COPY_FLUSH_SIZE = 1024 * 1024; // 1MB default buffer size
+// FASTQ/FASTA gzip level when COMPRESSION_LEVEL is not given. Sequence files are mostly written
+// whole (often what survives a filter), where level 6 costs about three times level 1's compression
+// time for files about 9% smaller.
+constexpr int SEQUENCE_DEFAULT_GZIP_LEVEL = 1;
 
 //===--------------------------------------------------------------------===//
 // File Handle Wrapper (handles both compressed and uncompressed)
@@ -95,7 +99,7 @@ struct CommonCopyParameters {
 	bool id_as_sequence_index = false;
 	bool include_comment = false;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
-	int compression_level = ::miint::DEFAULT_GZIP_LEVEL;
+	int compression_level = SEQUENCE_DEFAULT_GZIP_LEVEL;
 	idx_t flush_size = DEFAULT_COPY_FLUSH_SIZE;
 
 	void ParseFromOptions(const identifier_map_t<vector<Value>> &options, const string &file_path);
@@ -187,7 +191,7 @@ struct SequenceCopyBindData : public FunctionData {
 	bool id_as_sequence_index = false;
 	bool include_comment = false;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
-	int compression_level = ::miint::DEFAULT_GZIP_LEVEL; // COMPRESSION_LEVEL, for local gzip output
+	int compression_level = SEQUENCE_DEFAULT_GZIP_LEVEL; // COMPRESSION_LEVEL, for local gzip output
 	idx_t flush_size = DEFAULT_COPY_FLUSH_SIZE;
 	string file_path;
 	// Whether the input *schema* carries R2 columns (sequence2 [+ qual2 for FASTQ]). This does
@@ -220,7 +224,7 @@ struct SequenceCopyGlobalState : public GlobalFunctionData {
 	// Worker threads for bgzf gzip compression (follows DuckDB's thread count) and the gzip level;
 	// captured at global-init so the lazily-created R2 file uses the same values.
 	int compression_threads = 1;
-	int compression_level = ::miint::DEFAULT_GZIP_LEVEL;
+	int compression_level = SEQUENCE_DEFAULT_GZIP_LEVEL;
 	// Consistency tracking across all threads: a single COPY must be either all single-end or
 	// all paired-end. Both set true -> inconsistent input (checked at finalize).
 	bool saw_paired = false;

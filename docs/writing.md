@@ -99,7 +99,7 @@ Write query results to FASTA format files. Requires `read_id` and `sequence1` co
 - `ID_AS_SEQUENCE_INDEX` (default: false): Use `sequence_index` as identifier instead of `read_id`
 - `INTERLEAVE` (default: false): When the data is paired-end, write R1/R2 interleaved into a single file. Optional — see "Single-end vs paired-end output" below. Cannot be combined with the `{ORIENTATION}` placeholder.
 - `COMPRESSION` (default: auto): Enable gzip compression (auto-detected from `.gz` extension). Local `.gz` output is written as **BGZF** (block-gzip via htslib): a fully standard gzip file readable by any gzip tool, but compressed in parallel — it follows DuckDB's thread count (`PRAGMA threads`) and runs ~10x faster than single-threaded gzip on multi-core hosts, while staying block-indexable. Output order is preserved. (Remote `scheme://` targets fall back to single-threaded gzip.)
-- `COMPRESSION_LEVEL` (0-9, default: 6): gzip level for local `.gz` output. Lower is faster and larger: on 8 threads, compressing 10 million read pairs took 8.9 s at level 1 and 25.6 s at level 6, and level 1's files were about 9% larger. Refused for uncompressed output and for remote targets, whose gzip writer takes no level.
+- `COMPRESSION_LEVEL` (0-9, default: 1): gzip level for local `.gz` output. Lower is faster and larger: on 8 threads, compressing 10 million read pairs took 8.9 s at level 1 and 25.6 s at level 6, and level 1's files were about 9% larger. Refused for uncompressed output and for remote targets, whose gzip writer takes no level.
 
 **Single-end vs paired-end output:**
 

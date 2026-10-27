@@ -86,17 +86,14 @@ SELECT (SELECT size FROM read_blob('{TEST_DIR}/level1.fa.gz')) > (SELECT size FR
 ----
 true
 
-# FASTA keeps level 6 when COMPRESSION_LEVEL is left out; only FASTQ defaults to level 1.
-statement ok
-COPY (SELECT read_id, sequence1 FROM varied ORDER BY sequence_index)
-TO '{TEST_DIR}/level6.fa.gz' (FORMAT FASTA, COMPRESSION_LEVEL 6);
-
+# Leaving it out writes level 1, as for FASTQ: level 6 costs about three times the compression time
+# for files about 9% smaller.
 statement ok
 COPY (SELECT read_id, sequence1 FROM varied ORDER BY sequence_index)
 TO '{TEST_DIR}/level_default.fa.gz' (FORMAT FASTA);
 
 query I
-SELECT (SELECT size FROM read_blob('{TEST_DIR}/level_default.fa.gz')) = (SELECT size FROM read_blob('{TEST_DIR}/level6.fa.gz'));
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/level_default.fa.gz')) = (SELECT size FROM read_blob('{TEST_DIR}/level1.fa.gz'));
 ----
 true
 

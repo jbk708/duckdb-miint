@@ -18,7 +18,8 @@
 
 namespace miint {
 
-// htslib's and gzip's default level: COPY's when COMPRESSION_LEVEL is not given, except FASTQ's (1).
+// htslib's and gzip's default level. COPY FORMAT FASTQ and FASTA default to 1 instead
+// (SEQUENCE_DEFAULT_GZIP_LEVEL in copy_format_common.hpp).
 constexpr int DEFAULT_GZIP_LEVEL = 6;
 
 inline std::string BgzfWriteMode(const std::string &path, int level = DEFAULT_GZIP_LEVEL) {
