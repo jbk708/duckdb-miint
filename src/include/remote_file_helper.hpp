@@ -39,8 +39,8 @@ private:
 
 class RemoteFileHelper {
 public:
-	// Every URI scheme but file:// (https://, s3://, az://, ...) is remote: DuckDB's file systems serve
-	// it, or report that none can. Plain paths and file:// URIs are local.
+	// Every URI scheme but file:// (https://, s3://, az://, ...) is remote, and is opened through DuckDB's
+	// file systems. Plain paths and file:// URIs are local.
 	static bool IsRemotePath(const std::string &path);
 
 	// For local files only — returns path as-is with is_temp=false.

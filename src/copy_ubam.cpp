@@ -1,6 +1,7 @@
 #include "copy_ubam.hpp"
 #include "copy_format_common.hpp" // ResolveSequenceRecordId (read_id VARCHAR/BIGINT/UUID dispatch)
 #include "copy_option_parsing.hpp"
+#include "remote_file_helper.hpp"
 #include "htslib_raii.hpp"
 #include "id_column_utils.hpp" // IsAllowedIdType, AllowedIdTypeList
 #include "duckdb/common/exception.hpp"
@@ -181,6 +182,10 @@ static unique_ptr<FunctionData> UBAMCopyBind(ClientContext &context, CopyFunctio
 	auto result = make_uniq<UBAMCopyBindData>();
 	result->file_path = input.info.file_path;
 	result->names = IdentifiersToStrings(names);
+	// htslib writes local files only: it is built without libcurl.
+	if (miint::RemoteFileHelper::IsRemotePath(result->file_path)) {
+		throw BinderException("COPY FORMAT UBAM writes local files only, not '%s'", result->file_path);
+	}
 
 	// Locate required columns (case-insensitive, matching the SAM/BAM writer).
 	for (idx_t i = 0; i < names.size(); i++) {
@@ -228,6 +233,8 @@ static unique_ptr<FunctionData> UBAMCopyBind(ClientContext &context, CopyFunctio
 		} else if (option.first == "reference_lengths") {
 			throw BinderException("COPY FORMAT UBAM does not accept REFERENCE_LENGTHS: a uBAM is headerless "
 			                      "(unaligned reads, no @SQ). Use FORMAT BAM for aligned records.");
+		} else {
+			ThrowUnreadCopyOption("UBAM", option.first);
 		}
 	}
 
@@ -458,7 +465,7 @@ static void UBAMCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 static void UBAMCopyOptions(ClientContext &context, CopyOptionsInput &input) {
 	DeclareCopyOption(input, "read_group", LogicalType::ANY);
 	DeclareCopyOption(input, "tags", LogicalType::ANY);
-	DeclareCopyOption(input, "compression_level", LogicalType::BIGINT);
+	DeclareCompressionLevelCopyOption(input);
 	DeclareCopyOption(input, "reference_lengths", LogicalType::ANY);
 }
 

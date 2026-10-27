@@ -18,8 +18,8 @@ CREATE TABLE ref_table AS SELECT 'G1234' AS name, 20 AS length UNION ALL SELECT 
 statement ok
 CREATE TABLE tree1 AS SELECT * FROM read_newick('data/newick/simple.nwk');
 
-# A bare boolean option means true, as DuckDB's HEADER does for CSV. It used to raise an INTERNAL
-# error, which invalidates the database.
+# A bare boolean option means true, as DuckDB's HEADER does for CSV: it writes what the option set to
+# true writes.
 statement ok
 COPY fq TO '{TEST_DIR}/bare_interleave.fq' (FORMAT FASTQ, INTERLEAVE);
 
@@ -58,6 +58,18 @@ statement error
 COPY (SELECT node_index, name, branch_length, parent_index FROM tree1) TO '{TEST_DIR}/bare_edge_ids.nwk' (FORMAT NEWICK, EDGE_IDS);
 ----
 EDGE_IDS option requires 'edge_id' column in input
+
+# READ_GROUP and TAGS are structs, which DuckDB passes to the format unchecked; the format refuses a
+# READ_GROUP with no value or with more than one.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bare_rg.bam' (FORMAT UBAM, READ_GROUP);
+----
+Copy option "read_group" requires a single argument
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/two_rg.bam' (FORMAT UBAM, READ_GROUP ({ID: 'a'}, {ID: 'b'}));
+----
+Copy option "read_group" requires a single argument
 
 # An option a format does not have is refused by DuckDB, with the closest names it does have.
 statement error
@@ -153,25 +165,39 @@ COPY tree1 TO '{TEST_DIR}/ten.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 10);
 ----
 COMPRESSION_LEVEL must be between 0 and 9, got 10
 
-# '3' is level 3 and 1.6 is level 2: the files match the ones written with those levels.
+# '3' is level 3 and 1.6 is level 2. On records deflate has work to do, levels 1, 2 and 3 write
+# different files, so matching the level 3 and level 2 files identifies the level each was cast to.
 statement ok
-COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 3);
+CREATE TABLE varied AS
+SELECT 'r' || i AS read_id,
+       translate(md5(i::VARCHAR) || md5((i * 7)::VARCHAR), '0123456789abcdef', 'ACGTACGTACGTACGT') AS sequence1,
+       list_transform(range(64), lambda x: (hash(i, x) % 41)::UTINYINT) AS qual1
+FROM range(2000) t(i);
 
 statement ok
-COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_str3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL '3');
+COPY varied TO '{TEST_DIR}/level1.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
 
 statement ok
-COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level2.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 2);
+COPY varied TO '{TEST_DIR}/level2.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 2);
 
 statement ok
-COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_frac.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1.6);
+COPY varied TO '{TEST_DIR}/level3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 3);
 
-query II
-SELECT (SELECT content FROM read_blob('{TEST_DIR}/level_str3.fq.gz')) = (SELECT content FROM read_blob('{TEST_DIR}/level3.fq.gz')),
+statement ok
+COPY varied TO '{TEST_DIR}/level_str3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL '3');
+
+statement ok
+COPY varied TO '{TEST_DIR}/level_frac.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1.6);
+
+query IIII
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/level1.fq.gz')) <> (SELECT content FROM read_blob('{TEST_DIR}/level2.fq.gz')),
+       (SELECT content FROM read_blob('{TEST_DIR}/level2.fq.gz')) <> (SELECT content FROM read_blob('{TEST_DIR}/level3.fq.gz')),
+       (SELECT content FROM read_blob('{TEST_DIR}/level_str3.fq.gz')) = (SELECT content FROM read_blob('{TEST_DIR}/level3.fq.gz')),
        (SELECT content FROM read_blob('{TEST_DIR}/level_frac.fq.gz')) = (SELECT content FROM read_blob('{TEST_DIR}/level2.fq.gz'));
 ----
-true	true
+true	true	true	true
 
+# BAM and UBAM accept the quoted level too.
 statement ok
 COPY sam_test TO '{TEST_DIR}/level_str3.bam' (FORMAT BAM, COMPRESSION_LEVEL '3', REFERENCE_LENGTHS 'ref_table');
 
@@ -179,26 +205,37 @@ statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_str3_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL '3');
 
 # NEWICK takes COMPRESSION_LEVEL too. Level 0 stores the tree as written, so its text appears in the
-# .gz bytes; at level 9 it is compressed and does not.
+# .gz bytes; the default level and level 9 compress it, so it does not. The tree has 2,000 tips: deflate
+# stores a tree of a few tips at every level.
 statement ok
-COPY tree1 TO '{TEST_DIR}/tree_plain.nwk' (FORMAT NEWICK);
+CREATE TABLE star AS
+SELECT 0::BIGINT AS node_index, NULL::VARCHAR AS name, NULL::DOUBLE AS branch_length, NULL::BIGINT AS parent_index
+UNION ALL
+SELECT i, 'tip' || i, (hash(i) % 1000) / 1000.0, 0 FROM range(1, 2001) t(i);
 
 statement ok
-COPY tree1 TO '{TEST_DIR}/tree_level0.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 0);
+COPY star TO '{TEST_DIR}/tree_plain.nwk' (FORMAT NEWICK);
 
 statement ok
-COPY tree1 TO '{TEST_DIR}/tree_level9.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 9);
+COPY star TO '{TEST_DIR}/tree_level0.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 0);
 
-query II
+statement ok
+COPY star TO '{TEST_DIR}/tree_default.nwk.gz' (FORMAT NEWICK);
+
+statement ok
+COPY star TO '{TEST_DIR}/tree_level9.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 9);
+
+query III
 SELECT contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_level0.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk')))),
+       contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_default.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk')))),
        contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_level9.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk'))));
 ----
-true	false
+true	false	false
 
 query I
 SELECT count(*) FROM read_newick('{TEST_DIR}/tree_level0.nwk.gz');
 ----
-5
+2001
 
 # As for FASTQ and FASTA, a level is refused where it would be ignored.
 statement error

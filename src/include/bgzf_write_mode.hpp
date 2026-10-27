@@ -21,8 +21,17 @@ namespace miint {
 // htslib's and gzip's default level.
 constexpr int DEFAULT_GZIP_LEVEL = 6;
 
-inline std::string BgzfWriteMode(const std::string &path, int level = DEFAULT_GZIP_LEVEL) {
+// `level` has no default: a caller that left it out would get a level it did not choose.
+inline std::string BgzfWriteMode(const std::string &target, int level) {
 	const std::string digit = std::to_string(level);
+	// htslib opens file://localhost/<path> and file:///<path> as /<path> (hfile.c, hopen_fd_fileuri), so
+	// the checks below look at that path.
+	std::string path = target;
+	if (path.rfind("file://localhost/", 0) == 0) {
+		path.erase(0, 16);
+	} else if (path.rfind("file:///", 0) == 0) {
+		path.erase(0, 7);
+	}
 	auto starts_with = [&](const char *prefix) {
 		return path.rfind(prefix, 0) == 0;
 	};

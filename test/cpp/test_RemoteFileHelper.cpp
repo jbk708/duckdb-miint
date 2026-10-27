@@ -26,9 +26,8 @@ TEST_CASE("IsRemotePath returns false for local paths", "[remote]") {
 	CHECK_FALSE(miint::RemoteFileHelper::IsRemotePath(""));
 }
 
-// A remote path taken for a local one goes to open(2), which fails as a missing local file or
-// writes one. Every URI scheme but file:// belongs to DuckDB's file systems, including schemes miint
-// has never heard of: DuckDB reports what it cannot open.
+// Every URI scheme but file:// is opened through DuckDB's file systems, including schemes miint has no
+// list of: the extension that serves the scheme decides how the path is read or written.
 TEST_CASE("IsRemotePath treats every URI scheme but file:// as remote", "[remote]") {
 	CHECK(miint::RemoteFileHelper::IsRemotePath("az://container/file.fq"));
 	CHECK(miint::RemoteFileHelper::IsRemotePath("azure://container/file.fq"));

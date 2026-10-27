@@ -113,9 +113,6 @@ public:
 			try {
 				if (miint::RemoteFileHelper::IsRemotePath(path)) {
 					hFILE *hf = miint::hfile_duckdb_open(fs, path);
-					if (!hf) {
-						throw IOException("Failed to open remote file: " + path);
-					}
 					if (ref_lengths.has_value()) {
 						readers[file_idx] =
 						    std::make_unique<miint::SAMReader>(hf, path, ref_lengths.value(), include_seq_qual);

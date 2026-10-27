@@ -275,9 +275,7 @@ TO '{TEST_DIR}/output_overwrite_test.biom' (FORMAT BIOM);
 ----
 Cannot overwrite existing file
 
-# Cleanup
-# Options follow DuckDB's rules, as in every miint COPY format (copy_options.test): an unknown option
-# is named, and a bare one is refused instead of raising an INTERNAL error.
+# An option BIOM does not have is refused and named, and GENERATED_BY with no value is refused.
 statement error
 COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO '{TEST_DIR}/bogus.biom' (FORMAT BIOM, BOGUS 1);
 ----
@@ -288,6 +286,13 @@ COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO '{TEST_DIR}/
 ----
 <REGEX>:.*Copy option "?generated_by"? requires an argument of type VARCHAR.*
 
+# The HDF5 writer writes local files only, so a remote target is refused at bind.
+statement error
+COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO 'foo://miint-test/x.biom' (FORMAT BIOM);
+----
+COPY FORMAT BIOM writes local files only
+
+# Cleanup
 statement ok
 DROP TABLE test_biom_basic;
 

@@ -107,10 +107,9 @@ Implementation in `src/SAMReader.cpp`:
 - Validation (scores must fit in valid range)
 
 ### Compression Support
-All COPY formats:
-- Auto-detect from `.gz` extension
-- Manual override via the `COMPRESSION` parameter
-- Buffered writing for performance
+- FASTQ, FASTA, SAM and NEWICK detect gzip output from a `.gz` extension; `COMPRESSION` overrides it.
+- BAM and UBAM are always BGZF-compressed.
+- BIOM's `COMPRESSION` sets HDF5's internal gzip compression; there is no `.gz` detection.
 
 ### Stop Position Calculation
 SAM alignments compute `stop_position` using HTSlib's `bam_endpos()`:
@@ -207,10 +206,11 @@ steps the computation one wave at a time.
 ### Adding a new COPY format
 1. Create `copy_<format>.cpp` and header
 2. Implement `CopyFunction` with `Bind()`, `InitGlobal()`, `Sink()`, `Finalize()`
-3. Use `copy_format_common.cpp` utilities for buffering/compression
-4. Register in `LoadInternal()`
-5. Add to `EXTENSION_SOURCES`
-6. Create comprehensive SQL tests (basic, compression, edge cases)
+3. Declare every option in a `copy_options` callback with `DeclareCopyOption` (`src/include/copy_option_parsing.hpp`), and read them in `Bind()` with that header's helpers, ending the if-chain with `ThrowUnreadCopyOption`. Without `copy_options`, DuckDB checks no option: an unknown one reaches `Bind()`, and a bare one arrives with no value.
+4. Use `copy_format_common.cpp` utilities for buffering/compression
+5. Register in `LoadInternal()`
+6. Add to `EXTENSION_SOURCES`
+7. Create comprehensive SQL tests (basic, compression, edge cases)
 
 ### Adding scalar/aggregate functions
 1. Implement in appropriate source file

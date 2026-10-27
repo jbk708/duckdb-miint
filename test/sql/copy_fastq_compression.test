@@ -250,7 +250,6 @@ COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_neg.fq.
 COMPRESSION_LEVEL must be between 0 and 9, got -1
 
 # A missing or NULL level names no level, so it is refused rather than read as the default.
-# copy_options.test has the rest of the rule every format shares.
 statement error
 COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_bare.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL);
 ----
@@ -279,7 +278,8 @@ COPY (SELECT read_id, sequence1, qual1 FROM varied) TO 's3://miint-no-such-bucke
 ----
 COMPRESSION_LEVEL applies only to local gzip output
 
-# Any URI scheme is remote, not only the ones miint lists: az:// is DuckDB's Azure file system.
+# Every URI scheme but file:// is remote, so an az:// target (DuckDB's Azure file system) is refused
+# like an s3:// one.
 statement error
 COPY (SELECT read_id, sequence1, qual1 FROM varied) TO 'az://miint-no-such-container/level.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
 ----

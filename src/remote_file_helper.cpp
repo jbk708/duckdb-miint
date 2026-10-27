@@ -1,6 +1,5 @@
 #include "remote_file_helper.hpp"
 
-#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <random>
@@ -42,16 +41,22 @@ const std::vector<ResolvedFile> &ResolvedFileSet::Files() const {
 
 // ===== RemoteFileHelper =====
 
-// The length of the URI scheme `path` starts with ("s3" in "s3://..."), or 0 if it has none: a letter,
-// then letters, digits, '+', '-' or '.', then "://" (RFC 3986). One letter is a Windows drive ("C://").
+static bool IsAsciiLetter(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// The length of the URI scheme `path` starts with ("s3" in "s3://..."), or 0 if it has none: an ASCII
+// letter, then ASCII letters, digits, '+', '-' or '.', then "://" (RFC 3986). One letter is a Windows
+// drive ("C://"). DuckDB's Path::IsRemote is not used: this file is also built into the C++ test binary,
+// which does not link DuckDB, and Path takes a scheme that starts with a digit.
 static size_t UriSchemeLength(const std::string &path) {
 	const size_t sep = path.find("://");
-	if (sep == std::string::npos || sep < 2 || !std::isalpha(static_cast<unsigned char>(path[0]))) {
+	if (sep == std::string::npos || sep < 2 || !IsAsciiLetter(path[0])) {
 		return 0;
 	}
 	for (size_t i = 1; i < sep; i++) {
-		const auto c = static_cast<unsigned char>(path[i]);
-		if (!std::isalnum(c) && c != '+' && c != '-' && c != '.') {
+		const char c = path[i];
+		if (!IsAsciiLetter(c) && !(c >= '0' && c <= '9') && c != '+' && c != '-' && c != '.') {
 			return 0;
 		}
 	}
@@ -68,7 +73,7 @@ bool RemoteFileHelper::IsRemotePath(const std::string &path) {
 		return true;
 	}
 	for (size_t i = 0; i < len; i++) {
-		if (std::tolower(static_cast<unsigned char>(path[i])) != FILE_SCHEME[i]) {
+		if ((path[i] | 0x20) != FILE_SCHEME[i]) {
 			return true;
 		}
 	}

@@ -2,6 +2,7 @@
 #include <iostream>
 #include "remote_file_helper.hpp"
 #include "table_function_common.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/vector_size.hpp"
@@ -319,7 +320,7 @@ void ReadNewickTableFunction::Execute(ClientContext &context, TableFunctionInput
 			local_state.current_rows = TreeToRows(tree);
 			local_state.current_row_idx = 0;
 		} catch (const std::exception &e) {
-			throw IOException("Error parsing newick file '" + path + "': " + e.what());
+			throw IOException("Error parsing newick file '" + path + "': " + ErrorData(e).RawMessage());
 		}
 
 		local_state.has_file = false; // Ready to claim next file when done

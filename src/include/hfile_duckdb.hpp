@@ -15,9 +15,9 @@ namespace miint {
 // The hFILE takes ownership of the FileHandle; hts_close() will clean it up
 // via the hFILE backend's close callback.
 //
-// Throws DuckDB's exception when the file cannot be opened, so its reason (a missing extension, a
-// missing object, credentials) reaches the user. Returns nullptr (errno set) only if htslib cannot
-// allocate the hFILE.
+// Never returns nullptr. Throws DuckDB's exception when the file cannot be opened, so its reason (a
+// missing extension, a missing object, credentials) reaches the user, and an IOException when htslib
+// cannot allocate the hFILE.
 hFILE *hfile_duckdb_open(duckdb::FileSystem &fs, const std::string &path);
 
 } // namespace miint

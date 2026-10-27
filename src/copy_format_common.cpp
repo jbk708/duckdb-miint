@@ -264,7 +264,7 @@ void DeclareSequenceCopyOptions(CopyOptionsInput &input) {
 	DeclareCopyOption(input, "id_as_sequence_index", LogicalType::BOOLEAN);
 	DeclareCopyOption(input, "include_comment", LogicalType::BOOLEAN);
 	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
-	DeclareCopyOption(input, "compression_level", LogicalType::BIGINT);
+	DeclareCompressionLevelCopyOption(input);
 }
 
 int GzipCompressionLevel(const vector<Value> &values, FileCompressionType compression, const string &file_path) {

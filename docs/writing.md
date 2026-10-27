@@ -10,10 +10,10 @@ TO 'some_other_file.fasta' (FORMAT FASTA);
 Options follow DuckDB's rules for COPY options in every format here, as they do for CSV and Parquet:
 
 - A boolean option given alone means true: `(FORMAT FASTQ, INTERLEAVE)` is `INTERLEAVE true`.
-- A misspelled or unsupported option is refused, and the error names the closest options the format has.
+- An option the format does not have is refused, and the error may suggest options with similar names. DuckDB's own COPY options, such as `OVERWRITE` and `PER_THREAD_OUTPUT`, are accepted by every format.
 - Other values are cast to the option's type, so `COMPRESSION_LEVEL '3'` is level 3 and `COMPRESSION_LEVEL 1.6` is level 2. An option with no value or a NULL value is refused.
 
-A path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) is opened through DuckDB's file systems, which load the extension that serves it or say why they cannot.
+FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, and the COPY fails as it would for DuckDB's own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target.
 
 ## Table of Contents
 
@@ -354,7 +354,7 @@ Write query results to BIOM (Biological Observation Matrix) format files. BIOM i
 - `value` (DOUBLE): Abundance/count value
 
 **Parameters:**
-- `COMPRESSION` (default: none): HDF5 internal compression algorithm ('gzip', 'lzf', or 'none')
+- `COMPRESSION` (default: none): HDF5 internal compression ('gzip' or 'none')
 - `ID` (default: auto-generated): Custom table identifier for BIOM metadata
 - `GENERATED_BY` (default: 'DuckDB-MIINT'): Tool/version string for provenance tracking
 
@@ -456,7 +456,6 @@ TO 'sparse.biom' (FORMAT BIOM);
 
 **Compression options:**
 - `'gzip'`: Good compression, widely compatible (recommended)
-- `'lzf'`: Faster compression/decompression, less space savings
 - `'none'`: No compression, fastest but largest files
 
 **Compatibility:**

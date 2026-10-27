@@ -1,5 +1,6 @@
 #include "copy_biom.hpp"
 #include "copy_option_parsing.hpp"
+#include "remote_file_helper.hpp"
 #include "BIOMTable.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -56,6 +57,10 @@ static unique_ptr<FunctionData> BiomCopyBind(ClientContext &context, CopyFunctio
 	auto result = make_uniq<BiomCopyBindData>();
 	result->file_path = input.info.file_path;
 	result->names = IdentifiersToStrings(names);
+	// HDF5 writes local files only.
+	if (miint::RemoteFileHelper::IsRemotePath(result->file_path)) {
+		throw BinderException("COPY FORMAT BIOM writes local files only, not '%s'", result->file_path);
+	}
 
 	// Check if file already exists - fail early before any computation
 	auto &fs = FileSystem::GetFileSystem(context);
@@ -116,6 +121,8 @@ static unique_ptr<FunctionData> BiomCopyBind(ClientContext &context, CopyFunctio
 			result->id = values[0].ToString();
 		} else if (key == "generated_by") {
 			result->generated_by = values[0].ToString();
+		} else {
+			ThrowUnreadCopyOption("BIOM", key);
 		}
 	}
 

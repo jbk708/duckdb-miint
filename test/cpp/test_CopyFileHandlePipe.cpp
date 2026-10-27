@@ -52,14 +52,14 @@ std::string GunzipFirstMember(const std::string &in) {
 
 TEST_CASE("BgzfWriteMode keeps O_EXCL only for regular files", "[copy][bgzf][pipe]") {
 	// stdout / stderr / fd aliases stream -> no O_EXCL.
-	REQUIRE(std::string(miint::BgzfWriteMode("-")) == "w6");
-	REQUIRE(std::string(miint::BgzfWriteMode("/dev/stdout")) == "w6");
-	REQUIRE(std::string(miint::BgzfWriteMode("/dev/stderr")) == "w6");
-	REQUIRE(std::string(miint::BgzfWriteMode("/dev/fd/1")) == "w6");
+	REQUIRE(miint::BgzfWriteMode("-", 6) == "w6");
+	REQUIRE(miint::BgzfWriteMode("/dev/stdout", 6) == "w6");
+	REQUIRE(miint::BgzfWriteMode("/dev/stderr", 6) == "w6");
+	REQUIRE(miint::BgzfWriteMode("/dev/fd/1", 6) == "w6");
 	// /dev/null is an existing non-regular (char) device -> no O_EXCL.
-	REQUIRE(std::string(miint::BgzfWriteMode("/dev/null")) == "w6");
+	REQUIRE(miint::BgzfWriteMode("/dev/null", 6) == "w6");
 	// A not-yet-existing regular path keeps the atomic no-clobber guard.
-	REQUIRE(std::string(miint::BgzfWriteMode("/tmp/miint_nonexistent_xyz.fq.gz")) == "wx6");
+	REQUIRE(miint::BgzfWriteMode("/tmp/miint_nonexistent_xyz.fq.gz", 6) == "wx6");
 }
 
 TEST_CASE("BgzfWriteMode carries COMPRESSION_LEVEL into the mode, with or without O_EXCL", "[copy][bgzf]") {
@@ -70,6 +70,23 @@ TEST_CASE("BgzfWriteMode carries COMPRESSION_LEVEL into the mode, with or withou
 	REQUIRE(miint::BgzfWriteMode("/tmp/miint_nonexistent_xyz.fq.gz", 1) == "wx1");
 }
 
+TEST_CASE("BgzfWriteMode judges a file:// URI by the path htslib opens", "[copy][bgzf][pipe]") {
+	// htslib opens file://<path> and file://localhost/<path> as <path>, so an existing pipe named that
+	// way must not get O_EXCL either.
+	char dir_tmpl[] = "/tmp/miint_pipe_XXXXXX";
+	const char *dir = mkdtemp(dir_tmpl);
+	REQUIRE(dir != nullptr);
+	const std::string fifo = std::string(dir) + "/out.fq.gz";
+	REQUIRE(mkfifo(fifo.c_str(), 0600) == 0);
+
+	REQUIRE(miint::BgzfWriteMode("file://" + fifo, 1) == "w1");
+	REQUIRE(miint::BgzfWriteMode("file://localhost" + fifo, 1) == "w1");
+	REQUIRE(miint::BgzfWriteMode("file:///tmp/miint_nonexistent_xyz.fq.gz", 1) == "wx1");
+
+	unlink(fifo.c_str());
+	rmdir(dir);
+}
+
 TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgzf][pipe]") {
 	char dir_tmpl[] = "/tmp/miint_pipe_XXXXXX";
 	const char *dir = mkdtemp(dir_tmpl);
@@ -78,7 +95,7 @@ TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgz
 	REQUIRE(mkfifo(fifo.c_str(), 0600) == 0);
 
 	// The fix: an existing FIFO must select "w6" (no O_EXCL). Pre-fix this was "wx6".
-	REQUIRE(std::string(miint::BgzfWriteMode(fifo)) == "w6");
+	REQUIRE(miint::BgzfWriteMode(fifo, 6) == "w6");
 
 	const std::string payload = "@r1\nACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIII\n";
 
@@ -90,7 +107,7 @@ TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgz
 
 	// Open + write through the real bgzf path using the production-selected mode. Pre-fix, "wx6" on
 	// the existing FIFO returned a null handle (EEXIST); the REQUIRE below would have failed.
-	BGZF *bg = bgzf_open(fifo.c_str(), miint::BgzfWriteMode(fifo).c_str());
+	BGZF *bg = bgzf_open(fifo.c_str(), miint::BgzfWriteMode(fifo, 6).c_str());
 	REQUIRE(bg != nullptr);
 	REQUIRE(bgzf_write(bg, payload.data(), payload.size()) == static_cast<ssize_t>(payload.size()));
 	REQUIRE(bgzf_close(bg) == 0);

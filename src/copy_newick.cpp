@@ -143,6 +143,8 @@ static unique_ptr<FunctionData> NewickCopyBind(ClientContext &context, CopyFunct
 			placements_table = option.second[0].ToString();
 			// Validate placements table/view exists and has correct schema
 			ValidatePlacementTableSchema(context, placements_table.value());
+		} else {
+			ThrowUnreadCopyOption("NEWICK", option.first);
 		}
 	}
 
@@ -372,7 +374,7 @@ static void NewickCopyFinalize(ClientContext &context, FunctionData &bind_data, 
 static void NewickCopyOptions(ClientContext &context, CopyOptionsInput &input) {
 	DeclareCopyOption(input, "edge_ids", LogicalType::BOOLEAN);
 	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
-	DeclareCopyOption(input, "compression_level", LogicalType::BIGINT);
+	DeclareCompressionLevelCopyOption(input);
 	DeclareCopyOption(input, "placements", LogicalType::VARCHAR);
 }
 
