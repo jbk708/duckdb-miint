@@ -4,6 +4,7 @@
 # Usage:
 #   bash onboarding-tutorials/run_tutorial_tests.sh [duckdb_path]
 #   MIINT_TUTORIAL_LIVE=1 bash onboarding-tutorials/run_tutorial_tests.sh   # ENA itself, not the mock
+#   MIINT_TUTORIAL_LIVE_ATTEMPTS=1 MIINT_TUTORIAL_LIVE=1 bash ...              # no retries when live
 #
 # duckdb_path defaults to ./build/release/duckdb
 #
@@ -48,6 +49,17 @@ fi
 PASS=0
 FAIL=0
 
+# Live, ENA can fail a run that no change caused, e.g. by dropping the FASTQ transfer
+# partway (docs/testing.md, "Guards and skipped tests"), so each tutorial gets
+# MIINT_TUTORIAL_LIVE_ATTEMPTS attempts (default 3). Against the mock a failure is ours,
+# so it gets one.
+if [ "${MIINT_TUTORIAL_LIVE:-0}" = "1" ]; then
+    ATTEMPTS="${MIINT_TUTORIAL_LIVE_ATTEMPTS:-3}"
+else
+    ATTEMPTS=1
+fi
+RETRY_DELAY_SECONDS=60
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
@@ -91,6 +103,36 @@ rewrite_extension_loading_python() {
     fi
 }
 
+run_tutorial() {
+    # Run a tutorial, up to $ATTEMPTS times, and count it as passed or failed.
+    # Usage: run_tutorial <name> <command> [args...]
+    # A pass after a failed attempt is reported as a GitHub Actions warning, so a flaky
+    # ENA stays visible on a green run.
+    local name="$1"
+    shift
+    local attempt
+    for attempt in $(seq 1 "$ATTEMPTS"); do
+        if "$@" 2>&1; then
+            if [ "$attempt" -gt 1 ]; then
+                echo "::warning::$name passed on attempt $attempt of $ATTEMPTS"
+            fi
+            echo "PASS: $name"
+            PASS=$((PASS + 1))
+            return
+        fi
+        if [ "$attempt" -lt "$ATTEMPTS" ]; then
+            echo "RETRY: $name failed on attempt $attempt of $ATTEMPTS; retrying in ${RETRY_DELAY_SECONDS}s"
+            sleep "$RETRY_DELAY_SECONDS"
+        fi
+    done
+    echo "FAIL: $name"
+    FAIL=$((FAIL + 1))
+}
+
+run_sql_file() {
+    "$DUCKDB" < "$1"
+}
+
 # --------------------------------------------------------------------------
 # Test: beginner.md (Python)
 # --------------------------------------------------------------------------
@@ -103,13 +145,8 @@ extract_blocks "$SCRIPT_DIR/beginner.md" "python" \
     > "$BEGINNER_PY"
 
 PYTHON="${PYTHON:-conda run -n duckdb-151 python3}"
-if $PYTHON "$BEGINNER_PY" 2>&1; then
-    echo "PASS: beginner.md"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL: beginner.md"
-    FAIL=$((FAIL + 1))
-fi
+# $PYTHON is unquoted on purpose: it may be a command with arguments.
+run_tutorial beginner.md $PYTHON "$BEGINNER_PY"
 
 # --------------------------------------------------------------------------
 # Test: intermediate.md (SQL)
@@ -123,13 +160,7 @@ extract_blocks "$SCRIPT_DIR/intermediate.md" "sql" \
     | rewrite_extension_loading_cli \
     > "$INTERMEDIATE_SQL"
 
-if "$DUCKDB" < "$INTERMEDIATE_SQL" 2>&1; then
-    echo "PASS: intermediate.md"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL: intermediate.md"
-    FAIL=$((FAIL + 1))
-fi
+run_tutorial intermediate.md run_sql_file "$INTERMEDIATE_SQL"
 
 # --------------------------------------------------------------------------
 # Test: advanced.md
@@ -143,13 +174,7 @@ extract_blocks "$SCRIPT_DIR/advanced.md" "sql" \
     | rewrite_extension_loading_cli \
     > "$ADVANCED_SQL"
 
-if "$DUCKDB" < "$ADVANCED_SQL" 2>&1; then
-    echo "PASS: advanced.md (SQL)"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL: advanced.md (SQL)"
-    FAIL=$((FAIL + 1))
-fi
+run_tutorial "advanced.md (SQL)" run_sql_file "$ADVANCED_SQL"
 
 echo ""
 echo "=== Testing advanced.md (bash blocks) ==="
@@ -161,13 +186,7 @@ extract_blocks "$SCRIPT_DIR/advanced.md" "bash" \
     | rewrite_extension_loading_cli \
     > "$ADVANCED_BASH"
 
-if bash "$ADVANCED_BASH" 2>&1; then
-    echo "PASS: advanced.md (bash)"
-    PASS=$((PASS + 1))
-else
-    echo "FAIL: advanced.md (bash)"
-    FAIL=$((FAIL + 1))
-fi
+run_tutorial "advanced.md (bash)" bash "$ADVANCED_BASH"
 
 # --------------------------------------------------------------------------
 # Summary
