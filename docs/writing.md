@@ -13,6 +13,8 @@ Options follow DuckDB's rules for COPY options in every format here, as they do 
 - An option the format does not have is refused, and the error may suggest options with similar names. The names of DuckDB's own COPY options, such as `OVERWRITE`, are not refused as unknown; DuckDB handles them, and refuses those a format cannot support, such as `FILE_SIZE_BYTES`.
 - Other values are cast to the option's type, so `COMPRESSION_LEVEL '3'` is level 3 and `COMPRESSION_LEVEL 1.6` is level 2. An option with no value or a NULL value is refused.
 
+`COMPRESSION` takes the same values in FASTQ, FASTA, NEWICK and SAM, in any case: `'gzip'` or `'gz'`, and `'none'` or `'uncompressed'`. Without it, a path ending in `.gz` is written as gzip. zstd (`'zstd'`, or a `.zst` path) is not supported yet and is refused. BAM is always BGZF-compressed and refuses `COMPRESSION`; BIOM's `COMPRESSION` is HDF5's compression inside the file, described under [BIOM](#biom).
+
 FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, as it does for its own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target.
 
 ## Table of Contents
@@ -200,7 +202,7 @@ With `INCLUDE_HEADER=false` no `@SQ` lines are written at all, so the ordering a
 
 > **`REFERENCE_LENGTHS` must be exhaustive when a header is written.** Supplying the table asserts it is the complete reference set, so a record whose `reference` (or `mate_reference`) is absent from it is rejected: `Column 'reference' is 'ctg000002' for read 'r2', which is not in the REFERENCE_LENGTHS table`. The header is serialized before the records are, so it cannot gain `@SQ` lines afterwards — a missing reference has no representation in the file being written, and earlier versions lost such records silently (SAM read the name back as `*`, BAM dropped the record). Derive the table from the same relation you are writing, e.g. `SELECT DISTINCT reference … FROM aln`. With `INCLUDE_HEADER=false` there are no `@SQ` lines to be exhaustive about, so any reference is accepted and written verbatim.
 - `SEQUENCE_DATA` (VARCHAR, optional): Table or view name containing original read sequences from `read_fastx`. When provided, writes actual SEQ and QUAL fields into the output instead of `*`. See [Sequence Data](#sequence-data) below.
-- `COMPRESSION` (default: auto, SAM only): Enable gzip compression (auto-detected from `.gz` extension)
+- `COMPRESSION` (default: auto, SAM only): Enable gzip compression (auto-detected from `.gz` extension); values as for every text format, [above](#writing-files). BAM refuses it: BAM is always BGZF-compressed, and `COMPRESSION_LEVEL 0` writes it uncompressed.
 - `COMPRESSION_LEVEL` (BAM only): BGZF compression level 0-9 (default: 6). Higher = better compression, slower speed.
 - **Multithreaded compression:** BAM and gzip-SAM output compress in parallel, following DuckDB's thread count (`PRAGMA threads`). Record order is preserved and the output is byte-identical to single-threaded writing. (The speedup is smaller than for FASTQ/FASTA because per-record marshalling is serialized; only the BGZF compression is parallelized.)
 
@@ -360,7 +362,7 @@ Write query results to BIOM (Biological Observation Matrix) format files. BIOM i
 BIOM is written to local files only; a remote target is refused.
 
 **Parameters:**
-- `COMPRESSION` (default: 'gzip'): HDF5 internal compression ('gzip' or 'none')
+- `COMPRESSION` (default: 'gzip'): HDF5's compression of the datasets inside the file, `'gzip'` (or `'gz'`; deflate level 4, h5py's default) or `'none'`. The `.biom` file itself is always HDF5, never gzip, whatever its name.
 - `ID` (default: 'No Table ID'): Custom table identifier for BIOM metadata
 - `GENERATED_BY` (default: 'miint'): Tool/version string for provenance tracking
 
@@ -494,10 +496,7 @@ Write query results to Newick phylogenetic tree format. Reconstructs a tree from
 - `EDGE_IDS` (BOOLEAN, default: auto): Include edge identifiers `{n}` in output
   - Default: true if `edge_id` column exists, false otherwise
   - Set to `false` to explicitly exclude edge IDs
-- `COMPRESSION` (default: auto): Enable gzip compression
-  - `'gzip'`: Enable gzip compression
-  - `'none'`: No compression
-  - Auto-detected from `.gz` extension
+- `COMPRESSION` (default: auto): Enable gzip compression, auto-detected from the `.gz` extension; values as for every text format, [above](#writing-files)
 - `COMPRESSION_LEVEL` (0-9, default: 6): BGZF compression level for local `.gz` output, as for FASTQ and FASTA. Refused for uncompressed output and for remote targets, whose gzip writer takes no level.
 - `PLACEMENTS` (VARCHAR): Name of a table containing phylogenetic placement data to insert
   - Inserts fragment sequences into the tree at their placement locations

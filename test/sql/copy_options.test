@@ -247,3 +247,92 @@ statement error
 COPY tree1 TO 's3://miint-no-such-bucket/tree.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 1);
 ----
 COMPRESSION_LEVEL applies only to local gzip output
+
+# COMPRESSION takes the same values in every format that writes text (FASTQ, FASTA, NEWICK and SAM),
+# case-insensitively, and refuses anything else with the same message.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bad_comp.fq' (FORMAT FASTQ, COMPRESSION 'bzip2');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/bad_comp.fa' (FORMAT FASTA, COMPRESSION 'bzip2');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+statement error
+COPY tree1 TO '{TEST_DIR}/bad_comp.nwk' (FORMAT NEWICK, COMPRESSION 'bzip2');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+statement error
+COPY sam_test TO '{TEST_DIR}/bad_comp.sam' (FORMAT SAM, COMPRESSION 'bzip2', REFERENCE_LENGTHS 'ref_table');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+# zstd is refused the same way in all four, whether named or implied by a .zst path; a SAM written to
+# a .zst path would otherwise be plain text under a zstd name.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/zstd_named.fq' (FORMAT FASTQ, COMPRESSION 'zstd');
+----
+zstd compression is temporarily disabled
+
+statement error
+COPY sam_test TO '{TEST_DIR}/zstd_named.sam' (FORMAT SAM, COMPRESSION 'zstd', REFERENCE_LENGTHS 'ref_table');
+----
+zstd compression is temporarily disabled
+
+statement error
+COPY tree1 TO '{TEST_DIR}/zstd_path.nwk.zst' (FORMAT NEWICK);
+----
+zstd compression (.zst extension) is temporarily disabled
+
+statement error
+COPY sam_test TO '{TEST_DIR}/zstd_path.sam.zst' (FORMAT SAM, REFERENCE_LENGTHS 'ref_table');
+----
+zstd compression (.zst extension) is temporarily disabled
+
+# 'uncompressed', DuckDB's name for no compression, writes plain text even to a .gz path, and 'GZIP'
+# writes gzip to a plain path, in all four. Gzip output starts with the bytes 1F 8B.
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/named_plain.fq.gz' (FORMAT FASTQ, COMPRESSION 'uncompressed');
+
+statement ok
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/named_plain.fa.gz' (FORMAT FASTA, COMPRESSION 'uncompressed');
+
+statement ok
+COPY tree1 TO '{TEST_DIR}/named_plain.nwk.gz' (FORMAT NEWICK, COMPRESSION 'uncompressed');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/named_plain.sam.gz' (FORMAT SAM, COMPRESSION 'uncompressed', REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/named_gzip.fq' (FORMAT FASTQ, COMPRESSION 'GZIP');
+
+statement ok
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/named_gzip.fa' (FORMAT FASTA, COMPRESSION 'GZIP');
+
+statement ok
+COPY tree1 TO '{TEST_DIR}/named_gzip.nwk' (FORMAT NEWICK, COMPRESSION 'GZIP');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/named_gzip.sam' (FORMAT SAM, COMPRESSION 'GZIP', REFERENCE_LENGTHS 'ref_table');
+
+query II
+SELECT regexp_extract(filename, 'named_[a-z]+\.[a-z]+(\.gz)?$'), left(hex(content), 4) = '1F8B'
+FROM read_blob('{TEST_DIR}/named_*') ORDER BY 1;
+----
+named_gzip.fa	true
+named_gzip.fq	true
+named_gzip.nwk	true
+named_gzip.sam	true
+named_plain.fa.gz	false
+named_plain.fq.gz	false
+named_plain.nwk.gz	false
+named_plain.sam.gz	false
+
+# BAM is always BGZF-compressed, so COMPRESSION, which it would ignore, is refused.
+statement error
+COPY sam_test TO '{TEST_DIR}/comp.bam' (FORMAT BAM, COMPRESSION 'none', REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT BAM is always BGZF-compressed and takes no COMPRESSION; COMPRESSION_LEVEL 0 writes it uncompressed

@@ -81,14 +81,14 @@ statement error
 COPY (SELECT read_id, comment, sequence1, qual1 FROM test_single)
 TO '{TEST_DIR}/error.fq' (FORMAT FASTQ, COMPRESSION 'invalid');
 ----
-compression must be
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed'
 
 # Test 7: Error - invalid compression type (bzip2 not supported)
 statement error
 COPY (SELECT read_id, comment, sequence1, qual1 FROM test_single)
 TO '{TEST_DIR}/error2.fq' (FORMAT FASTQ, COMPRESSION 'bzip2');
 ----
-compression must be
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed'
 
 # Test 8: Verify gzip backward compatibility (existing .gz auto-detect still works)
 statement ok

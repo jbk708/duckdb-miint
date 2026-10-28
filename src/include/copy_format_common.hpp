@@ -74,6 +74,9 @@ void FlushFormatBuffer(FormatWriterState &local_state, CopyFileHandle &file, mut
 //===--------------------------------------------------------------------===//
 // Common Helper Functions
 //===--------------------------------------------------------------------===//
+// COMPRESSION for every format that writes text (FASTQ, FASTA, NEWICK, SAM): the value given, or, with
+// none (a NULL compression_param), gzip for a path ending in .gz. BAM is always BGZF and BIOM's
+// compression is HDF5's, so neither reads it here.
 FileCompressionType DetectCompressionType(const string &file_path, const Value &compression_param);
 string SubstituteOrientation(const string &path, const string &orientation);
 bool HasOrientationPlaceholder(const string &path);

@@ -173,10 +173,11 @@ FileCompressionType DetectCompressionType(const string &file_path, const Value &
 			throw NotImplementedException("zstd compression is temporarily disabled for FASTX/SAM formats. "
 			                              "Please use gzip compression instead. "
 			                              "zstd support will be re-enabled in a future release.");
-		} else if (comp_str == "none") {
+		} else if (comp_str == "none" || comp_str == "uncompressed") {
 			return FileCompressionType::UNCOMPRESSED;
 		} else {
-			throw InvalidInputException("compression must be 'gzip', 'gz', or 'none' (zstd temporarily disabled)");
+			throw BinderException("COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got '%s'",
+			                      compression_param.ToString());
 		}
 	}
 

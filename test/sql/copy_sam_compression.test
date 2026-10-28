@@ -126,7 +126,7 @@ statement error
 COPY sam_test TO '{TEST_DIR}/error.sam' 
 (FORMAT SAM, COMPRESSION 'invalid', REFERENCE_LENGTHS 'ref_table_single');
 ----
-Binder Error: Unknown compression type for COPY FORMAT SAM: invalid (supported: gzip, none)
+Binder Error: COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'invalid'
 
 # Test 13: Verify gzip backward compatibility (existing .gz auto-detect still works)
 statement ok

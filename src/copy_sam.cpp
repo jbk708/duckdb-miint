@@ -1,4 +1,5 @@
 #include "copy_sam.hpp"
+#include "copy_format_common.hpp"
 #include "copy_option_parsing.hpp"
 #include "htslib_raii.hpp"
 #include "id_column_codec.hpp"
@@ -234,21 +235,16 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 	}
 
 	// Parse options
-	bool compression_specified = false;
+	Value compression_param;
 	for (auto &option : input.info.options) {
 		if (option.first == "include_header") {
 			result->include_header = CopyOptionFlag(option.second);
 		} else if (option.first == "compression") {
-			compression_specified = true;
-			auto comp_value = option.second[0].ToString();
-			if (StringUtil::CIEquals(comp_value, "gzip") || StringUtil::CIEquals(comp_value, "gz")) {
-				result->use_gzip = true;
-			} else if (StringUtil::CIEquals(comp_value, "none") || StringUtil::CIEquals(comp_value, "uncompressed")) {
-				result->use_gzip = false;
-			} else {
-				throw BinderException("Unknown compression type for COPY FORMAT SAM: %s (supported: gzip, none)",
-				                      comp_value);
+			if (result->format == SAMOutputFormat::BAM) {
+				throw BinderException("COPY FORMAT BAM is always BGZF-compressed and takes no COMPRESSION; "
+				                      "COMPRESSION_LEVEL 0 writes it uncompressed");
 			}
+			compression_param = option.second[0];
 		} else if (option.first == "compression_level") {
 			result->compression_level = CopyOptionCompressionLevel(option.second);
 		} else if (option.first == "reference_lengths") {
@@ -307,11 +303,8 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 		                      "(e.g., REFERENCE_LENGTHS='ref_table')");
 	}
 
-	// Auto-detect compression from file extension if not specified (for SAM format)
-	if (!compression_specified && result->format == SAMOutputFormat::SAM) {
-		if (result->file_path.size() >= 3 && result->file_path.substr(result->file_path.size() - 3) == ".gz") {
-			result->use_gzip = true;
-		}
+	if (result->format == SAMOutputFormat::SAM) {
+		result->use_gzip = DetectCompressionType(result->file_path, compression_param) == FileCompressionType::GZIP;
 	}
 
 	return std::move(result);
