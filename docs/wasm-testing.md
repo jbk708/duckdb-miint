@@ -125,7 +125,7 @@ It:
    against DuckDB, with the miint extension embedded via `--preload-file`, and
    registers DuckDB's statically linked extensions through the loader DuckDB's
    `scripts/generate_static_extension_loader.py` writes. Which extensions, and
-   which undefined symbols fail the link, are in the script's step 2 comment
+   which undefined symbols fail the link, are in the script's step 2
 3. Runs the resulting `test_wasm_harness.js` in Node.js
 4. Verifies: DuckDB opens, json extension loads, miint extension loads,
    `miint_version()` returns successfully, and UniFrac's `faith_pd` computes
@@ -266,15 +266,15 @@ this far; see the next entry.
 ### `The file was built specifically for DuckDB version ...`
 
 DuckDB refuses the `LOAD` because the extension was built for another core
-version. In Level 3, `build/wasm_shell/` is left over from an older DuckDB;
-rerun with `--clean`. Level 4 stops before `LOAD`, at boot, naming the pin's file
-to bump.
+version. Levels 3 and 4 check the version before `LOAD` and stop with their own
+error: Level 3 when its cached core in `build/wasm_shell/` is another version
+(rerun with `--clean`), Level 4 at boot, naming the pin's file to bump.
 
 ### `function signature mismatch` from a Rust function
 
 A Rust function reached through a path Emscripten's JS mishandles. The two
 known causes need a runtime built without `WASM_BIGINT`, which the v2 runtimes
-are not; see "Two bugs that no longer apply" under "Emscripten exceptions" in
+are not; see "Runtimes built without `WASM_BIGINT`" under "Emscripten exceptions" in
 [embedded-tools.md](internals/embedded-tools.md#rust-crates-via-the-miint_rust_glue-umbrella)
 for what to check.
 

@@ -28,7 +28,7 @@ Outside this repo (do these after CI is green and a release tag is pushed):
 
 Traps when verifying a bump:
 
-- `scripts/test_wasm_load.sh` reuses `build/wasm_shell/` whenever it holds a core, and stops when that core's recorded DuckDB version is not the extension's. After a bump, run it with `--clean`.
+- `scripts/test_wasm_load.sh` reuses `build/wasm_shell/` whenever it holds a core, and stops when that core's recorded DuckDB version is not the extension's or none is recorded. After a bump, run it with `--clean`.
 - CI runs no WASM check on a pull request or branch push: run Levels 2–4 of [`wasm-testing.md`](wasm-testing.md) locally before tagging.
 - DuckDB release tags are lightweight, so `git ls-remote <url> 'refs/tags/vX.Y.Z^{}'` matches nothing; query the plain ref as well, as `scripts/check-duckdb-version.sh` does.
 

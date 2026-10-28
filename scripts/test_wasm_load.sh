@@ -133,8 +133,7 @@ if ! $HARNESS_ONLY; then
         echo "$EXT_DUCKDB_VERSION" > "$DUCKDB_BUILD/miint_duckdb_version"
         echo ""
     else
-        echo "DuckDB WASM core already built (use --clean to rebuild, e.g. when"
-        echo "LOAD reports that the extension was built for another version)"
+        echo "DuckDB WASM core already built (use --clean to rebuild)"
     fi
 fi
 
@@ -142,10 +141,13 @@ if [ ! -f "$DUCKDB_BUILD/src/libduckdb_static.a" ]; then
     echo "ERROR: libduckdb_static.a not found. Run without --harness-only."
     exit 1
 fi
-# A cached core keeps the version it was configured with; one that recorded
-# none predates the record and is treated as a mismatch.
+# A cached core keeps the version it was configured with; a core with no
+# recorded version is treated as a mismatch.
 CORE_VERSION_FILE="$DUCKDB_BUILD/miint_duckdb_version"
-CORE_VERSION="$(cat "$CORE_VERSION_FILE" 2>/dev/null || echo "unrecorded")"
+CORE_VERSION="unrecorded"
+if [ -s "$CORE_VERSION_FILE" ]; then
+    CORE_VERSION="$(cat "$CORE_VERSION_FILE")"
+fi
 if [ "$CORE_VERSION" != "$EXT_DUCKDB_VERSION" ]; then
     echo "ERROR: the cached core in $DUCKDB_BUILD is DuckDB $CORE_VERSION,"
     echo "but the extension is stamped $EXT_DUCKDB_VERSION. Rerun with --clean."

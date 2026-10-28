@@ -243,7 +243,7 @@ if $VERIFY; then
                 // For information, not a check: Rust functions a loader built without
                 // WASM_BIGINT would mis-link when used as function pointers; the v2
                 // runtimes are not built that way (docs/internals/embedded-tools.md,
-                // \"Two bugs that no longer apply\"). An orig\$X export whose X
+                // \"Runtimes built without WASM_BIGINT\"). An orig\$X export whose X
                 // contains a '\$', with X also imported as GOT.func.X.
                 const gotFunc = new Set(imports.filter(i => i.module === 'GOT.func').map(i => i.name));
                 const truncated = exports.map(e => e.name).filter(n => n.startsWith('orig\$'))
