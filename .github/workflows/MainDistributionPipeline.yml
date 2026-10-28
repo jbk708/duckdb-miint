@@ -74,6 +74,19 @@ jobs:
       # Tag builds drop wasm_eh from the exclude list so release artifacts carry it.
       exclude_archs: ${{ startsWith(github.ref, 'refs/tags/') && 'windows_amd64_rtools;windows_amd64;windows_amd64_mingw;osx_amd64;wasm_mvp;wasm_threads' || 'windows_amd64_rtools;windows_amd64;windows_amd64_mingw;osx_amd64;wasm_eh;wasm_mvp;wasm_threads' }}
 
+  cmake-format:
+    name: cmake-format (cmake/)
+    # The Code Quality format check (DuckDB's format.py) covers the root
+    # CMakeLists.txt but nothing under cmake/. Format locally with the same
+    # version (docs/internals/build-system.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting of cmake/
+        run: |
+          python3 -m pip install --user 'cmake-format==0.6.13'
+          cmake-format --check cmake/*.cmake cmake/deps/*.cmake cmake/scripts/*.cmake
+
   test-with-bowtie2:
     name: Test with Bowtie2
     # The tutorials job runs this job's CLI, so both pin one image: a CLI built on a

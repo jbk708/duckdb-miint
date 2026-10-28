@@ -11,7 +11,7 @@
 #include <stdexcept>
 #include <stack>
 
-// Eigen (MPL-2.0, header-only; EIGEN_MPL2_ONLY set in CMakeLists) backs the SYM/ARD
+// Eigen (MPL-2.0, header-only; EIGEN_MPL2_ONLY set in cmake/system_deps.cmake) backs the SYM/ARD
 // Mk-ML P(t) = exp(Q*t): SYM via a symmetric eigendecomposition (SelfAdjointEigenSolver),
 // ARD via a general matrix exponential (MatrixFunctions, scaling-and-squaring Pade, Higham
 // 2005). See ancestral_ml_sym / ancestral_ml_ard below.

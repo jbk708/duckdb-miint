@@ -10,7 +10,7 @@
 // ${KREPP_DIR}/src is deliberately kept off every include path except the two
 // TUs that need it - krepp ships a klib set (kseq.h, kvec.h, kalloc.h, ...)
 // whose basenames collide with minimap2's and would shadow them everywhere else
-// in this build. See CMakeLists.txt, set_source_files_properties for
+// in this build. See cmake/deps/krepp.cmake, set_source_files_properties for
 // src/KreppPlacer.cpp. If krepp ever moves this into a namespace, this fails to
 // link, which is the loud failure and not a silent one.
 extern uint32_t num_threads;

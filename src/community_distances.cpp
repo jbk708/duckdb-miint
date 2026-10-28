@@ -240,7 +240,7 @@ void RunPairLoop(uint32_t row_end, unsigned n_threads, const std::function<void(
 // measured rather than argued: see kGramDensityThreshold below.
 //
 // Eigen's GEMM is deterministic here because EIGEN_DONT_PARALLELIZE is set
-// globally (see CMakeLists.txt) -- so this is bit-reproducible run to run for a
+// globally (see cmake/system_deps.cmake) -- so this is bit-reproducible run to run for a
 // given binary, and independent of `n_threads`, which only fans out the fill loop
 // below. Across MACHINES it is not guaranteed: Eigen picks its blocking from
 // runtime-queried cache sizes, so a different cache hierarchy can reassociate the
