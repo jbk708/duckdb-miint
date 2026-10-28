@@ -327,7 +327,7 @@ unique_ptr<GlobalTableFunctionState> SylphIndexCreateTableFunction::InitGlobal(C
 					ThrowFFI("end_genome failed");
 				}
 			}
-		} catch (const std::exception &) {
+		} catch (...) {
 			failed.store(true, std::memory_order_relaxed);
 			std::lock_guard<std::mutex> lk(err_mutex);
 			if (!first_error) {
