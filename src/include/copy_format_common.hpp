@@ -74,10 +74,11 @@ void FlushFormatBuffer(FormatWriterState &local_state, CopyFileHandle &file, mut
 //===--------------------------------------------------------------------===//
 // Common Helper Functions
 //===--------------------------------------------------------------------===//
-// COMPRESSION for the text formats (FASTQ, FASTA, NEWICK, SAM): the value given, or, with none (a NULL
-// compression_param), gzip for a path ending in .gz. BAM (always BGZF) and BIOM (HDF5's compression)
-// check their own values.
+// COMPRESSION for the formats that write text: the value given, or, with none (a NULL compression_param),
+// gzip for a path ending in .gz. A binary or HDF5 format checks its own values.
 FileCompressionType DetectCompressionType(const string &file_path, const Value &compression_param);
+// Whether a COMPRESSION value names gzip: 'gzip' or 'gz', in any case.
+bool IsGzipCompressionName(const string &name);
 string SubstituteOrientation(const string &path, const string &orientation);
 bool HasOrientationPlaceholder(const string &path);
 

@@ -410,19 +410,35 @@ static void WriteNumericDataset(H5::Group &group, const string &name, const std:
 // Finalize
 //===--------------------------------------------------------------------===//
 static herr_t KeepInnermostHdf5Error(unsigned n, const H5E_error2_t *err, void *cause) {
-	if (n == 0 && err->desc) {
-		*static_cast<string *>(cause) = err->desc;
+	if (n == 0) {
+		*static_cast<const char **>(cause) = err->desc;
 	}
 	return 0;
 }
 
-// Why an HDF5 call failed: the innermost entry of this thread's HDF5 error stack (for a failed open, the
-// OS error), or else the failed call the exception names. Closing an HDF5 object clears the stack, so a
-// failure after the file is open may report only the call.
+// Why an HDF5 call failed: the call the exception names, plus the innermost entry of HDF5's error stack,
+// cut to the OS error when the entry quotes one (a failed open's "error message = '...'"). This HDF5 is not
+// built thread-safe, so the stack is the process's: the caller holds miint::g_hdf5_mutex from before the
+// failed call through this walk, so the entry is this write's. Unwinding closes the HDF5 objects before
+// the catch, and a close clears the stack or leaves its own error, so a failure after the file is open
+// may name only the call, or a close's error.
 static string Hdf5FailureReason(const H5::Exception &e) {
-	string cause;
-	H5Ewalk2(H5E_DEFAULT, H5E_WALK_UPWARD, KeepInnermostHdf5Error, &cause);
-	return cause.empty() ? e.getDetailMsg() : e.getDetailMsg() + ": " + cause;
+	const char *innermost = nullptr;
+	H5Ewalk2(H5E_DEFAULT, H5E_WALK_UPWARD, KeepInnermostHdf5Error, &innermost);
+	if (!innermost || !*innermost) {
+		return e.getDetailMsg();
+	}
+	string cause = innermost;
+	static const string os_error_tag = "error message = '";
+	const auto tag = cause.find(os_error_tag);
+	if (tag != string::npos) {
+		const auto start = tag + os_error_tag.size();
+		const auto end = cause.find('\'', start);
+		if (end != string::npos) {
+			cause = cause.substr(start, end - start);
+		}
+	}
+	return e.getDetailMsg() + ": " + cause;
 }
 
 static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate_p) {
@@ -452,7 +468,8 @@ static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 
 	// Every HDF5 call below, the destructors that close the file and its objects and the error-stack walk
 	// included, runs under miint::g_hdf5_mutex (BIOMReader.hpp): a partitioned or per-thread COPY finalizes
-	// several BIOM files at once, and other queries may be reading BIOM files.
+	// several BIOM files at once, and other queries may be reading BIOM files. One BIOM write therefore
+	// holds up every other BIOM read and write until it is done.
 	std::lock_guard<std::mutex> hdf5_guard(miint::g_hdf5_mutex);
 
 	// HDF5 throws H5::Exception, which is not a std::exception, so it is rethrown naming the file and why

@@ -303,9 +303,8 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 			result->compression_level = GzipCompressionLevel(*compression_level_values, compression, result->file_path);
 		}
 	} else {
-		// COMPRESSION 'gzip' only says what BAM always is; any other value is refused, not ignored.
-		const auto bam_compression = compression_param.IsNull() ? string("gzip") : compression_param.ToString();
-		if (!StringUtil::CIEquals(bam_compression, "gzip") && !StringUtil::CIEquals(bam_compression, "gz")) {
+		// COMPRESSION 'gzip' or 'gz' only says what BAM always is; any other value is refused, not ignored.
+		if (!compression_param.IsNull() && !IsGzipCompressionName(compression_param.ToString())) {
 			throw BinderException("COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION '%s' does not apply; "
 			                      "COMPRESSION_LEVEL 0 writes its BGZF blocks uncompressed",
 			                      compression_param.ToString());

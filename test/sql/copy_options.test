@@ -332,8 +332,9 @@ named_plain.fq.gz	40
 named_plain.nwk.gz	28
 named_plain.sam.gz	40
 
-# BAM is always BGZF-compressed: COMPRESSION 'gzip' says so and is accepted, while any other value,
-# which it would ignore, is refused with BAM's own message (the text formats' values do not apply).
+# BAM is always BGZF-compressed: COMPRESSION 'gzip' or 'gz', in any case, says so and is accepted, while
+# any other value, which it would ignore, is refused with BAM's own message (the text formats' values do
+# not apply).
 statement ok
 COPY sam_test TO '{TEST_DIR}/comp_gzip.bam' (FORMAT BAM, COMPRESSION 'gzip', REFERENCE_LENGTHS 'ref_table');
 
@@ -341,6 +342,12 @@ query I
 SELECT count(*) FROM read_alignments('{TEST_DIR}/comp_gzip.bam');
 ----
 4
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/comp_gz.bam' (FORMAT BAM, COMPRESSION 'gz', REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/comp_upper.bam' (FORMAT BAM, COMPRESSION 'GZIP', REFERENCE_LENGTHS 'ref_table');
 
 statement error
 COPY sam_test TO '{TEST_DIR}/comp_none.bam' (FORMAT BAM, COMPRESSION 'none', REFERENCE_LENGTHS 'ref_table');

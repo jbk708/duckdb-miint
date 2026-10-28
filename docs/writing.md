@@ -15,7 +15,7 @@ Options follow DuckDB's rules for COPY options in every format here, as they do 
 
 `COMPRESSION` takes the same values in the text formats, FASTQ, FASTA, NEWICK and SAM, in any case: `'gzip'` or `'gz'`, and `'none'` or `'uncompressed'`. Without it, a path ending in `.gz` is written as gzip. zstd (`'zstd'`, or a `.zst` path) is refused. BAM's and BIOM's `COMPRESSION` differ; see [SAM / BAM](#sam-and-bam) and [BIOM](#biom).
 
-FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, as it does for its own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target. In every format a `file:` URI (`file:///p`, `file://localhost/p` or `file:/p`) is the local file `/p`, and gzip output to it takes `COMPRESSION_LEVEL` as any local path does.
+FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, as it does for its own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target. In every format a `file:` URI is the local file it names, as DuckDB reads it (`file:///p`, `file://localhost/p` and `file:/p` are `/p`; on Windows, `file:///C:/p` is `C:/p`), and gzip output to it takes `COMPRESSION_LEVEL` as any local path does.
 
 ## Table of Contents
 
@@ -202,7 +202,7 @@ With `INCLUDE_HEADER=false` no `@SQ` lines are written at all, so the ordering a
 
 > **`REFERENCE_LENGTHS` must be exhaustive when a header is written.** Supplying the table asserts it is the complete reference set, so a record whose `reference` (or `mate_reference`) is absent from it is rejected: `Column 'reference' is 'ctg000002' for read 'r2', which is not in the REFERENCE_LENGTHS table`. The header is serialized before the records are, so it cannot gain `@SQ` lines afterwards — a missing reference has no representation in the file being written, and earlier versions lost such records silently (SAM read the name back as `*`, BAM dropped the record). Derive the table from the same relation you are writing, e.g. `SELECT DISTINCT reference … FROM aln`. With `INCLUDE_HEADER=false` there are no `@SQ` lines to be exhaustive about, so any reference is accepted and written verbatim.
 - `SEQUENCE_DATA` (VARCHAR, optional): Table or view name containing original read sequences from `read_fastx`. When provided, writes actual SEQ and QUAL fields into the output instead of `*`. See [Sequence Data](#sequence-data) below.
-- `COMPRESSION` (default: auto): Enable gzip compression for SAM (auto-detected from `.gz` extension); values as for the other text formats, [above](#writing-files). BAM is always BGZF-compressed: it accepts `'gzip'` and refuses `'none'`, which it would ignore; `COMPRESSION_LEVEL 0` writes its BGZF blocks uncompressed.
+- `COMPRESSION` (default: auto): Enable gzip compression for SAM (auto-detected from `.gz` extension); values as for the other text formats, [above](#writing-files). BAM is always BGZF-compressed: it accepts `'gzip'` or `'gz'`, in any case, and refuses any other value, which it would ignore; `COMPRESSION_LEVEL 0` writes its BGZF blocks uncompressed.
 - `COMPRESSION_LEVEL` (BAM, and gzip SAM): BGZF compression level 0-9 (default: 6). Higher = better compression, slower speed. Refused for uncompressed SAM, as for FASTQ, FASTA and NEWICK.
 - **Multithreaded compression:** BAM and gzip-SAM output compress in parallel, following DuckDB's thread count (`PRAGMA threads`). Record order is preserved and the output is byte-identical to single-threaded writing. (The speedup is smaller than for FASTQ/FASTA because per-record marshalling is serialized; only the BGZF compression is parallelized.)
 
@@ -359,7 +359,7 @@ Write query results to BIOM (Biological Observation Matrix) format files. BIOM i
 - `sample_id` (VARCHAR): Sample identifier
 - `value` (DOUBLE): Abundance/count value
 
-BIOM is written to local files only; a remote target is refused. `PARTITION_BY` and `PER_THREAD_OUTPUT` write one `.biom` file per partition or per thread, each a complete table of its own rows.
+BIOM is written to local files only; a remote target is refused. `PARTITION_BY` and `PER_THREAD_OUTPUT` write `.biom` files, each a complete table of its own rows: one per thread, and one or more per partition (DuckDB starts another file for a partition when more partitions are open than `partitioned_write_max_open_files`), so a (feature, sample) pair can be split across files. DuckDB leaves the partition columns out of the rows it writes unless `WRITE_PARTITION_COLUMNS true`, so partitioning by `sample_id` or `feature_id` needs it.
 
 **Parameters:**
 - `COMPRESSION` (default: 'gzip'): HDF5's compression of the datasets inside the file, `'gzip'` (or `'gz'`; deflate level 4, h5py's default) or `'none'`. The `.biom` file itself is always HDF5, never gzip, whatever its name.

@@ -21,7 +21,8 @@ namespace miint {
 //! Acquire around every HDF5 entry point: H5Fopen, H5Dopen2, H5Dread,
 //! H5Fclose, H5Dclose, plus the BIOMReader / BIOMTable scope that drives
 //! them — including the BIOMReader destructor so file/dataset handles are
-//! closed under the lock.
+//! closed under the lock. COPY FORMAT BIOM (copy_biom.cpp) holds it for its
+//! whole HDF5 write, the closing destructors included.
 extern std::mutex g_hdf5_mutex;
 
 /* datasets defined by the BIOM 2.x spec */

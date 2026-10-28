@@ -162,11 +162,15 @@ void CopyFileHandle::Close() {
 //===--------------------------------------------------------------------===//
 // Common Helper Functions
 //===--------------------------------------------------------------------===//
+bool IsGzipCompressionName(const string &name) {
+	return StringUtil::CIEquals(name, "gzip") || StringUtil::CIEquals(name, "gz");
+}
+
 FileCompressionType DetectCompressionType(const string &file_path, const Value &compression_param) {
 	// Explicit parameter takes precedence
 	if (!compression_param.IsNull()) {
 		string comp_str = StringUtil::Lower(compression_param.ToString());
-		if (comp_str == "gzip" || comp_str == "gz") {
+		if (IsGzipCompressionName(comp_str)) {
 			return FileCompressionType::GZIP;
 		} else if (comp_str == "zstd" || comp_str == "zst") {
 			// TODO: zstd support temporarily disabled due to unicode encoding issues during read-back

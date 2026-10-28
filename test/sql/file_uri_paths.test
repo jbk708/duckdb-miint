@@ -56,7 +56,7 @@ SELECT count(*) FROM read_alignment_header('file:{WORKING_DIRECTORY}/data/sam/fo
 ----
 2
 
-# Each path in a list is expanded the same way.
+# Each path in a list is expanded the same way (file:/p again for the SAM reader).
 query I
 SELECT count(*) FROM read_fastx(['file://{WORKING_DIRECTORY}/data/fastq/small_a.fq', 'data/fastq/small_a.fq']);
 ----
@@ -114,8 +114,7 @@ statement ok
 RESET home_directory;
 
 # A file: COPY target is a local file, so gzip output goes to the local BGZF writer, which takes a level
-# (a remote target would refuse COMPRESSION_LEVEL). The file:/p form is used because htslib would open
-# file:///p by itself; the writer is handed /p.
+# (a remote target would refuse COMPRESSION_LEVEL). It is given as file:/p, as for the SAM readers above.
 statement ok
 SET VARIABLE abs_test_dir = CASE WHEN '{TEST_DIR}' LIKE '/%' THEN '{TEST_DIR}' ELSE '{WORKING_DIRECTORY}/{TEST_DIR}' END;
 

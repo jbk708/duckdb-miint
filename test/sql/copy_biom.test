@@ -311,36 +311,49 @@ Feature2	Sample1	3.0
 statement error
 COPY test_biom_basic TO '{TEST_DIR}/no_such_dir/x.biom' (FORMAT BIOM);
 ----
-<REGEX>:IO Error: COPY FORMAT BIOM: cannot write '.*no_such_dir/x\.biom': H5Fcreate failed: .*No such file or directory.*
+<REGEX>:IO Error: COPY FORMAT BIOM: cannot write '.*no_such_dir/x\.biom': H5Fcreate failed: No such file or directory.*
 
-# PARTITION_BY writes one BIOM file per partition, named .biom, and the partitions are written at
-# once: every HDF5 call is serialized, so none of them fails or corrupts another. Each partition holds
-# 25 features (i % 50 has the parity of i % 8) by 7 samples.
-statement ok
-SET threads = 4;
+# PARTITION_BY writes a .biom file per partition, and DuckDB finalizes the partitions' files at once
+# (by its own scheduling, whatever the thread count). Every HDF5 call is serialized, so none of them
+# fails or corrupts another; the write is repeated so that a lost serialization fails this test almost
+# surely, not now and then. Each partition holds 25 features (i % 50 has the parity of i % 8) by 7 samples.
+loop run 0 10
 
 statement ok
 COPY (SELECT 'F' || (i % 50) AS feature_id, 'S' || (i % 7) AS sample_id, 1.0::DOUBLE AS value, i % 8 AS grp
       FROM range(200000) t(i))
-TO '{TEST_DIR}/biom_parts' (FORMAT BIOM, PARTITION_BY (grp));
+TO '{TEST_DIR}/biom_parts_${run}' (FORMAT BIOM, PARTITION_BY (grp));
 
 query III
-SELECT count(DISTINCT filepath), count(*), sum(value) FROM read_biom('{TEST_DIR}/biom_parts/*/*.biom', include_filepath := true);
+SELECT count(DISTINCT filepath), count(*), sum(value)
+FROM read_biom('{TEST_DIR}/biom_parts_${run}/*/*.biom', include_filepath := true);
 ----
 8	1400	200000.0
 
-# PER_THREAD_OUTPUT writes one .biom file per thread; however the rows are split, together they hold them all.
-statement ok
-COPY (SELECT 'F' || (i % 50) AS feature_id, 'S' || (i % 7) AS sample_id, 1.0::DOUBLE AS value FROM range(200000) t(i))
-TO '{TEST_DIR}/biom_threads' (FORMAT BIOM, PER_THREAD_OUTPUT true);
+endloop
 
-query I
-SELECT sum(value) FROM read_biom('{TEST_DIR}/biom_threads/*.biom');
+# PER_THREAD_OUTPUT writes a .biom file per thread that sinks rows. range() runs on one thread, so the
+# rows come from a table of more than three row groups, which four threads scan.
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE TABLE biom_many AS
+SELECT 'F' || (i % 50) AS feature_id, 'S' || (i % 7) AS sample_id, 1.0::DOUBLE AS value FROM range(500000) t(i);
+
+statement ok
+COPY biom_many TO '{TEST_DIR}/biom_threads' (FORMAT BIOM, PER_THREAD_OUTPUT true);
+
+query II
+SELECT count(DISTINCT filepath) > 1, sum(value) FROM read_biom('{TEST_DIR}/biom_threads/*.biom', include_filepath := true);
 ----
-200000.0
+true	500000.0
 
 statement ok
 RESET threads;
+
+statement ok
+DROP TABLE biom_many;
 
 # Cleanup
 statement ok
