@@ -37,9 +37,7 @@ public:
 
 	struct GlobalState : public GlobalTableFunctionState {
 		mutex lock; // Guards current_file_idx for the work-claim cursor
-		// HDF5 serialization lives in miint::g_hdf5_mutex (BIOMReader.hpp) so it
-		// covers cross-query races; a per-state mutex only serialized within
-		// one read_biom() instance and missed the segfault path from issue #72.
+		// HDF5 calls take miint::g_hdf5_mutex, not this lock: it must serialize every instance in the process.
 		std::vector<std::string> filepaths;    // Original paths (for include_filepath)
 		std::vector<std::string> local_paths;  // Resolved local paths (for BIOMReader)
 		miint::ResolvedFileSet resolved_files; // RAII cleanup for temp files
@@ -82,11 +80,7 @@ public:
 				global_state.current_file_idx++;
 			}
 
-			// Serialize HDF5 calls against every other reader in the process —
-			// see miint::g_hdf5_mutex doc in BIOMReader.hpp. The inner scope
-			// keeps the BIOMReader destructor (H5Fclose / H5Dclose) inside
-			// the lock; releasing earlier would race with another thread's
-			// H5Fopen.
+			// The reader's destructor closes HDF5 handles, so it stays inside the lock.
 			{
 				std::lock_guard<std::mutex> hdf5_guard(miint::g_hdf5_mutex);
 				{
