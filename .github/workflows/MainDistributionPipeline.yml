@@ -401,7 +401,7 @@ jobs:
   #        fetch-depth: 0
   #        submodules: 'recursive'
 
-  #    - uses: mymindstorm/setup-emsdk@v13
+  #    - uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16, as extension-ci-tools
   #      with:
   #        version: 6.0.9
 

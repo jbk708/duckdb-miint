@@ -130,6 +130,7 @@ if ! $HARNESS_ONLY; then
             -S duckdb -B "$DUCKDB_BUILD" 2>&1 | tail -5
 
         emmake make -j$(nproc) -C "$DUCKDB_BUILD" duckdb 2>&1 | tail -5
+        echo "$EXT_DUCKDB_VERSION" > "$DUCKDB_BUILD/miint_duckdb_version"
         echo ""
     else
         echo "DuckDB WASM core already built (use --clean to rebuild, e.g. when"
@@ -141,6 +142,13 @@ if [ ! -f "$DUCKDB_BUILD/src/libduckdb_static.a" ]; then
     echo "ERROR: libduckdb_static.a not found. Run without --harness-only."
     exit 1
 fi
+# A cached core keeps the version it was configured with.
+CORE_VERSION_FILE="$DUCKDB_BUILD/miint_duckdb_version"
+if [ -f "$CORE_VERSION_FILE" ] && [ "$(cat "$CORE_VERSION_FILE")" != "$EXT_DUCKDB_VERSION" ]; then
+    echo "ERROR: the cached core in $DUCKDB_BUILD is DuckDB $(cat "$CORE_VERSION_FILE"),"
+    echo "but the extension is stamped $EXT_DUCKDB_VERSION. Rerun with --clean."
+    exit 1
+fi
 
 # Step 2: Compile test harness.
 # - DuckDB v2 registers statically linked extensions through a generated
@@ -150,8 +158,10 @@ fi
 #   links no C++ runtime (__cxa_throw, the wasm exception personality), and the
 #   main module would then fail when it starts.
 # - DuckDB references sem_timedwait, which emscripten's single-threaded libc
-#   lacks, so undefined symbols cannot be a link error. Any other undefined
-#   symbol fails the build here instead of when the module starts.
+#   lacks, so undefined symbols cannot be a link error. Emscripten reports some
+#   undefined symbols at link time (the missing C++ runtime was reported), and
+#   any other one fails the build here. The rest the main-module link imports
+#   silently; those fail when the module starts, in step 3.
 echo "=== Compiling test harness ==="
 LINK_EXTENSIONS="loadable_extensions parquet core_functions"
 python3 duckdb/scripts/generate_static_extension_loader.py \
@@ -182,6 +192,7 @@ if ! em++ "$DUCKDB_BUILD/test_wasm_extension.o" "$DUCKDB_BUILD/static_extension_
     echo "ERROR: linking the test harness failed"
     exit 1
 fi
+grep -i 'warning' "$LINK_LOG" | grep -v 'undefined symbol: sem_timedwait ' || true
 UNEXPECTED="$(grep 'undefined symbol:' "$LINK_LOG" | grep -v 'undefined symbol: sem_timedwait ' || true)"
 if [ -n "$UNEXPECTED" ]; then
     echo "$UNEXPECTED"

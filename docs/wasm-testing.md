@@ -120,13 +120,15 @@ It:
    using emscripten — guaranteeing the same ABI as the extension — and
    configures it with the DuckDB version stamped in the extension, so `LOAD`
    accepts it. A core cached in `build/wasm_shell/` keeps the version it was
-   built with; `--clean` rebuilds it
+   built with, and the script stops when that differs from the extension's;
+   `--clean` rebuilds it
 2. Compiles `scripts/test_wasm_extension.c` as a WASM `MAIN_MODULE` linked
    against DuckDB, with the miint extension embedded via `--preload-file`. It
    registers parquet, core_functions and the `loadable_extensions` capability
    through the loader that DuckDB's `scripts/generate_static_extension_loader.py`
-   writes, and the link fails on any undefined symbol except `sem_timedwait`,
-   which DuckDB references and emscripten's single-threaded libc lacks
+   writes. The link fails on an undefined symbol emscripten reports, except
+   `sem_timedwait`, which DuckDB references and emscripten's single-threaded
+   libc lacks; one it imports silently instead fails when the module starts
 3. Runs the resulting `test_wasm_harness.js` in Node.js
 4. Verifies: DuckDB opens, json extension loads, miint extension loads,
    `miint_version()` returns successfully, and UniFrac's `faith_pd` computes
@@ -197,8 +199,9 @@ mode, 15 min for the whole run and 256 MiB of shell output.
 
 **This is the check for Rust code paths.** Level 3 links a main module and JS
 glue built from the `duckdb/` submodule; this check runs the duckdb-wasm release
-users get. Rust code depends on that release's JS (see "Exceptions" under
-Level 2), so judge it here.
+users get. Rust calls cross into that release's JS (exception handling, and
+function pointers resolved by its loader; see "Exceptions" under Level 2), so
+judge them here.
 
 ### Adding steps
 
@@ -273,9 +276,11 @@ to bump.
 
 ### `function signature mismatch` from a Rust function
 
-A Rust function reached through a path Emscripten's JS mishandles: see
-"Emscripten exceptions" in
-[embedded-tools.md](internals/embedded-tools.md#rust-crates-via-the-miint_rust_glue-umbrella).
+A Rust function reached through a path Emscripten's JS mishandles. The two
+known causes need a runtime built without `WASM_BIGINT`, which the v2 runtimes
+are not; see "Two bugs that no longer apply" under "Emscripten exceptions" in
+[embedded-tools.md](internals/embedded-tools.md#rust-crates-via-the-miint_rust_glue-umbrella)
+for what to check.
 
 ### Extension loads but `miint_version()` fails
 
