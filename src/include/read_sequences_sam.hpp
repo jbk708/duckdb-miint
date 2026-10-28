@@ -58,8 +58,9 @@ public:
 			for (const auto &path : paths) {
 				try {
 					if (miint::RemoteFileHelper::IsRemotePath(path)) {
-						hFILE *hf = miint::hfile_duckdb_open(fs, path);
-						readers.push_back(std::make_unique<miint::SAMReader>(hf, path, /*include_seq_qual=*/true,
+						auto hf = miint::hfile_duckdb_open(fs, path);
+						readers.push_back(std::make_unique<miint::SAMReader>(std::move(hf), path,
+						                                                     /*include_seq_qual=*/true,
 						                                                     /*require_references=*/false));
 					} else {
 						readers.push_back(std::make_unique<miint::SAMReader>(path, /*include_seq_qual=*/true,

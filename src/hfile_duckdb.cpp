@@ -66,7 +66,7 @@ static int duckdb_hfile_close(hFILE *fpv) {
 static const struct hFILE_backend duckdb_backend = {duckdb_hfile_read, nullptr, duckdb_hfile_seek, nullptr,
                                                     duckdb_hfile_close};
 
-hFILE *hfile_duckdb_open(FileSystem &fs, const string &path) {
+HFilePtr hfile_duckdb_open(FileSystem &fs, const string &path) {
 	auto handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
 	if (!handle) {
 		throw duckdb::IOException("Cannot open file \"%s\"", path);
@@ -80,7 +80,7 @@ hFILE *hfile_duckdb_open(FileSystem &fs, const string &path) {
 	// Placement-new the unique_ptr into the already-allocated struct
 	new (&fp->handle) unique_ptr<FileHandle>(std::move(handle));
 	fp->base.backend = &duckdb_backend;
-	return &fp->base;
+	return HFilePtr(&fp->base);
 }
 
 } // namespace miint

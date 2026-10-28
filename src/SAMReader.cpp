@@ -113,18 +113,18 @@ SAMReader::SAMReader(const std::string &filename, const std::unordered_map<std::
 }
 
 // Constructor for reading SAM/BAM via a pre-opened hFILE.
-// Takes ownership of the hFILE — hts_close() will close it.
-SAMReader::SAMReader(hFILE *hf, const std::string &name, bool include_seq_qual, bool require_references)
+// Takes ownership of the hFILE: hf closes it until hts_hopen succeeds, then hts_close() does.
+SAMReader::SAMReader(HFilePtr hf, const std::string &name, bool include_seq_qual, bool require_references)
     : aln(bam_init1()), include_seq_qual(include_seq_qual) {
 	if (!hf) {
 		throw std::runtime_error("hFILE is null");
 	}
 
-	htsFile *hts_fp = hts_hopen(hf, name.c_str(), "r");
+	htsFile *hts_fp = hts_hopen(hf.get(), name.c_str(), "r");
 	if (!hts_fp) {
-		(void)hclose(hf);
 		throw std::runtime_error("Failed to open hFILE as SAM/BAM stream");
 	}
+	(void)hf.release();
 	fp.reset(hts_fp);
 
 	hdr.reset(sam_hdr_read(fp.get()));
@@ -142,18 +142,18 @@ SAMReader::SAMReader(hFILE *hf, const std::string &name, bool include_seq_qual, 
 }
 
 // Constructor for reading headerless SAM via a pre-opened hFILE.
-SAMReader::SAMReader(hFILE *hf, const std::string &name, const std::unordered_map<std::string, uint64_t> &references,
+SAMReader::SAMReader(HFilePtr hf, const std::string &name, const std::unordered_map<std::string, uint64_t> &references,
                      bool include_seq_qual)
     : aln(bam_init1()), include_seq_qual(include_seq_qual) {
 	if (!hf) {
 		throw std::runtime_error("hFILE is null");
 	}
 
-	htsFile *hts_fp = hts_hopen(hf, name.c_str(), "r");
+	htsFile *hts_fp = hts_hopen(hf.get(), name.c_str(), "r");
 	if (!hts_fp) {
-		(void)hclose(hf);
 		throw std::runtime_error("Failed to open hFILE as SAM/BAM stream");
 	}
+	(void)hf.release();
 	fp.reset(hts_fp);
 
 	ValidateReferenceMap(references);
