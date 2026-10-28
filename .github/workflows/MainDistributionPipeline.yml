@@ -403,9 +403,9 @@ jobs:
 
   #    - uses: mymindstorm/setup-emsdk@v13
   #      with:
-  #        version: 3.1.71
+  #        version: 6.0.9
 
-  #    - uses: dtolnay/rust-toolchain@1.86.0
+  #    - uses: dtolnay/rust-toolchain@1.96.0
   #      with:
   #        targets: wasm32-unknown-emscripten
 

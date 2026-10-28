@@ -6,7 +6,9 @@ of verification, each catching different classes of bugs.
 
 ## Prerequisites
 
-- **emscripten** (emsdk) installed and activated (`emcc` in PATH)
+- **emscripten** (emsdk) 6.0.9, the version extension-ci-tools uses for DuckDB
+  v2.0, installed and activated (`emcc` in PATH). 3.1.71, which v1.5 used, fails
+  linking the Rust glue
 - **VCPKG_TOOLCHAIN_PATH** set, or `vcpkg/` symlinked in repo root
 - **rustup**. The build installs the pinned toolchain (1.96.0), its
   `wasm32-unknown-emscripten` target and, for `wasm_eh`, its `rust-src`
@@ -153,10 +155,12 @@ that generate different function signatures fail with
 `LinkError: imported function does not match the expected type`. Building the
 core from the submodule matches both by construction. An npm
 `@duckdb/duckdb-wasm` release matches when it reports the same core and was
-built with a compatible emsdk; the release the playground loads is one, since
-the extension built here with emsdk 3.1.71 loads into it. Level 4 uses that
-release, pinned in `scripts/wasm_browser/index.html`, and stops at boot when its
-core differs.
+built with a compatible emsdk. No release does for v2.0.0 yet: the newest,
+`1.33.1-dev110.0`, runs `v2.0.0-dev88614`. That is the same commit as the
+submodule (`d54cbbe3df`) under an untagged version, and DuckDB refuses to `LOAD`
+an extension stamped `v2.0.0` into it. Level 4 pins that release in
+`scripts/wasm_browser/index.html` and stops at boot, naming the mismatch, until
+a release reports `v2.0.0`.
 
 ## Level 4: Browser Check
 
@@ -170,12 +174,13 @@ playground uses.
 
 It boots duckdb-wasm in headless Chrome the way the playground does (the
 `@duckdb/duckdb-wasm` release pinned in `scripts/wasm_browser/index.html`,
-`selectBundle`, the eh bundle, `allowUnsignedExtensions`), serves the extension
-with no cross-origin isolation headers, like GitHub Pages, `LOAD`s it, and runs
+`selectBundle`, the base bundle, which runs `wasm_eh`,
+`allowUnsignedExtensions`), serves the extension with no cross-origin isolation
+headers, like GitHub Pages, `LOAD`s it, and runs
 `scripts/wasm_browser/steps.json`. Each step with an `expect` must return that
 value. The run passes only when every step ran and passed; a mismatch, an
 error, a step left unrun because the database died, duckdb-wasm picking a
-bundle other than eh, or the pin running a DuckDB core other than the
+bundle other than base, or the pin running a DuckDB core other than the
 workflow's `duckdb_version` fails it. Timeouts: in the browser, 2 min for boot
 and for `LOAD`, 3 min per step and 20 s for the alive check after it; in native
 mode, 15 min for the whole run and 256 MiB of shell output.
@@ -212,16 +217,16 @@ exceptions, so check 4 in Level 2 is what fails a build with JS exceptions.
 
 ## CI Integration
 
-Two CI jobs in `.github/workflows/MainDistributionPipeline.yml`:
+On push to a tag, the distribution pipeline builds `wasm_eh` (Level 1); pull
+requests and branch pushes do not. The jobs for Levels 2 and 3 (`verify-wasm`,
+`test-wasm-load`) and the WASM-compatible native build are commented out in
+`.github/workflows/MainDistributionPipeline.yml`, so run Levels 2–4 locally
+before a release.
 
-- **`verify-wasm`** (Level 2) — Downloads the extension `.wasm` artifacts
-  from the distribution build and checks for unresolved library imports.
-  Runs in ~30 seconds.
-
-- **`test-wasm-load`** (Level 3) — Builds the extension and DuckDB WASM
-  from source (matching emsdk 3.1.71 + Rust 1.86.0 + vcpkg), compiles the
-  test harness, and runs the headless load test. This is a full independent
-  build that catches ABI mismatches. Runs in ~10-15 minutes.
+`scripts/test_wasm_load.sh` (Level 3) does not work on DuckDB v2.0: it links
+`libduckdb.a`, which v2 no longer builds (only `libduckdb_static.a`), and a
+harness linked by hand against `libduckdb_static.a` failed when the main module
+started. Re-enable `test-wasm-load` only after fixing it.
 
 ## Build Artifacts
 
