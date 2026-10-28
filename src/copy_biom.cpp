@@ -433,41 +433,49 @@ static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 	auto csr = table.ToCSR(); // observation/matrix
 	auto csc = table.ToCSC(); // sample/matrix
 
-	// Create HDF5 file
-	H5::H5File file(gstate.file_path, H5F_ACC_TRUNC);
+	// HDF5 throws H5::Exception, which is not a std::exception, so it is rethrown with the file and
+	// HDF5's reason rather than reaching DuckDB as an unknown exception.
+	try {
+		// Create HDF5 file
+		H5::H5File file(gstate.file_path, H5F_ACC_TRUNC);
 
-	// Write root attributes
-	WriteRootAttributes(file, nnz, n_features, n_samples, fdata.id, fdata.generated_by);
+		// Write root attributes
+		WriteRootAttributes(file, nnz, n_features, n_samples, fdata.id, fdata.generated_by);
 
-	// Create groups
-	H5::Group obs_group = file.createGroup("/observation");
-	H5::Group obs_matrix_group = file.createGroup("/observation/matrix");
-	H5::Group obs_metadata_group = file.createGroup("/observation/metadata");
-	H5::Group obs_group_metadata_group = file.createGroup("/observation/group-metadata");
+		// Create groups
+		H5::Group obs_group = file.createGroup("/observation");
+		H5::Group obs_matrix_group = file.createGroup("/observation/matrix");
+		H5::Group obs_metadata_group = file.createGroup("/observation/metadata");
+		H5::Group obs_group_metadata_group = file.createGroup("/observation/group-metadata");
 
-	H5::Group samp_group = file.createGroup("/sample");
-	H5::Group samp_matrix_group = file.createGroup("/sample/matrix");
-	H5::Group samp_metadata_group = file.createGroup("/sample/metadata");
-	H5::Group samp_group_metadata_group = file.createGroup("/sample/group-metadata");
+		H5::Group samp_group = file.createGroup("/sample");
+		H5::Group samp_matrix_group = file.createGroup("/sample/matrix");
+		H5::Group samp_metadata_group = file.createGroup("/sample/metadata");
+		H5::Group samp_group_metadata_group = file.createGroup("/sample/group-metadata");
 
-	// Write observation (feature) IDs
-	WriteStringDataset(obs_group, "ids", table.FeatureIDs(), fdata.use_compression);
+		// Write observation (feature) IDs
+		WriteStringDataset(obs_group, "ids", table.FeatureIDs(), fdata.use_compression);
 
-	// Write observation/matrix (CSR)
-	WriteNumericDataset(obs_matrix_group, "data", csr.data, H5::PredType::NATIVE_DOUBLE, fdata.use_compression);
-	WriteNumericDataset(obs_matrix_group, "indices", csr.indices, H5::PredType::NATIVE_INT32, fdata.use_compression);
-	WriteNumericDataset(obs_matrix_group, "indptr", csr.indptr, H5::PredType::NATIVE_INT32, fdata.use_compression);
+		// Write observation/matrix (CSR)
+		WriteNumericDataset(obs_matrix_group, "data", csr.data, H5::PredType::NATIVE_DOUBLE, fdata.use_compression);
+		WriteNumericDataset(obs_matrix_group, "indices", csr.indices, H5::PredType::NATIVE_INT32,
+		                    fdata.use_compression);
+		WriteNumericDataset(obs_matrix_group, "indptr", csr.indptr, H5::PredType::NATIVE_INT32, fdata.use_compression);
 
-	// Write sample IDs
-	WriteStringDataset(samp_group, "ids", table.SampleIDs(), fdata.use_compression);
+		// Write sample IDs
+		WriteStringDataset(samp_group, "ids", table.SampleIDs(), fdata.use_compression);
 
-	// Write sample/matrix (CSC)
-	WriteNumericDataset(samp_matrix_group, "data", csc.data, H5::PredType::NATIVE_DOUBLE, fdata.use_compression);
-	WriteNumericDataset(samp_matrix_group, "indices", csc.indices, H5::PredType::NATIVE_INT32, fdata.use_compression);
-	WriteNumericDataset(samp_matrix_group, "indptr", csc.indptr, H5::PredType::NATIVE_INT32, fdata.use_compression);
+		// Write sample/matrix (CSC)
+		WriteNumericDataset(samp_matrix_group, "data", csc.data, H5::PredType::NATIVE_DOUBLE, fdata.use_compression);
+		WriteNumericDataset(samp_matrix_group, "indices", csc.indices, H5::PredType::NATIVE_INT32,
+		                    fdata.use_compression);
+		WriteNumericDataset(samp_matrix_group, "indptr", csc.indptr, H5::PredType::NATIVE_INT32, fdata.use_compression);
 
-	// Close file
-	file.close();
+		// Close file
+		file.close();
+	} catch (const H5::Exception &e) {
+		throw IOException("COPY FORMAT BIOM: cannot write '%s': %s", gstate.file_path, e.getDetailMsg());
+	}
 }
 
 //===--------------------------------------------------------------------===//

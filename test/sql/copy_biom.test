@@ -308,6 +308,12 @@ Feature1	Sample1	1.0
 Feature1	Sample2	2.0
 Feature2	Sample1	3.0
 
+# HDF5's failures name the file and HDF5's reason, rather than escaping as an unknown exception.
+statement error
+COPY test_biom_basic TO '{TEST_DIR}/no_such_dir/x.biom' (FORMAT BIOM);
+----
+<REGEX>:IO Error: COPY FORMAT BIOM: cannot write '.*no_such_dir/x\.biom': .*
+
 statement ok
 DROP TABLE test_biom_basic;
 
