@@ -292,7 +292,6 @@ COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO 'foo://miint
 ----
 COPY FORMAT BIOM writes local files only
 
-# Cleanup
 # A file:// target is the local file it names: BIOM writes the path DuckDB resolves for the COPY, as
 # every other format does, so HDF5 is handed a plain path.
 statement ok
@@ -312,8 +311,38 @@ Feature2	Sample1	3.0
 statement error
 COPY test_biom_basic TO '{TEST_DIR}/no_such_dir/x.biom' (FORMAT BIOM);
 ----
-<REGEX>:IO Error: COPY FORMAT BIOM: cannot write '.*no_such_dir/x\.biom': .*
+<REGEX>:IO Error: COPY FORMAT BIOM: cannot write '.*no_such_dir/x\.biom': H5Fcreate failed: .*No such file or directory.*
 
+# PARTITION_BY writes one BIOM file per partition, named .biom, and the partitions are written at
+# once: every HDF5 call is serialized, so none of them fails or corrupts another. Each partition holds
+# 25 features (i % 50 has the parity of i % 8) by 7 samples.
+statement ok
+SET threads = 4;
+
+statement ok
+COPY (SELECT 'F' || (i % 50) AS feature_id, 'S' || (i % 7) AS sample_id, 1.0::DOUBLE AS value, i % 8 AS grp
+      FROM range(200000) t(i))
+TO '{TEST_DIR}/biom_parts' (FORMAT BIOM, PARTITION_BY (grp));
+
+query III
+SELECT count(DISTINCT filepath), count(*), sum(value) FROM read_biom('{TEST_DIR}/biom_parts/*/*.biom', include_filepath := true);
+----
+8	1400	200000.0
+
+# PER_THREAD_OUTPUT writes one .biom file per thread; however the rows are split, together they hold them all.
+statement ok
+COPY (SELECT 'F' || (i % 50) AS feature_id, 'S' || (i % 7) AS sample_id, 1.0::DOUBLE AS value FROM range(200000) t(i))
+TO '{TEST_DIR}/biom_threads' (FORMAT BIOM, PER_THREAD_OUTPUT true);
+
+query I
+SELECT sum(value) FROM read_biom('{TEST_DIR}/biom_threads/*.biom');
+----
+200000.0
+
+statement ok
+RESET threads;
+
+# Cleanup
 statement ok
 DROP TABLE test_biom_basic;
 

@@ -1,5 +1,6 @@
 #include "copy_biom.hpp"
 #include "copy_option_parsing.hpp"
+#include "BIOMReader.hpp"
 #include "BIOMTable.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -408,6 +409,22 @@ static void WriteNumericDataset(H5::Group &group, const string &name, const std:
 //===--------------------------------------------------------------------===//
 // Finalize
 //===--------------------------------------------------------------------===//
+static herr_t KeepInnermostHdf5Error(unsigned n, const H5E_error2_t *err, void *cause) {
+	if (n == 0 && err->desc) {
+		*static_cast<string *>(cause) = err->desc;
+	}
+	return 0;
+}
+
+// Why an HDF5 call failed: the innermost entry of this thread's HDF5 error stack (for a failed open, the
+// OS error), or else the failed call the exception names. Closing an HDF5 object clears the stack, so a
+// failure after the file is open may report only the call.
+static string Hdf5FailureReason(const H5::Exception &e) {
+	string cause;
+	H5Ewalk2(H5E_DEFAULT, H5E_WALK_UPWARD, KeepInnermostHdf5Error, &cause);
+	return cause.empty() ? e.getDetailMsg() : e.getDetailMsg() + ": " + cause;
+}
+
 static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, GlobalFunctionData &gstate_p) {
 	auto &fdata = bind_data.Cast<BiomCopyBindData>();
 	auto &gstate = gstate_p.Cast<BiomCopyGlobalState>();
@@ -433,8 +450,13 @@ static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 	auto csr = table.ToCSR(); // observation/matrix
 	auto csc = table.ToCSC(); // sample/matrix
 
-	// HDF5 throws H5::Exception, which is not a std::exception, so it is rethrown with the file and
-	// HDF5's reason rather than reaching DuckDB as an unknown exception.
+	// Every HDF5 call below, the destructors that close the file and its objects and the error-stack walk
+	// included, runs under miint::g_hdf5_mutex (BIOMReader.hpp): a partitioned or per-thread COPY finalizes
+	// several BIOM files at once, and other queries may be reading BIOM files.
+	std::lock_guard<std::mutex> hdf5_guard(miint::g_hdf5_mutex);
+
+	// HDF5 throws H5::Exception, which is not a std::exception, so it is rethrown naming the file and why
+	// rather than reaching DuckDB as an unknown exception.
 	try {
 		// Create HDF5 file
 		H5::H5File file(gstate.file_path, H5F_ACC_TRUNC);
@@ -474,7 +496,7 @@ static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 		// Close file
 		file.close();
 	} catch (const H5::Exception &e) {
-		throw IOException("COPY FORMAT BIOM: cannot write '%s': %s", gstate.file_path, e.getDetailMsg());
+		throw IOException("COPY FORMAT BIOM: cannot write '%s': %s", gstate.file_path, Hdf5FailureReason(e));
 	}
 }
 
@@ -489,6 +511,7 @@ static void BiomCopyOptions(ClientContext &context, CopyOptionsInput &input) {
 
 CopyFunction CopyBiomFunction::GetFunction() {
 	CopyFunction func("biom");
+	func.extension = "biom";
 	func.copy_options = BiomCopyOptions;
 	func.copy_to_bind = BiomCopyBind;
 	func.copy_to_initialize_local = BiomCopyInitializeLocal;

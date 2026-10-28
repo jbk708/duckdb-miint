@@ -359,7 +359,7 @@ Write query results to BIOM (Biological Observation Matrix) format files. BIOM i
 - `sample_id` (VARCHAR): Sample identifier
 - `value` (DOUBLE): Abundance/count value
 
-BIOM is written to local files only; a remote target is refused.
+BIOM is written to local files only; a remote target is refused. `PARTITION_BY` and `PER_THREAD_OUTPUT` write one `.biom` file per partition or per thread, each a complete table of its own rows.
 
 **Parameters:**
 - `COMPRESSION` (default: 'gzip'): HDF5's compression of the datasets inside the file, `'gzip'` (or `'gz'`; deflate level 4, h5py's default) or `'none'`. The `.biom` file itself is always HDF5, never gzip, whatever its name.
