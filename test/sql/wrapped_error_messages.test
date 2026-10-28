@@ -16,8 +16,9 @@ ATTACH '' AS ena (TYPE ENA, SECRET 'ena_dummy');
 statement ok
 SET enable_external_access = false;
 
-# read_jplace_newick lets an IO Error through and wraps any other open failure. A list skips
-# bind's existence check for a remote path, so the open fails inside the wrapper.
+# read_jplace_newick lets an IO Error through and wraps any other error from reading or parsing
+# a file. Bind skips the existence check for a remote path, so the open fails in the scan, inside
+# the wrapper.
 statement error
 SELECT * FROM read_jplace_newick(['https://example.invalid/t.jplace']);
 ----
@@ -72,8 +73,8 @@ SELECT * FROM ena_modify_run(secret => 'ena_dummy', accession => 'ERR9000001', a
 ----
 <REGEX>:.*ena_modify_run: Cannot access ".*" - file system operations are disabled by configuration.*
 
-# validate_only skips the Portal alias check, which would fail first (and unwrapped), so the
-# INSERT reaches its Webin request.
+# validate_only skips the Portal alias check, which would fail first with an error of its own,
+# so the INSERT reaches its Webin request.
 statement ok
 SET miint_ena_validate_only = true;
 

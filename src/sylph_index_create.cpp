@@ -353,6 +353,7 @@ unique_ptr<GlobalTableFunctionState> SylphIndexCreateTableFunction::InitGlobal(C
 		th.join();
 	}
 	if (failed.load()) {
+		D_ASSERT(first_error);
 		std::rethrow_exception(first_error);
 	}
 

@@ -60,9 +60,9 @@ int duckdb_seq_read(DuckDBSeqStream *stream, void *dst, unsigned int len) {
 		}
 		return result;
 	} catch (const std::exception &e) {
-		// DuckDB's FileHandle::Read can throw on HTTP errors (libcurl
-		// CURLE_RECV_ERROR, etc.). Catch here so the throw never crosses
-		// kseq++'s template machinery.
+		// DuckDB's FileHandle::Read throws on a read error (an HTTP receive
+		// error, a local EIO). Catch here so the throw never crosses kseq++'s
+		// template machinery.
 		g_seq_read_error = std::string("duckdb_seq_read: ") + duckdb::ErrorData(e).RawMessage();
 		return -1;
 	} catch (...) {

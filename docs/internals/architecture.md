@@ -141,7 +141,7 @@ Currently used by `align_minimap2` + `save_minimap2_index` (both sides), `copy_s
 
 - **C++ Standard**: C++20 (required for kseq++)
 - **Namespaces**: extension code in `duckdb`, readers in `miint`
-- **Error Handling**: DuckDB exceptions (`InvalidInputException`, `IOException`, `RuntimeException`). A DuckDB exception's `what()` is DuckDB's serialized form of it (JSON), so a message built from a caught one uses `ErrorData(e).RawMessage()`, and a worker thread's error crosses the join as a `std::exception_ptr`, rethrown unchanged.
+- **Error Handling**: DuckDB exceptions (`InvalidInputException`, `IOException`, `RuntimeException`). A message built from a caught DuckDB exception uses `ErrorData(e).RawMessage()`, since its `what()` is JSON ([Exceptions](duckdb-engine-notes.md#exceptions)), and a worker thread's error crosses the join as a `std::exception_ptr`, rethrown unchanged.
 - **Memory Management**: RAII with smart pointers (HTSlib uses custom deleters)
 - **Formatting**: DuckDB style (`.clang-format`); pre-commit hook runs `make format-check`, auto-fix with `conda run -n duckdb-format make format-fix`
 
