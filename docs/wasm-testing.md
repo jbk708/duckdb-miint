@@ -7,8 +7,7 @@ of verification, each catching different classes of bugs.
 ## Prerequisites
 
 - **emscripten** (emsdk) 6.0.9, the version extension-ci-tools uses for DuckDB
-  v2.0, installed and activated (`emcc` in PATH). 3.1.71, which v1.5 used, fails
-  linking the Rust glue
+  v2.0, installed and activated (`emcc` in PATH)
 - **VCPKG_TOOLCHAIN_PATH** set, or `vcpkg/` symlinked in repo root
 - **rustup**. The build installs the pinned toolchain (1.96.0), its
   `wasm32-unknown-emscripten` target and, for `wasm_eh`, its `rust-src`
@@ -120,15 +119,13 @@ It:
    using emscripten — guaranteeing the same ABI as the extension — and
    configures it with the DuckDB version stamped in the extension, so `LOAD`
    accepts it. A core cached in `build/wasm_shell/` keeps the version it was
-   built with, and the script stops when that differs from the extension's;
-   `--clean` rebuilds it
+   built with, and the script stops when that differs from the extension's or
+   was not recorded; `--clean` rebuilds it
 2. Compiles `scripts/test_wasm_extension.c` as a WASM `MAIN_MODULE` linked
-   against DuckDB, with the miint extension embedded via `--preload-file`. It
-   registers parquet, core_functions and the `loadable_extensions` capability
-   through the loader that DuckDB's `scripts/generate_static_extension_loader.py`
-   writes. The link fails on an undefined symbol emscripten reports, except
-   `sem_timedwait`, which DuckDB references and emscripten's single-threaded
-   libc lacks; one it imports silently instead fails when the module starts
+   against DuckDB, with the miint extension embedded via `--preload-file`, and
+   registers DuckDB's statically linked extensions through the loader DuckDB's
+   `scripts/generate_static_extension_loader.py` writes. Which extensions, and
+   which undefined symbols fail the link, are in the script's step 2 comment
 3. Runs the resulting `test_wasm_harness.js` in Node.js
 4. Verifies: DuckDB opens, json extension loads, miint extension loads,
    `miint_version()` returns successfully, and UniFrac's `faith_pd` computes
@@ -164,12 +161,11 @@ that generate different function signatures fail with
 `LinkError: imported function does not match the expected type`. Building the
 core from the submodule matches both by construction. An npm
 `@duckdb/duckdb-wasm` release matches when it reports the same core and was
-built with a compatible emsdk. For v2.0.0, npm has none yet: the newest,
-`1.33.1-dev110.0`, runs `v2.0.0-dev88614`, the same commit as the submodule
-(`d54cbbe3df`) under an untagged version, and DuckDB refuses to `LOAD` an
-extension stamped `v2.0.0` into it. Level 4 pins that release in
-`scripts/wasm_browser/index.html` and stops at boot, naming the mismatch, until
-an npm release reports `v2.0.0`. The v2.0.0 runtime at
+built with a compatible emsdk. The version must match exactly: a dev build of
+the same commit reports `vX.Y.Z-devN`, and DuckDB refuses to `LOAD` an
+extension stamped `vX.Y.Z` into it. Level 4 stops at boot, naming the
+mismatch, while its pin in `scripts/wasm_browser/index.html` reports another
+version. The v2.0.0 runtime at
 [shell.duckdb.org](https://shell.duckdb.org) is not an npm release: it serves
 its own build with its own worker protocol, which the duckdb-wasm npm API does
 not drive.

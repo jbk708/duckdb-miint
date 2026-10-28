@@ -142,10 +142,12 @@ if [ ! -f "$DUCKDB_BUILD/src/libduckdb_static.a" ]; then
     echo "ERROR: libduckdb_static.a not found. Run without --harness-only."
     exit 1
 fi
-# A cached core keeps the version it was configured with.
+# A cached core keeps the version it was configured with; one that recorded
+# none predates the record and is treated as a mismatch.
 CORE_VERSION_FILE="$DUCKDB_BUILD/miint_duckdb_version"
-if [ -f "$CORE_VERSION_FILE" ] && [ "$(cat "$CORE_VERSION_FILE")" != "$EXT_DUCKDB_VERSION" ]; then
-    echo "ERROR: the cached core in $DUCKDB_BUILD is DuckDB $(cat "$CORE_VERSION_FILE"),"
+CORE_VERSION="$(cat "$CORE_VERSION_FILE" 2>/dev/null || echo "unrecorded")"
+if [ "$CORE_VERSION" != "$EXT_DUCKDB_VERSION" ]; then
+    echo "ERROR: the cached core in $DUCKDB_BUILD is DuckDB $CORE_VERSION,"
     echo "but the extension is stamped $EXT_DUCKDB_VERSION. Rerun with --clean."
     exit 1
 fi
