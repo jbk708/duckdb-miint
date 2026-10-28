@@ -355,6 +355,29 @@ RESET threads;
 statement ok
 DROP TABLE biom_many;
 
+# Test 21: concurrent COPY TO BIOM and read_biom return correct values
+concurrentloop i 0 8
+
+loop j 0 10
+
+statement ok
+COPY (SELECT 'F' || (r % 50) AS feature_id, 'S' || (r // 50) AS sample_id, (r + 1)::DOUBLE AS value FROM range(2000) t(r))
+TO '{TEST_DIR}/concurrent_{i}_{j}.biom' (FORMAT BIOM);
+
+query IIIR
+SELECT COUNT(*), COUNT(DISTINCT feature_id), COUNT(DISTINCT sample_id), SUM(value) FROM read_biom('{TEST_DIR}/concurrent_{i}_{j}.biom');
+----
+2000	50	40	2001000.0
+
+query IR
+SELECT COUNT(*), SUM(value) FROM read_biom('data/biom/test.biom');
+----
+15	27.0
+
+endloop
+
+endloop
+
 # Cleanup
 statement ok
 DROP TABLE test_biom_basic;

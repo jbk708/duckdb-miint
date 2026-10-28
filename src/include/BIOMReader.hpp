@@ -24,6 +24,9 @@ namespace miint {
 //! file/dataset handles are closed under the lock. COPY FORMAT BIOM
 //! (copy_biom.cpp) holds it for its whole HDF5 write, the closing destructors
 //! included.
+//!
+//! HDF5 tears down from atexit handlers outside this lock, so a process must
+//! not exit while any HDF5 call is in progress.
 extern std::mutex g_hdf5_mutex;
 
 /* datasets defined by the BIOM 2.x spec */
