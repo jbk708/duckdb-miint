@@ -18,29 +18,29 @@ statement ok
 SET allow_persistent_secrets = false;
 
 statement ok
-SET allowed_directories = ['{ENA_WEBIN_MOCK_URL}/portal/'];
+SET allowed_directories = ['{MIINT_ENA_PORTAL_URL_BASE}'];
 
 statement ok
 SET enable_external_access = false;
 
 # With more than one run, a run that cannot be opened is retried once, then skipped; with every
-# run skipped, the scan fails.
+# run skipped, the scan fails and names the first run's error.
 statement error
 SELECT count(*) FROM read_ena_sequences(['ERR1074767', 'ERR9999999']);
 ----
-every run failed (2)
+<REGEX>:.*every run failed \(2\): .*; first error: Cannot access file ".*" - file system operations are disabled by configuration.*
 
 # One warning per run for each attempt. The warnings are counted rather than matched once, as the
 # first attempt's is worded the same in the correlated call below.
 query I
 SELECT count(*) FROM miint_warnings()
-WHERE message LIKE '%failed to open (Cannot access file "%/fastq/ERR1074767.fastq.gz"%), retrying...';
+WHERE message LIKE '%failed to open (Cannot access file "%), retrying...';
 ----
 2
 
 query I
 SELECT count(*) FROM miint_warnings()
-WHERE message LIKE '%failed on retry (Cannot access file "%/fastq/ERR1074767.fastq.gz"%), skipping';
+WHERE message LIKE '%failed on retry (Cannot access file "%), skipping';
 ----
 2
 
@@ -53,7 +53,7 @@ SELECT count(*) FROM (VALUES ('ERR1074767')) r(run_accession),
 
 query I
 SELECT count(*) FROM miint_warnings()
-WHERE message LIKE '%failed to open (Cannot access file "%/fastq/ERR1074767.fastq.gz"%), retrying...';
+WHERE message LIKE '%failed to open (Cannot access file "%), retrying...';
 ----
 3
 

@@ -348,7 +348,8 @@ after every point where a multi-part index transition may have freed a part.
 `duckdb/src/common/exception.cpp`). DuckDB parses it back when it reports the error, so users
 see the JSON only when extension code builds a new message from `what()`.
 `ErrorData(e).RawMessage()` gives the message alone and passes a `what()` that is not JSON
-through unchanged (`duckdb/src/common/error_data.cpp`); `Message()` adds the type prefix
+through unchanged, except `std::bad_alloc`'s, which becomes "Allocation failure"
+(`duckdb/src/common/error_data.cpp`); `Message()` adds the type prefix
 ("IO Error: ...") and, for an internal error, DuckDB's assertion notice and stack trace. A
 catch of `std::exception` or `std::runtime_error` can receive a DuckDB exception; a catch of
 `std::invalid_argument` or another `std::logic_error` cannot.
