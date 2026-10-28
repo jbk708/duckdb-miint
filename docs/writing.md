@@ -15,7 +15,7 @@ Options follow DuckDB's rules for COPY options in every format here, as they do 
 
 `COMPRESSION` takes the same values in FASTQ, FASTA, NEWICK and SAM, in any case: `'gzip'` or `'gz'`, and `'none'` or `'uncompressed'`. Without it, a path ending in `.gz` is written as gzip. zstd (`'zstd'`, or a `.zst` path) is not supported yet and is refused. BAM is always BGZF-compressed and refuses `COMPRESSION`; BIOM's `COMPRESSION` is HDF5's compression inside the file, described under [BIOM](#biom).
 
-FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, as it does for its own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target.
+FASTQ, FASTA and NEWICK write a path with a URI scheme other than `file://` (`s3://`, `https://`, `az://`, ...) through DuckDB's file systems, which load the extension that serves the scheme. For a scheme no file system serves, DuckDB opens the path as a local file, as it does for its own formats. SAM, BAM, UBAM and BIOM write local files only and refuse a remote target. In every format a `file:` URI (`file:///p`, `file://localhost/p` or `file:/p`) is the local file `/p`, and gzip output to it takes `COMPRESSION_LEVEL` as any local path does.
 
 ## Table of Contents
 

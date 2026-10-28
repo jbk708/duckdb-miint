@@ -293,6 +293,21 @@ COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO 'foo://miint
 COPY FORMAT BIOM writes local files only
 
 # Cleanup
+# A file:// target is the local file it names: BIOM writes the path DuckDB resolves for the COPY, as
+# every other format does, so HDF5 is handed a plain path.
+statement ok
+SET VARIABLE abs_test_dir = CASE WHEN '{TEST_DIR}' LIKE '/%' THEN '{TEST_DIR}' ELSE '{WORKING_DIRECTORY}/{TEST_DIR}' END;
+
+statement ok
+COPY test_biom_basic TO ('file://' || getvariable('abs_test_dir') || '/uri.biom') (FORMAT BIOM);
+
+query III
+SELECT feature_id, sample_id, value FROM read_biom('{TEST_DIR}/uri.biom') ORDER BY ALL;
+----
+Feature1	Sample1	1.0
+Feature1	Sample2	2.0
+Feature2	Sample1	3.0
+
 statement ok
 DROP TABLE test_biom_basic;
 

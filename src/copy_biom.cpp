@@ -129,6 +129,8 @@ static unique_ptr<FunctionData> BiomCopyBind(ClientContext &context, CopyFunctio
 // Global State
 //===--------------------------------------------------------------------===//
 struct BiomCopyGlobalState : public GlobalFunctionData {
+	// The target as DuckDB resolved it for this COPY (a file: URI becomes its local path).
+	string file_path;
 	mutex lock;
 	// Incremental dictionary building for optimal performance
 	unordered_map<string, int32_t> feature_map;
@@ -144,6 +146,7 @@ struct BiomCopyGlobalState : public GlobalFunctionData {
 static unique_ptr<GlobalFunctionData> BiomCopyInitializeGlobal(ClientContext &context, FunctionData &bind_data,
                                                                const string &file_path) {
 	auto gstate = make_uniq<BiomCopyGlobalState>();
+	gstate->file_path = file_path;
 	return gstate;
 }
 
@@ -431,7 +434,7 @@ static void BiomCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 	auto csc = table.ToCSC(); // sample/matrix
 
 	// Create HDF5 file
-	H5::H5File file(fdata.file_path, H5F_ACC_TRUNC);
+	H5::H5File file(gstate.file_path, H5F_ACC_TRUNC);
 
 	// Write root attributes
 	WriteRootAttributes(file, nnz, n_features, n_samples, fdata.id, fdata.generated_by);

@@ -90,8 +90,8 @@ unique_ptr<NodeStatistics> EstimateFileScanCardinality(const std::vector<std::st
 std::vector<std::string> ExpandGlobPattern(FileSystem &fs, ClientContext &context, const std::string &pattern) {
 	// Check if this is a glob pattern
 	if (!FileSystem::HasGlob(pattern)) {
-		// Not a glob pattern, return as-is (validation happens elsewhere)
-		return {pattern};
+		// Not a glob pattern: expanded as DuckDB's glob expands one (validation happens elsewhere)
+		return {fs.ExpandPath(pattern)};
 	}
 
 	// Only check for stdin paths when it's actually a glob pattern
@@ -117,6 +117,20 @@ std::vector<std::string> ExpandGlobPattern(FileSystem &fs, ClientContext &contex
 	return paths;
 }
 
+std::vector<std::string> ExpandPathList(FileSystem &fs, const Value &list, const std::string &function_name) {
+	std::vector<std::string> paths;
+	for (const auto &child : ListValue::GetChildren(list)) {
+		if (child.IsNull()) {
+			throw InvalidInputException(function_name + ": file path list cannot contain NULL");
+		}
+		paths.push_back(fs.ExpandPath(child.ToString()));
+	}
+	if (paths.empty()) {
+		throw InvalidInputException(function_name + ": at least one file path must be provided");
+	}
+	return paths;
+}
+
 GlobExpansionResult ExpandGlobPatternWithInfo(FileSystem &fs, ClientContext &context, const std::string &pattern) {
 	GlobExpansionResult result;
 	result.is_glob = FileSystem::HasGlob(pattern);
@@ -127,8 +141,8 @@ GlobExpansionResult ExpandGlobPatternWithInfo(FileSystem &fs, ClientContext &con
 	}
 
 	if (!result.is_glob) {
-		// Not a glob pattern, return as-is
-		result.paths = {pattern};
+		// Not a glob pattern: expanded as DuckDB's glob expands one
+		result.paths = {fs.ExpandPath(pattern)};
 		return result;
 	}
 

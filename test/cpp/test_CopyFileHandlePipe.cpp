@@ -66,14 +66,8 @@ TEST_CASE("BgzfWriteMode carries COMPRESSION_LEVEL into the mode, with or withou
 	REQUIRE(miint::BgzfWriteMode("/tmp/miint_nonexistent_xyz.fq.gz", 1) == "wx1");
 }
 
-TEST_CASE("BgzfWriteMode judges a file:// URI by the path htslib opens", "[copy][bgzf]") {
-	REQUIRE(miint::BgzfWriteMode("file:///dev/null", 1) == "w1");
-	REQUIRE(miint::BgzfWriteMode("file://localhost/dev/null", 1) == "w1");
-	REQUIRE(miint::BgzfWriteMode("file:///tmp/miint_nonexistent_xyz.fq.gz", 1) == "wx1");
-}
-
-// A target naming an existing FIFO, as a path or as a file:// URI (which htslib opens as the path),
-// gets no O_EXCL, and the gzip data written through it arrives intact.
+// A target naming an existing FIFO gets no O_EXCL, and the gzip data written through it arrives intact.
+// (A file:// target arrives here as its path: DuckDB expands the COPY target before the writer sees it.)
 TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgzf][pipe]") {
 	char dir_tmpl[] = "/tmp/miint_pipe_XXXXXX";
 	const char *dir = mkdtemp(dir_tmpl);
@@ -82,36 +76,33 @@ TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgz
 	REQUIRE(mkfifo(fifo.c_str(), 0600) == 0);
 	const std::string payload = "@r1\nACGTACGTACGTACGT\n+\nIIIIIIIIIIIIIIII\n";
 
-	for (const std::string &target : {fifo, "file://" + fifo, "file://localhost" + fifo}) {
-		INFO("target: " << target);
-		REQUIRE(miint::BgzfWriteMode(target, 6) == "w6");
+	REQUIRE(miint::BgzfWriteMode(fifo, 6) == "w6");
 
-		// The read end is opened non-blocking first, so the writer's blocking O_WRONLY open succeeds at
-		// once and a failing open fails the test instead of hanging. The payload is far below the pipe
-		// buffer, so the writer never blocks on a full pipe.
-		const int rfd = open(fifo.c_str(), O_RDONLY | O_NONBLOCK);
-		REQUIRE(rfd >= 0);
+	// The read end is opened non-blocking first, so the writer's blocking O_WRONLY open succeeds at
+	// once and a failing open fails the test instead of hanging. The payload is far below the pipe
+	// buffer, so the writer never blocks on a full pipe.
+	const int rfd = open(fifo.c_str(), O_RDONLY | O_NONBLOCK);
+	REQUIRE(rfd >= 0);
 
-		BGZF *bg = bgzf_open(target.c_str(), miint::BgzfWriteMode(target, 6).c_str());
-		REQUIRE(bg != nullptr);
-		REQUIRE(bgzf_write(bg, payload.data(), payload.size()) == static_cast<ssize_t>(payload.size()));
-		REQUIRE(bgzf_close(bg) == 0);
+	BGZF *bg = bgzf_open(fifo.c_str(), miint::BgzfWriteMode(fifo, 6).c_str());
+	REQUIRE(bg != nullptr);
+	REQUIRE(bgzf_write(bg, payload.data(), payload.size()) == static_cast<ssize_t>(payload.size()));
+	REQUIRE(bgzf_close(bg) == 0);
 
-		std::string captured;
-		char buf[8192];
-		for (;;) {
-			ssize_t n = read(rfd, buf, sizeof(buf));
-			if (n > 0) {
-				captured.append(buf, static_cast<size_t>(n));
-				continue;
-			}
-			break; // EOF (writer closed), or nothing left to read
+	std::string captured;
+	char buf[8192];
+	for (;;) {
+		ssize_t n = read(rfd, buf, sizeof(buf));
+		if (n > 0) {
+			captured.append(buf, static_cast<size_t>(n));
+			continue;
 		}
-		close(rfd);
-
-		REQUIRE(!captured.empty());
-		REQUIRE(GunzipFirstMember(captured) == payload);
+		break; // EOF (writer closed), or nothing left to read
 	}
+	close(rfd);
+
+	REQUIRE(!captured.empty());
+	REQUIRE(GunzipFirstMember(captured) == payload);
 
 	unlink(fifo.c_str());
 	rmdir(dir);
