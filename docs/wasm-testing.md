@@ -117,9 +117,16 @@ initialization failures.
 It:
 
 1. Builds DuckDB WASM (`libduckdb_static.a`) from the `duckdb/` submodule
-   using emscripten — guaranteeing the same ABI as the extension
+   using emscripten — guaranteeing the same ABI as the extension — and
+   configures it with the DuckDB version stamped in the extension, so `LOAD`
+   accepts it. A core cached in `build/wasm_shell/` keeps the version it was
+   built with; `--clean` rebuilds it
 2. Compiles `scripts/test_wasm_extension.c` as a WASM `MAIN_MODULE` linked
-   against DuckDB, with the miint extension embedded via `--preload-file`
+   against DuckDB, with the miint extension embedded via `--preload-file`. It
+   registers parquet, core_functions and the `loadable_extensions` capability
+   through the loader that DuckDB's `scripts/generate_static_extension_loader.py`
+   writes, and the link fails on any undefined symbol except `sem_timedwait`,
+   which DuckDB references and emscripten's single-threaded libc lacks
 3. Runs the resulting `test_wasm_harness.js` in Node.js
 4. Verifies: DuckDB opens, json extension loads, miint extension loads,
    `miint_version()` returns successfully, and UniFrac's `faith_pd` computes
@@ -155,12 +162,15 @@ that generate different function signatures fail with
 `LinkError: imported function does not match the expected type`. Building the
 core from the submodule matches both by construction. An npm
 `@duckdb/duckdb-wasm` release matches when it reports the same core and was
-built with a compatible emsdk. No release does for v2.0.0 yet: the newest,
-`1.33.1-dev110.0`, runs `v2.0.0-dev88614`. That is the same commit as the
-submodule (`d54cbbe3df`) under an untagged version, and DuckDB refuses to `LOAD`
-an extension stamped `v2.0.0` into it. Level 4 pins that release in
+built with a compatible emsdk. For v2.0.0, npm has none yet: the newest,
+`1.33.1-dev110.0`, runs `v2.0.0-dev88614`, the same commit as the submodule
+(`d54cbbe3df`) under an untagged version, and DuckDB refuses to `LOAD` an
+extension stamped `v2.0.0` into it. Level 4 pins that release in
 `scripts/wasm_browser/index.html` and stops at boot, naming the mismatch, until
-a release reports `v2.0.0`.
+an npm release reports `v2.0.0`. The v2.0.0 runtime at
+[shell.duckdb.org](https://shell.duckdb.org) is not an npm release: it serves
+its own build with its own worker protocol, which the duckdb-wasm npm API does
+not drive.
 
 ## Level 4: Browser Check
 
@@ -222,11 +232,6 @@ requests and branch pushes do not. The jobs for Levels 2 and 3 (`verify-wasm`,
 `test-wasm-load`) and the WASM-compatible native build are commented out in
 `.github/workflows/MainDistributionPipeline.yml`, so run Levels 2–4 locally
 before a release.
-
-`scripts/test_wasm_load.sh` (Level 3) does not work on DuckDB v2.0: it links
-`libduckdb.a`, which v2 no longer builds (only `libduckdb_static.a`), and a
-harness linked by hand against `libduckdb_static.a` failed when the main module
-started. Re-enable `test-wasm-load` only after fixing it.
 
 ## Build Artifacts
 

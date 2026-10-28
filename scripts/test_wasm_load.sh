@@ -80,6 +80,19 @@ fi
 
 DUCKDB_BUILD="build/wasm_shell"
 
+# LOAD refuses an extension stamped for another DuckDB version, so the core is
+# configured with the version in the extension's metadata footer (the 32-byte
+# fields in its last 512 bytes): v2.0.0 when it was built with DUCKDB_VERSION
+# set, where a checkout's git describe gives an untagged v2.0.0-devN.
+EXT_DUCKDB_VERSION="$(python3 -c '
+import sys
+tail = open(sys.argv[1], "rb").read()[-512:]
+print(tail[5 * 32:6 * 32].rstrip(b"\0").decode())' "$WASM_EXT")"
+if [ -z "$EXT_DUCKDB_VERSION" ]; then
+    echo "ERROR: no DuckDB version in the metadata footer of $WASM_EXT"
+    exit 1
+fi
+
 # Step 1: Build DuckDB WASM core from our submodule
 if $CLEAN; then
     echo "Cleaning DuckDB WASM build..."
@@ -113,12 +126,14 @@ if ! $HARNESS_ONLY; then
             -DDUCKDB_EXPLICIT_PLATFORM=wasm_eh \
             -DDUCKDB_CAPABILITIES=loadable_extensions \
             -DSTATICALLY_LINK_EXTENSIONS="parquet core_functions" \
+            -DOVERRIDE_GIT_DESCRIBE="$EXT_DUCKDB_VERSION" \
             -S duckdb -B "$DUCKDB_BUILD" 2>&1 | tail -5
 
         emmake make -j$(nproc) -C "$DUCKDB_BUILD" duckdb 2>&1 | tail -5
         echo ""
     else
-        echo "DuckDB WASM core already built (use --clean to rebuild)"
+        echo "DuckDB WASM core already built (use --clean to rebuild, e.g. when"
+        echo "LOAD reports that the extension was built for another version)"
     fi
 fi
 
@@ -127,14 +142,31 @@ if [ ! -f "$DUCKDB_BUILD/src/libduckdb_static.a" ]; then
     exit 1
 fi
 
-# Step 2: Compile test harness
+# Step 2: Compile test harness.
+# - DuckDB v2 registers statically linked extensions through a generated
+#   duckdb_register_static_extensions(), which the harness calls before opening
+#   the database. loadable_extensions is the capability LOAD of a .wasm needs.
+# - The harness is C, but DuckDB is C++, so the link goes through em++: emcc
+#   links no C++ runtime (__cxa_throw, the wasm exception personality), and the
+#   main module would then fail when it starts.
+# - DuckDB references sem_timedwait, which emscripten's single-threaded libc
+#   lacks, so undefined symbols cannot be a link error. Any other undefined
+#   symbol fails the build here instead of when the module starts.
 echo "=== Compiling test harness ==="
-emcc scripts/test_wasm_extension.c \
-    -I duckdb/src/include \
-    "$DUCKDB_BUILD/src/libduckdb.a" \
+LINK_EXTENSIONS="loadable_extensions parquet core_functions"
+python3 duckdb/scripts/generate_static_extension_loader.py \
+    -o "$DUCKDB_BUILD/static_extension_loader.c" $LINK_EXTENSIONS
+for src in scripts/test_wasm_extension.c "$DUCKDB_BUILD/static_extension_loader.c"; do
+    emcc -c "$src" -I duckdb/src/include -fwasm-exceptions -O2 \
+        -o "$DUCKDB_BUILD/$(basename "${src%.c}").o"
+done
+LINK_LOG="$DUCKDB_BUILD/test_wasm_harness_link.log"
+# The extension archives go before libduckdb_static.a (see the generated loader).
+if ! em++ "$DUCKDB_BUILD/test_wasm_extension.o" "$DUCKDB_BUILD/static_extension_loader.o" \
     "$DUCKDB_BUILD/src/main/extension/libduckdb_loadable_extensions.a" \
     "$DUCKDB_BUILD/extension/parquet/libparquet_extension.a" \
     "$DUCKDB_BUILD/extension/core_functions/libcore_functions_extension.a" \
+    "$DUCKDB_BUILD/src/libduckdb_static.a" \
     "$DUCKDB_BUILD/vcpkg_installed/wasm32-emscripten/lib/libz.a" \
     -sMAIN_MODULE=1 \
     -sALLOW_MEMORY_GROWTH=1 \
@@ -145,7 +177,17 @@ emcc scripts/test_wasm_extension.c \
     -O2 \
     --preload-file "$WASM_EXT"@/extensions/miint.duckdb_extension \
     --preload-file "$JSON_EXT"@/extensions/json.duckdb_extension \
-    -o scripts/test_wasm_harness.js 2>&1 | grep -v "^cache:" | tail -5
+    -o scripts/test_wasm_harness.js > "$LINK_LOG" 2>&1; then
+    cat "$LINK_LOG"
+    echo "ERROR: linking the test harness failed"
+    exit 1
+fi
+UNEXPECTED="$(grep 'undefined symbol:' "$LINK_LOG" | grep -v 'undefined symbol: sem_timedwait ' || true)"
+if [ -n "$UNEXPECTED" ]; then
+    echo "$UNEXPECTED"
+    echo "ERROR: the test harness has undefined symbols (full log: $LINK_LOG)"
+    exit 1
+fi
 echo ""
 
 # Step 3: Run the test
