@@ -6,7 +6,8 @@ of verification, each catching different classes of bugs.
 
 ## Prerequisites
 
-- **emscripten** (emsdk) installed and activated (`emcc` in PATH)
+- **emscripten** (emsdk) 6.0.9, the version extension-ci-tools uses for DuckDB
+  v2.0, installed and activated (`emcc` in PATH)
 - **VCPKG_TOOLCHAIN_PATH** set, or `vcpkg/` symlinked in repo root
 - **rustup**. The build installs the pinned toolchain (1.96.0), its
   `wasm32-unknown-emscripten` target and, for `wasm_eh`, its `rust-src`
@@ -115,9 +116,16 @@ initialization failures.
 It:
 
 1. Builds DuckDB WASM (`libduckdb_static.a`) from the `duckdb/` submodule
-   using emscripten — guaranteeing the same ABI as the extension
+   using emscripten — guaranteeing the same ABI as the extension — and
+   configures it with the DuckDB version stamped in the extension, so `LOAD`
+   accepts it. A core cached in `build/wasm_shell/` keeps the version it was
+   built with, and the script stops when that differs from the extension's or
+   was not recorded; `--clean` rebuilds it
 2. Compiles `scripts/test_wasm_extension.c` as a WASM `MAIN_MODULE` linked
-   against DuckDB, with the miint extension embedded via `--preload-file`
+   against DuckDB, with the miint extension embedded via `--preload-file`, and
+   registers DuckDB's statically linked extensions through the loader DuckDB's
+   `scripts/generate_static_extension_loader.py` writes. Which extensions, and
+   which undefined symbols fail the link, are in the script's step 2
 3. Runs the resulting `test_wasm_harness.js` in Node.js
 4. Verifies: DuckDB opens, json extension loads, miint extension loads,
    `miint_version()` returns successfully, and UniFrac's `faith_pd` computes
@@ -153,10 +161,14 @@ that generate different function signatures fail with
 `LinkError: imported function does not match the expected type`. Building the
 core from the submodule matches both by construction. An npm
 `@duckdb/duckdb-wasm` release matches when it reports the same core and was
-built with a compatible emsdk; the release the playground loads is one, since
-the extension built here with emsdk 3.1.71 loads into it. Level 4 uses that
-release, pinned in `scripts/wasm_browser/index.html`, and stops at boot when its
-core differs.
+built with a compatible emsdk. The version must match exactly: a dev build of
+the same commit reports `vX.Y.Z-devN`, and DuckDB refuses to `LOAD` an
+extension stamped `vX.Y.Z` into it. Level 4 stops at boot, naming the
+mismatch, while its pin in `scripts/wasm_browser/index.html` reports another
+version. The v2.0.0 runtime at
+[shell.duckdb.org](https://shell.duckdb.org) is not an npm release: it serves
+its own build with its own worker protocol, which the duckdb-wasm npm API does
+not drive.
 
 ## Level 4: Browser Check
 
@@ -170,20 +182,22 @@ playground uses.
 
 It boots duckdb-wasm in headless Chrome the way the playground does (the
 `@duckdb/duckdb-wasm` release pinned in `scripts/wasm_browser/index.html`,
-`selectBundle`, the eh bundle, `allowUnsignedExtensions`), serves the extension
-with no cross-origin isolation headers, like GitHub Pages, `LOAD`s it, and runs
+`selectBundle`, the base bundle, which runs `wasm_eh`,
+`allowUnsignedExtensions`), serves the extension with no cross-origin isolation
+headers, like GitHub Pages, `LOAD`s it, and runs
 `scripts/wasm_browser/steps.json`. Each step with an `expect` must return that
 value. The run passes only when every step ran and passed; a mismatch, an
 error, a step left unrun because the database died, duckdb-wasm picking a
-bundle other than eh, or the pin running a DuckDB core other than the
+bundle other than base, or the pin running a DuckDB core other than the
 workflow's `duckdb_version` fails it. Timeouts: in the browser, 2 min for boot
 and for `LOAD`, 3 min per step and 20 s for the alive check after it; in native
 mode, 15 min for the whole run and 256 MiB of shell output.
 
 **This is the check for Rust code paths.** Level 3 links a main module and JS
 glue built from the `duckdb/` submodule; this check runs the duckdb-wasm release
-users get. Rust code depends on that release's JS (see "Exceptions" under
-Level 2), so judge it here.
+users get. Rust calls cross into that release's JS (exception handling, and
+function pointers resolved by its loader; see "Exceptions" under Level 2), so
+judge them here.
 
 ### Adding steps
 
@@ -212,16 +226,11 @@ exceptions, so check 4 in Level 2 is what fails a build with JS exceptions.
 
 ## CI Integration
 
-Two CI jobs in `.github/workflows/MainDistributionPipeline.yml`:
-
-- **`verify-wasm`** (Level 2) — Downloads the extension `.wasm` artifacts
-  from the distribution build and checks for unresolved library imports.
-  Runs in ~30 seconds.
-
-- **`test-wasm-load`** (Level 3) — Builds the extension and DuckDB WASM
-  from source (matching emsdk 3.1.71 + Rust 1.86.0 + vcpkg), compiles the
-  test harness, and runs the headless load test. This is a full independent
-  build that catches ABI mismatches. Runs in ~10-15 minutes.
+On push to a tag, the distribution pipeline builds `wasm_eh` (Level 1); pull
+requests and branch pushes do not. The jobs for Levels 2 and 3 (`verify-wasm`,
+`test-wasm-load`) and the WASM-compatible native build are commented out in
+`.github/workflows/MainDistributionPipeline.yml`, so run Levels 2–4 locally
+before a release.
 
 ## Build Artifacts
 
@@ -257,15 +266,17 @@ this far; see the next entry.
 ### `The file was built specifically for DuckDB version ...`
 
 DuckDB refuses the `LOAD` because the extension was built for another core
-version. In Level 3, `build/wasm_shell/` is left over from an older DuckDB;
-rerun with `--clean`. Level 4 stops before `LOAD`, at boot, naming the pin's file
-to bump.
+version. Levels 3 and 4 check the version before `LOAD` and stop with their own
+error: Level 3 when its cached core in `build/wasm_shell/` is another version
+(rerun with `--clean`), Level 4 at boot, naming the pin's file to bump.
 
 ### `function signature mismatch` from a Rust function
 
-A Rust function reached through a path Emscripten's JS mishandles: see
-"Emscripten exceptions" in
-[embedded-tools.md](internals/embedded-tools.md#rust-crates-via-the-miint_rust_glue-umbrella).
+A Rust function reached through a path Emscripten's JS mishandles. The two
+known causes need a runtime built without `WASM_BIGINT`, which the v2 runtimes
+are not; see "Runtimes built without `WASM_BIGINT`" under "Emscripten exceptions" in
+[embedded-tools.md](internals/embedded-tools.md#rust-crates-via-the-miint_rust_glue-umbrella)
+for what to check.
 
 ### Extension loads but `miint_version()` fails
 
