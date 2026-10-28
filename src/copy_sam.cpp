@@ -113,7 +113,7 @@ struct SAMCopyBindData : public FunctionData {
 	bool include_header = true;
 	bool use_gzip = false;
 	SAMOutputFormat format = SAMOutputFormat::SAM;
-	int compression_level = -1; // -1 means use HTSlib default (6 for BAM)
+	int compression_level = -1; // -1 means use HTSlib default (6), for BAM and gzip SAM
 	string file_path;
 	vector<string> names;
 	std::optional<string> reference_lengths_table;
@@ -236,6 +236,7 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 
 	// Parse options
 	Value compression_param;
+	const vector<Value> *compression_level_values = nullptr;
 	for (auto &option : input.info.options) {
 		if (option.first == "include_header") {
 			result->include_header = CopyOptionFlag(option.second);
@@ -246,7 +247,7 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 			}
 			compression_param = option.second[0];
 		} else if (option.first == "compression_level") {
-			result->compression_level = CopyOptionCompressionLevel(option.second);
+			compression_level_values = &option.second;
 		} else if (option.first == "reference_lengths") {
 			result->reference_lengths_table = option.second[0].ToString();
 
@@ -280,11 +281,6 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 		}
 	}
 
-	// Validate COMPRESSION_LEVEL only makes sense for BAM
-	if (result->compression_level != -1 && result->format != SAMOutputFormat::BAM) {
-		throw BinderException("COMPRESSION_LEVEL parameter only applies to BAM format");
-	}
-
 	// BAM files must have headers (binary format requirement)
 	if (result->format == SAMOutputFormat::BAM && !result->include_header) {
 		throw BinderException("BAM format requires INCLUDE_HEADER=true (BAM is a binary format that requires headers)");
@@ -303,8 +299,15 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 		                      "(e.g., REFERENCE_LENGTHS='ref_table')");
 	}
 
+	// BAM is always BGZF, so it takes any level; SAM takes one only for gzip output, as FASTQ does.
 	if (result->format == SAMOutputFormat::SAM) {
-		result->use_gzip = DetectCompressionType(result->file_path, compression_param) == FileCompressionType::GZIP;
+		const auto compression = DetectCompressionType(result->file_path, compression_param);
+		result->use_gzip = compression == FileCompressionType::GZIP;
+		if (compression_level_values) {
+			result->compression_level = GzipCompressionLevel(*compression_level_values, compression, result->file_path);
+		}
+	} else if (compression_level_values) {
+		result->compression_level = CopyOptionCompressionLevel(*compression_level_values);
 	}
 
 	return std::move(result);
@@ -352,9 +355,10 @@ static unique_ptr<GlobalFunctionData> SAMCopyInitializeGlobal(ClientContext &con
 			// Default BAM compression (HTSlib default level 6)
 			mode = "wb";
 		}
+	} else if (fdata.use_gzip) {
+		mode = fdata.compression_level >= 0 ? "wz" + std::to_string(fdata.compression_level) : "wz";
 	} else {
-		// SAM format
-		mode = fdata.use_gzip ? "wz" : "w";
+		mode = "w";
 	}
 
 	// Open file for writing

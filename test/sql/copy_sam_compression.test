@@ -147,6 +147,50 @@ foo-2	0	G1234	2	60
 foo-3	99	G000144735	76020	1
 foo-3	147	G000144735	76146	1
 
+# COMPRESSION_LEVEL follows the rule it has in FASTQ, FASTA and NEWICK: it sets the level of gzip
+# output and is refused for uncompressed output, where it would be ignored. Level 0 stores the records
+# without deflating them, so its file is larger than the plain SAM; the default level compresses them.
+statement ok
+CREATE TABLE sam_many AS SELECT sam_test.* REPLACE (read_id || '-' || i AS read_id) FROM sam_test, range(500) t(i);
+
+statement ok
+COPY sam_many TO '{TEST_DIR}/level_plain.sam' (FORMAT SAM, REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY sam_many TO '{TEST_DIR}/level_0.sam.gz' (FORMAT SAM, COMPRESSION_LEVEL 0, REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY sam_many TO '{TEST_DIR}/level_default.sam.gz' (FORMAT SAM, REFERENCE_LENGTHS 'ref_table');
+
+query II
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/level_0.sam.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/level_plain.sam')),
+       (SELECT size FROM read_blob('{TEST_DIR}/level_default.sam.gz')) < (SELECT size FROM read_blob('{TEST_DIR}/level_plain.sam')) / 2;
+----
+true	true
+
+query I
+SELECT count(*) FROM (
+    SELECT read_id, flags, reference, position FROM read_alignments('{TEST_DIR}/level_0.sam.gz')
+    EXCEPT ALL
+    SELECT read_id, flags, reference, position FROM sam_many);
+----
+0
+
+query I
+SELECT count(*) FROM read_alignments('{TEST_DIR}/level_0.sam.gz');
+----
+2000
+
+statement error
+COPY sam_test TO '{TEST_DIR}/level_uncompressed.sam' (FORMAT SAM, COMPRESSION_LEVEL 1, REFERENCE_LENGTHS 'ref_table');
+----
+COMPRESSION_LEVEL applies only to gzip output
+
+statement error
+COPY sam_test TO '{TEST_DIR}/level_none.sam.gz' (FORMAT SAM, COMPRESSION 'none', COMPRESSION_LEVEL 1, REFERENCE_LENGTHS 'ref_table');
+----
+COMPRESSION_LEVEL applies only to gzip output
+
 # Cleanup
 statement ok
 DROP TABLE sam_test;
