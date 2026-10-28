@@ -14,6 +14,7 @@
 #include "ena_storage.hpp"
 
 #include "duckdb/catalog/catalog_transaction.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -215,7 +216,7 @@ void ExecuteLifecycle(ClientContext &context, TableFunctionInput &data, DataChun
 			resolved_accession = miint::LookupAccessionByAlias(reports_base, kind, bd.refname, fetcher);
 		} catch (const std::exception &e) {
 			throw InvalidInputException("%s: Reports API lookup for refname '%s' (kind=%s) failed: %s", bd.fn_name,
-			                            bd.refname, bd.refname_kind, e.what());
+			                            bd.refname, bd.refname_kind, duckdb::ErrorData(e).RawMessage());
 		}
 		if (resolved_accession.empty()) {
 			throw InvalidInputException("%s: refname '%s' not found in this submission account "
@@ -248,7 +249,7 @@ void ExecuteLifecycle(ClientContext &context, TableFunctionInput &data, DataChun
 		gs.outcome = SubmitLifecycle(bd.action, opts, post_fn);
 	} catch (const std::exception &e) {
 		transport_failure = true;
-		transport_error = e.what();
+		transport_error = duckdb::ErrorData(e).RawMessage();
 		// Pre-POST exceptions (envelope-validation or transport setup) leave
 		// `gs.outcome` default-initialized — fill in the fields we know the
 		// log row needs so the audit trail still identifies the action+target.

@@ -1,6 +1,7 @@
 #include "read_jplace_newick.hpp"
 #include "remote_file_helper.hpp"
 #include "table_function_common.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/vector_size.hpp"
 #include "duckdb/main/extension/extension_loader.hpp"
 
@@ -214,7 +215,7 @@ void ReadJplaceNewickTableFunction::Execute(ClientContext &context, TableFunctio
 		} catch (const IOException &) {
 			throw;
 		} catch (const std::exception &e) {
-			throw IOException("Error parsing tree from jplace file '%s': %s", path, e.what());
+			throw IOException("Error parsing tree from jplace file '%s': %s", path, ErrorData(e).RawMessage());
 		}
 	}
 

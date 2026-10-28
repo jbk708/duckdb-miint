@@ -29,6 +29,7 @@
 #include "ena_post_fn.hpp"
 #include "ena_storage.hpp"
 
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/index_vector.hpp"
 #include "duckdb/common/mutex.hpp"
@@ -242,7 +243,7 @@ public:
 			outcome = Derived::Submit(built.specs, opts, post_fn);
 		} catch (const std::exception &e) {
 			transport_failure = true;
-			transport_error = e.what();
+			transport_error = ErrorData(e).RawMessage();
 		}
 
 		const bool success = !transport_failure && outcome.success;

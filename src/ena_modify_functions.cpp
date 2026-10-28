@@ -17,6 +17,7 @@
 #include "ena_samples_insert.hpp"
 #include "ena_storage.hpp"
 
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -189,7 +190,7 @@ void ExecuteModifyProject(ClientContext &context, TableFunctionInput &data, Data
 		gs.outcome = miint::SubmitProjectInsertOutcome(specs, opts, post_fn);
 	} catch (const std::exception &e) {
 		transport_failure = true;
-		transport_error = e.what();
+		transport_error = duckdb::ErrorData(e).RawMessage();
 	}
 
 	const bool success = !transport_failure && gs.outcome.success;
@@ -440,7 +441,7 @@ void ExecuteModifySample(ClientContext &context, TableFunctionInput &data, DataC
 		gs.outcome = miint::SubmitSampleInsertOutcome(specs, opts, post_fn);
 	} catch (const std::exception &e) {
 		transport_failure = true;
-		transport_error = e.what();
+		transport_error = duckdb::ErrorData(e).RawMessage();
 	}
 
 	const bool success = !transport_failure && gs.outcome.success;
@@ -741,7 +742,7 @@ void ExecuteModifyExperiment(ClientContext &context, TableFunctionInput &data, D
 		gs.outcome = miint::SubmitExperimentInsertOutcome(specs, opts, post_fn);
 	} catch (const std::exception &e) {
 		transport_failure = true;
-		transport_error = e.what();
+		transport_error = duckdb::ErrorData(e).RawMessage();
 	}
 
 	const bool success = !transport_failure && gs.outcome.success;
@@ -977,7 +978,7 @@ void ExecuteModifyRun(ClientContext &context, TableFunctionInput &data, DataChun
 		gs.outcome = miint::SubmitRunInsertOutcome(specs, opts, post_fn);
 	} catch (const std::exception &e) {
 		transport_failure = true;
-		transport_error = e.what();
+		transport_error = duckdb::ErrorData(e).RawMessage();
 	}
 
 	const bool success = !transport_failure && gs.outcome.success;

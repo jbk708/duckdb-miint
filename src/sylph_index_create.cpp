@@ -27,6 +27,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 
 #include <atomic>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <string>
@@ -263,7 +264,7 @@ unique_ptr<GlobalTableFunctionState> SylphIndexCreateTableFunction::InitGlobal(C
 	std::atomic<size_t> next_genome {0};
 	std::atomic<bool> failed {false};
 	std::mutex err_mutex;
-	std::string err_msg;
+	std::exception_ptr first_error;
 
 	// Each worker claims genome ids off the counter and sketches one at a time: a
 	// `WHERE genome_id = <id>` query reads just that genome. Within it, consecutive
@@ -326,11 +327,11 @@ unique_ptr<GlobalTableFunctionState> SylphIndexCreateTableFunction::InitGlobal(C
 					ThrowFFI("end_genome failed");
 				}
 			}
-		} catch (const std::exception &e) {
+		} catch (const std::exception &) {
 			failed.store(true, std::memory_order_relaxed);
 			std::lock_guard<std::mutex> lk(err_mutex);
-			if (err_msg.empty()) {
-				err_msg = e.what();
+			if (!first_error) {
+				first_error = std::current_exception();
 			}
 		}
 	};
@@ -352,7 +353,7 @@ unique_ptr<GlobalTableFunctionState> SylphIndexCreateTableFunction::InitGlobal(C
 		th.join();
 	}
 	if (failed.load()) {
-		throw IOException("sylph_index_create: %s", err_msg.c_str());
+		std::rethrow_exception(first_error);
 	}
 
 	// Merge all per-thread builders into the first, then write once.

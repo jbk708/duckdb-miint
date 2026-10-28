@@ -13,6 +13,7 @@
 #include "ena_reports_client.hpp"
 #include "ena_storage.hpp"
 
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
@@ -277,7 +278,7 @@ protected:
 				accession = miint::LookupAccessionByAlias(reports_base, kind, resolved_target.refname, fetcher);
 			} catch (const std::exception &e) {
 				throw InvalidInputException("DELETE FROM ena.%s: Reports API lookup for alias '%s' failed: %s",
-				                            object_type, resolved_target.refname, e.what());
+				                            object_type, resolved_target.refname, ErrorData(e).RawMessage());
 			}
 			if (accession.empty()) {
 				throw InvalidInputException("DELETE FROM ena.%s: alias '%s' not found in this submission account",
@@ -308,7 +309,7 @@ protected:
 			outcome = miint::SubmitLifecycle(miint::ENAAction::CANCEL, opts, post_fn);
 		} catch (const std::exception &e) {
 			transport_failure = true;
-			transport_error = e.what();
+			transport_error = ErrorData(e).RawMessage();
 			outcome.action = miint::ENAAction::CANCEL;
 			// `resolved_target.accession` is the post-Reports-translation
 			// value on the alias path and the user-supplied accession on the

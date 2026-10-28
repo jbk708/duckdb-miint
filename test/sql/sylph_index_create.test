@@ -143,3 +143,10 @@ statement error
 SELECT * FROM sylph_index_create('refs', '{TEST_DIR}/err.syldb', genome_id := 'filepath', k := 30);
 ----
 k must be 21 or 31
+
+# An order_by column that does not cast to BIGINT fails while a genome is read, on a worker
+# thread; the error is the worker's own, not one wrapping DuckDB's serialized form of it.
+statement error
+SELECT * FROM sylph_index_create('refs', '{TEST_DIR}/err.syldb', genome_id := 'filepath', order_by := 'read_id');
+----
+<REGEX>:Invalid Input Error: sylph_index_create: failed to read genome .*: Conversion Error: Could not convert string .* to INT64.*
