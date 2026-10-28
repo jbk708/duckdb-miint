@@ -150,7 +150,7 @@ Currently used by `align_minimap2` + `save_minimap2_index` (both sides), `copy_s
 1. Header in `src/include/` with TableFunction class
 2. Implement `Bind()`, `InitGlobal()`, `Execute()` in `src/`
 3. Register in `LoadInternal()` in `miint_extension.cpp`
-4. Add to `EXTENSION_SOURCES` in `CMakeLists.txt`
+4. Add to `MIINT_EXTENSION_SOURCES` in `CMakeLists.txt`, or in the feature's `cmake/deps` file if it needs an optional library ([build-system.md](build-system.md))
 5. Create SQL test in `test/sql/`
 6. If the function should run per-sample (partitioning an input relation by a column), follow `docs/internals/per-sample-pattern.md`
 7. If an argument names a relation to read, follow `docs/internals/reading-tables-views.md`, including its [CTE guard](reading-tables-views.md#ctes-reject-them-in-bind) and the matching `cte_relation_name_guard` test case
@@ -209,7 +209,7 @@ steps the computation one wave at a time.
 3. Declare every option in a `copy_options` callback with `DeclareCopyOption` (`src/include/copy_option_parsing.hpp`), and read them in `Bind()` with that header's helpers, ending the if-chain with `ThrowUnreadCopyOption`. Without `copy_options`, DuckDB checks no option: an unknown one reaches `Bind()`, and a bare one arrives with no value.
 4. Use `copy_format_common.cpp` utilities for buffering/compression
 5. Register in `LoadInternal()`
-6. Add to `EXTENSION_SOURCES`
+6. Add to `MIINT_EXTENSION_SOURCES` ([build-system.md](build-system.md))
 7. Create comprehensive SQL tests (basic, compression, edge cases)
 
 ### Adding scalar/aggregate functions
