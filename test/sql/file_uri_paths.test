@@ -38,6 +38,12 @@ SELECT count(*) FROM read_sequences_sff('file://{WORKING_DIRECTORY}/data/sff/ada
 ----
 2
 
+# read_alignment_header takes one path, expanded the same way.
+query I
+SELECT count(*) FROM read_alignment_header('file:{WORKING_DIRECTORY}/data/sam/foo_has_header.sam');
+----
+2
+
 # A list of paths is read the same way, path by path, in every reader that takes one.
 query I
 SELECT count(*) FROM read_fastx(['file://{WORKING_DIRECTORY}/data/fastq/small_a.fq', 'data/fastq/small_a.fq']);
@@ -66,6 +72,11 @@ SET home_directory = '{WORKING_DIRECTORY}/data';
 
 query I
 SELECT count(*) FROM read_fastx('~/fastq/small_a.fq');
+----
+2
+
+query I
+SELECT count(*) FROM read_alignment_header('~/sam/foo_has_header.sam');
 ----
 2
 

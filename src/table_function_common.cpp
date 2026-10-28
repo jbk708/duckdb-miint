@@ -117,11 +117,12 @@ std::vector<std::string> ExpandGlobPattern(FileSystem &fs, ClientContext &contex
 	return paths;
 }
 
-std::vector<std::string> ExpandPathList(FileSystem &fs, const Value &list, const std::string &function_name) {
+std::vector<std::string> ExpandPathList(FileSystem &fs, const Value &list, const std::string &function_name,
+                                        const std::string &list_name) {
 	std::vector<std::string> paths;
 	for (const auto &child : ListValue::GetChildren(list)) {
 		if (child.IsNull()) {
-			throw InvalidInputException(function_name + ": file path list cannot contain NULL");
+			throw InvalidInputException(function_name + ": " + list_name + " cannot contain NULL");
 		}
 		paths.push_back(fs.ExpandPath(child.ToString()));
 	}

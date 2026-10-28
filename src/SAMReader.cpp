@@ -170,7 +170,7 @@ SAMReader::SAMReader(HFilePtr hf, const std::string &name, const std::unordered_
 SAMReader::SAMReader(int fd, const std::string &name, bool include_seq_qual)
     : aln(bam_init1()), include_seq_qual(include_seq_qual) {
 	// Wrap fd in HTSlib's hFILE
-	hFILE *hfile = hdopen(fd, "r");
+	HFilePtr hfile(hdopen(fd, "r"));
 	if (!hfile) {
 		close(fd);
 		throw std::runtime_error("Failed to wrap file descriptor in hFILE");
@@ -178,11 +178,11 @@ SAMReader::SAMReader(int fd, const std::string &name, bool include_seq_qual)
 
 	// Wrap hFILE in htsFile for SAM parsing
 	// "r" mode = auto-detect format (SAM/BAM/CRAM)
-	htsFile *hts_fp = hts_hopen(hfile, name.c_str(), "r");
+	htsFile *hts_fp = hts_hopen(hfile.get(), name.c_str(), "r");
 	if (!hts_fp) {
-		hclose(hfile);
 		throw std::runtime_error("Failed to open file descriptor as SAM stream");
 	}
+	(void)hfile.release();
 	fp.reset(hts_fp);
 
 	// Read header

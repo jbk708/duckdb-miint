@@ -254,3 +254,9 @@ statement error
 SELECT * FROM read_fastx('data/fastq/foo.r1.fastq.gz', sequence2=>['data/fastq/foo.r2.fastq.gz', NULL]);
 ----
 read_fastx: sequence2 list cannot contain NULL
+
+# An empty sequence2 list is refused as an empty filename list is, before the file counts are compared.
+statement error
+SELECT * FROM read_fastx(['data/fastq/foo.r1.fastq.gz'], sequence2=>[]::VARCHAR[]);
+----
+read_fastx: at least one file path must be provided

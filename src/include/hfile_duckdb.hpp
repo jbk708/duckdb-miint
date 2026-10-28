@@ -1,6 +1,6 @@
 #pragma once
 #include <string>
-#include "SAMReader.hpp"
+#include "hfile_ptr.hpp"
 
 #ifdef MIINT_STATIC_BUILD
 #include "duckdb/common/file_system.hpp"

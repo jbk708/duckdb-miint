@@ -4,6 +4,7 @@
 #include <memory>
 #include <unordered_map>
 #include "SAMRecord.hpp"
+#include "hfile_ptr.hpp"
 #include <htslib-1.22.1/htslib/sam.h>
 #include <htslib-1.22.1/htslib/hts_log.h>
 #include <htslib-1.22.1/htslib/hfile.h>
@@ -33,16 +34,7 @@ struct BAMRecordDeleter {
 	}
 };
 
-struct HFileDeleter {
-	void operator()(hFILE *hf) const {
-		if (hf) {
-			(void)hclose(hf);
-		}
-	}
-};
-
 // Type aliases for smart pointers
-using HFilePtr = std::unique_ptr<hFILE, HFileDeleter>;
 using SAMFilePtr = std::unique_ptr<samFile, SAMFileDeleter>;
 using SAMHeaderPtr = std::unique_ptr<sam_hdr_t, SAMHeaderDeleter>;
 using BAMRecordPtr = std::unique_ptr<bam1_t, BAMRecordDeleter>;

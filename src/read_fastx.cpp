@@ -91,14 +91,7 @@ unique_ptr<FunctionData> ReadFastxTableFunction::Bind(ClientContext &context, Ta
 			seq2_paths = std::move(result.paths);
 			sequence2_is_glob = result.is_glob;
 		} else if (path2_value.type().id() == LogicalTypeId::LIST) {
-			// Array of strings - literal paths only
-			auto &list_children = ListValue::GetChildren(path2_value);
-			for (const auto &child : list_children) {
-				if (child.IsNull()) {
-					throw InvalidInputException("read_fastx: sequence2 list cannot contain NULL");
-				}
-				seq2_paths.push_back(fs.ExpandPath(child.ToString()));
-			}
+			seq2_paths = ExpandPathList(fs, path2_value, "read_fastx", "sequence2 list");
 		} else {
 			throw InvalidInputException("sequence2 parameter must be VARCHAR or VARCHAR[]");
 		}

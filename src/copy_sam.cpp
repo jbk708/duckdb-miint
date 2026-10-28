@@ -241,10 +241,6 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 		if (option.first == "include_header") {
 			result->include_header = CopyOptionFlag(option.second);
 		} else if (option.first == "compression") {
-			if (result->format == SAMOutputFormat::BAM) {
-				throw BinderException("COPY FORMAT BAM is always BGZF-compressed and takes no COMPRESSION; "
-				                      "COMPRESSION_LEVEL 0 writes it uncompressed");
-			}
 			compression_param = option.second[0];
 		} else if (option.first == "compression_level") {
 			compression_level_values = &option.second;
@@ -306,8 +302,17 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 		if (compression_level_values) {
 			result->compression_level = GzipCompressionLevel(*compression_level_values, compression, result->file_path);
 		}
-	} else if (compression_level_values) {
-		result->compression_level = CopyOptionCompressionLevel(*compression_level_values);
+	} else {
+		// COMPRESSION 'gzip' only says what BAM always is; a value BAM would ignore is refused.
+		if (!compression_param.IsNull() &&
+		    DetectCompressionType(result->file_path, compression_param) != FileCompressionType::GZIP) {
+			throw BinderException("COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION '%s' does not apply; "
+			                      "COMPRESSION_LEVEL 0 writes its BGZF blocks uncompressed",
+			                      compression_param.ToString());
+		}
+		if (compression_level_values) {
+			result->compression_level = CopyOptionCompressionLevel(*compression_level_values);
+		}
 	}
 
 	return std::move(result);

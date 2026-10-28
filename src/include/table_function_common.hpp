@@ -47,8 +47,10 @@ unique_ptr<NodeStatistics> EstimateFileScanCardinality(const std::vector<std::st
 std::vector<std::string> ExpandGlobPattern(FileSystem &fs, ClientContext &context, const std::string &pattern);
 
 // The paths of a VARCHAR[] argument: literal paths (no glob expansion), each expanded as a literal
-// path is above. Throws InvalidInputException, naming function_name, for a NULL element or an empty list.
-std::vector<std::string> ExpandPathList(FileSystem &fs, const Value &list, const std::string &function_name);
+// path is above. Throws InvalidInputException, naming function_name (and list_name for a NULL), for a
+// NULL element or an empty list.
+std::vector<std::string> ExpandPathList(FileSystem &fs, const Value &list, const std::string &function_name,
+                                        const std::string &list_name = "file path list");
 
 // Result of glob expansion with metadata
 struct GlobExpansionResult {

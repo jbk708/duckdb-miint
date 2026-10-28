@@ -331,8 +331,22 @@ named_plain.fq.gz	false
 named_plain.nwk.gz	false
 named_plain.sam.gz	false
 
-# BAM is always BGZF-compressed, so COMPRESSION, which it would ignore, is refused.
-statement error
-COPY sam_test TO '{TEST_DIR}/comp.bam' (FORMAT BAM, COMPRESSION 'none', REFERENCE_LENGTHS 'ref_table');
+# BAM is always BGZF-compressed: COMPRESSION 'gzip' says so and is accepted, while 'none', which it
+# would ignore, is refused, and anything else gets the shared message.
+statement ok
+COPY sam_test TO '{TEST_DIR}/comp_gzip.bam' (FORMAT BAM, COMPRESSION 'gzip', REFERENCE_LENGTHS 'ref_table');
+
+query I
+SELECT count(*) FROM read_alignments('{TEST_DIR}/comp_gzip.bam');
 ----
-COPY FORMAT BAM is always BGZF-compressed and takes no COMPRESSION; COMPRESSION_LEVEL 0 writes it uncompressed
+4
+
+statement error
+COPY sam_test TO '{TEST_DIR}/comp_none.bam' (FORMAT BAM, COMPRESSION 'none', REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION 'none' does not apply; COMPRESSION_LEVEL 0 writes its BGZF blocks uncompressed
+
+statement error
+COPY sam_test TO '{TEST_DIR}/comp_bad.bam' (FORMAT BAM, COMPRESSION 'bzip2', REFERENCE_LENGTHS 'ref_table');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
