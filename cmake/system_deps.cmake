@@ -5,27 +5,38 @@
 # added in ./vcpkg.json and then used in cmake with find_package. Note that it
 # should also be removed from vcpkg.json to prevent needlessly installing it.
 find_package(ZLIB REQUIRED)
+# The zlib archive as a path, for the ExternalProject builds (htslib) whose own
+# configure would otherwise find a different zlib through -lz.
+if(ZLIB_LIBRARY_RELEASE)
+  set(ZLIB_LIBRARY_FILE "${ZLIB_LIBRARY_RELEASE}")
+elseif(ZLIB_LIBRARY)
+  set(ZLIB_LIBRARY_FILE "${ZLIB_LIBRARY}")
+else()
+  # First real path in ZLIB_LIBRARIES (skip keywords like optimized/debug)
+  set(ZLIB_LIBRARY_FILE "")
+  foreach(lib ${ZLIB_LIBRARIES})
+    if(EXISTS "${lib}" AND NOT ZLIB_LIBRARY_FILE)
+      set(ZLIB_LIBRARY_FILE "${lib}")
+    endif()
+  endforeach()
+endif()
+if(ZLIB_LIBRARY_FILE)
+  get_filename_component(ZLIB_LIBRARY_DIR "${ZLIB_LIBRARY_FILE}" DIRECTORY)
+  message(STATUS "Using ZLIB library: ${ZLIB_LIBRARY_FILE}")
+else()
+  set(ZLIB_LIBRARY_DIR "")
+  message(
+    WARNING
+      "Could not determine the ZLIB library file. ZLIB_LIBRARY_RELEASE=${ZLIB_LIBRARY_RELEASE}, ZLIB_LIBRARY=${ZLIB_LIBRARY}, ZLIB_LIBRARIES=${ZLIB_LIBRARIES}"
+  )
+endif()
 find_package(Threads REQUIRED)
 find_package(expat CONFIG REQUIRED)
 
-# Eigen (header-only, MPL-2.0) backs the SYM/ARD Mk maximum-likelihood
-# ancestral-state reconstruction: a SelfAdjointEigenSolver eigendecomposition
-# builds P(t) = exp(Q*t) for the non-ER rate matrices. EIGEN_MPL2_ONLY restricts
-# to Eigen's pure-MPL2 subset so no stronger-copyleft file is pulled in, keeping
-# miint's Modified-BSD license clean. This is miint's own decoupled Eigen
-# dependency (vcpkg eigen3), NOT skbb's UNIFRAC-gated copy.
-#
-# Production and local builds resolve Eigen from vcpkg (or a system install) via
-# the CONFIG package. The Code-Quality "Tidy Check" CI lane, however, runs a
-# no-vcpkg CMake configure (it installs only ninja/clang-tidy) yet still has to
-# parse NewickTree.cpp's Eigen includes, so a hard find_package(... REQUIRED)
-# fails that configure before clang-tidy can run. When the CONFIG package is
-# absent, fall back to a pinned, SHA-verified header-only Eigen fetched at
-# configure time (header-only: no build step; same 3.4.0 tarball + SHA that
-# ext/scikit-bio-binaries/scripts/fetch_eigen.sh trusts). SOURCE_SUBDIR points
-# at a nonexistent dir so FetchContent only downloads/extracts and does NOT
-# add_subdirectory Eigen's own CMake (which would pull in its test/GPL targets).
-# Real builds never take the fallback -- the CONFIG package is found first.
+# Eigen (header-only, vcpkg eigen3). The Tidy Check CI lane configures without
+# vcpkg, so when the CONFIG package is absent fall back to a pinned,
+# SHA-verified Eigen 3.4.0 tarball. SOURCE_SUBDIR names a missing dir so
+# FetchContent only extracts the headers and never runs Eigen's own CMake.
 find_package(Eigen3 CONFIG QUIET)
 if(NOT TARGET Eigen3::Eigen)
   message(
@@ -46,31 +57,9 @@ if(NOT TARGET Eigen3::Eigen)
                                "${eigen_fallback_SOURCE_DIR}")
   endif()
 endif()
+# Both defines are global on purpose; why each exists is in
+# docs/internals/embedded-tools.md, "The two Eigen defines".
 add_compile_definitions(EIGEN_MPL2_ONLY)
-
-# The extension links OpenMP (libssu is built with -fopenmp), so `_OPENMP` is
-# defined for miint's own sources too, and Eigen/Core:65 would then enable its
-# parallel GEMM path. mmvec's objective contains matrix products whose reduction
-# runs over a long dimension (d1 = 2720 at cystic-fibrosis scale), so a
-# thread-count-dependent blocking would make a seeded fit non-reproducible --
-# which is exactly the guarantee mmvec's own RNG transforms exist to provide.
-#
-# Measured at cystic-fibrosis scale, seed 0, 500 iterations: with this define
-# removed, the same fit returns a DIFFERENT model as soon as OMP_NUM_THREADS > 1
-# -- final loss 1709324046711880.2 against 1709329920514833.8, and the parameter
-# checksum moving by 0.6%. A user-visible reproducibility break controlled by an
-# environment variable. Keeping the define costs 3-5% of the fit's wall clock
-# (median 4.82 s against 4.66 s, interleaved A/B over five pairs, the parallel
-# build given 8 threads), which is the right trade for a seeded fit.
-#
-# Set globally rather than per-source: Eigen's macros affect templates
-# instantiated in whichever translation unit includes the headers, so a per-file
-# define would leave two differently-configured instantiations of the same
-# symbols for the linker to choose between. Nothing here loses anything
-# measurable -- the only other Eigen user is NewickTree.cpp's k x k rate
-# matrices (k = the character-state count, so single digits), orders of
-# magnitude below the size at which Eigen would consider threading a product at
-# all.
 add_compile_definitions(EIGEN_DONT_PARALLELIZE)
 
 # Header-only, so its place in the link order does not matter. ZLIB, expat and

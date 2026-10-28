@@ -35,10 +35,9 @@ set(SORTMERNA_BUNDLE_LIB
     ${CMAKE_CURRENT_BINARY_DIR}/sortmerna/libsortmerna_bundle.a)
 set(CONCURRENTQUEUE_HOME ${CMAKE_CURRENT_SOURCE_DIR}/ext/concurrentqueue)
 
-# macOS cross-compile (GitHub runners are arm64; osx_amd64 builds still need to
-# emit x86_64 objects). Without forwarding CMAKE_OSX_ARCHITECTURES into the
-# sub-CMake, sortmerna's CLI target gets linked for the host arch and trips on
-# vcpkg's RocksDB which is built for the target arch.
+# macOS: forward OSX_BUILD_ARCH as CMAKE_OSX_ARCHITECTURES, or the sub-CMake
+# links sortmerna's CLI target for its default arch and trips on vcpkg's
+# RocksDB, which is built for the target arch.
 set(SORTMERNA_OSX_ARCH_ARG "")
 if(APPLE AND OSX_BUILD_ARCH)
   set(SORTMERNA_OSX_ARCH_ARG "-DCMAKE_OSX_ARCHITECTURES=${OSX_BUILD_ARCH}")

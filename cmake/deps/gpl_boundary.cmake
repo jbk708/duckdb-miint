@@ -1,7 +1,7 @@
-# The gpl-boundary and skb-arrow process hosts: miint talks to GPL tools
-# (bowtie2, FastTree) and to scikit-bio over pipes and Arrow IPC in POSIX shared
-# memory, so no GPL or Python code is linked in. Off on Windows and under
-# Emscripten.
+# The gpl-boundary process host: miint talks to GPL tools (bowtie2, FastTree)
+# over pipes and Arrow IPC in POSIX shared memory, so no GPL code is linked in.
+# Off on Windows and under Emscripten. skb_arrow.cmake, included at the end,
+# reuses this transport.
 add_subdirectory(third_party/nanoarrow_ipc)
 
 list(APPEND MIINT_DEFINITIONS MIINT_HAS_GPL_BOUNDARY)
@@ -23,11 +23,7 @@ list(
   src/gpl_boundary/session.cpp
   src/gpl_boundary/shm.cpp
   src/gpl_boundary/arrow_ipc.cpp
-  src/skb_arrow/client.cpp
-  src/skb_arrow/install.cpp
   src/install_gpl_boundary.cpp
-  src/install_skb_arrow.cpp
-  src/skb_arrow_functions.cpp
   src/phylogeny_fasttree.cpp
   src/align_bowtie2_daemon_common.cpp
   src/align_bowtie2.cpp
@@ -42,13 +38,10 @@ list(
   src/gpl_boundary/session.cpp
   src/gpl_boundary/shm.cpp
   src/gpl_boundary/arrow_ipc.cpp
-  src/skb_arrow/client.cpp
-  src/skb_arrow/install.cpp
   test/cpp/test_gpl_boundary_process.cpp
   test/cpp/test_gpl_boundary_session.cpp
   test/cpp/test_gpl_boundary_shm.cpp
   test/cpp/test_gpl_boundary_arrow_ipc.cpp
-  test/cpp/test_skb_arrow_client.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/yyjson/yyjson.cpp)
 if(UNIX AND NOT APPLE)
   # gpl_boundary/shm.cpp uses shm_open/shm_unlink. On glibc these live in librt
@@ -57,3 +50,5 @@ if(UNIX AND NOT APPLE)
   # we skip the flag there.
   list(APPEND MIINT_LINK_LIBRARIES rt)
 endif()
+
+include(${CMAKE_CURRENT_LIST_DIR}/skb_arrow.cmake)

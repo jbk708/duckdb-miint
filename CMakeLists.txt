@@ -574,9 +574,9 @@ endforeach()
 # The loadable extension is dlopen'd at runtime. When the host DuckDB is loaded
 # via Python (RTLD_LOCAL), duckdb_je_* symbols from the host are not visible.
 # Link stubs that forward to system malloc so the .so is self-contained.
-if(MIINT_HAS_JEMALLOC)
-  target_sources(${LOADABLE_EXTENSION_NAME} PRIVATE src/mm_alloc_stubs.c)
-endif()
+target_sources(
+  ${LOADABLE_EXTENSION_NAME}
+  PRIVATE $<${MIINT_JEMALLOC}:${CMAKE_CURRENT_SOURCE_DIR}/src/mm_alloc_stubs.c>)
 
 install(
   TARGETS ${EXTENSION_NAME}
@@ -599,9 +599,9 @@ target_include_directories(
           ${CMAKE_CURRENT_BINARY_DIR}/htslib/include
           # For the ExtractFromZip tests
           ${CMAKE_CURRENT_SOURCE_DIR}/duckdb/third_party/miniz)
-if(MIINT_HAS_JEMALLOC)
-  target_sources(tests PRIVATE src/mm_alloc_stubs.c)
-endif()
+target_sources(
+  tests
+  PRIVATE $<${MIINT_JEMALLOC}:${CMAKE_CURRENT_SOURCE_DIR}/src/mm_alloc_stubs.c>)
 
 # vsearch ships its own MD5/SHA1 symbols (libvsearch_core_a-md5.o,
 # libvsearch_core_a-sha1.o), and OpenSSL's libcrypto — pulled in transitively

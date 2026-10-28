@@ -47,9 +47,6 @@ set(MIINT_OSX_ARCH_CFLAGS "") # -arch for an osx cross build
 set(MIINT_AUTOTOOLS_HOST "") # --host= for an autotools configure
 if(EMSCRIPTEN)
   set(MIINT_AUTOTOOLS_HOST "--host=wasm32-unknown-emscripten")
-elseif(APPLE AND OSX_BUILD_ARCH STREQUAL "x86_64")
-  set(MIINT_OSX_ARCH_CFLAGS "-arch x86_64")
-  set(MIINT_AUTOTOOLS_HOST "--host=x86_64-apple-darwin")
 elseif(APPLE AND OSX_BUILD_ARCH STREQUAL "arm64")
   set(MIINT_OSX_ARCH_CFLAGS "-arch arm64")
   set(MIINT_AUTOTOOLS_HOST "--host=aarch64-apple-darwin")

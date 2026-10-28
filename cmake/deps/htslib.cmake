@@ -10,31 +10,6 @@ else()
   set(HTSLIB_PKG_CONFIG_PATH "")
 endif()
 
-# Set CFLAGS and LDFLAGS to find ZLIB from vcpkg
-if(ZLIB_LIBRARY_RELEASE)
-  get_filename_component(ZLIB_LIBRARY_DIR "${ZLIB_LIBRARY_RELEASE}" DIRECTORY)
-  message(STATUS "Using ZLIB from ZLIB_LIBRARY_RELEASE: ${ZLIB_LIBRARY_DIR}")
-elseif(ZLIB_LIBRARY)
-  get_filename_component(ZLIB_LIBRARY_DIR "${ZLIB_LIBRARY}" DIRECTORY)
-  message(STATUS "Using ZLIB from ZLIB_LIBRARY: ${ZLIB_LIBRARY_DIR}")
-else()
-  # Extract first real library path (skip keywords like "optimized"/"debug")
-  set(ZLIB_LIBRARY_DIR "")
-  foreach(lib ${ZLIB_LIBRARIES})
-    if(EXISTS "${lib}" AND NOT ZLIB_LIBRARY_DIR)
-      get_filename_component(ZLIB_LIBRARY_DIR "${lib}" DIRECTORY)
-      message(STATUS "Using ZLIB from ZLIB_LIBRARIES: ${ZLIB_LIBRARY_DIR}")
-    endif()
-  endforeach()
-endif()
-
-if(NOT ZLIB_LIBRARY_DIR)
-  message(
-    WARNING
-      "Could not determine ZLIB library directory. ZLIB_LIBRARY_RELEASE=${ZLIB_LIBRARY_RELEASE}, ZLIB_LIBRARY=${ZLIB_LIBRARY}, ZLIB_LIBRARIES=${ZLIB_LIBRARIES}"
-  )
-endif()
-
 # Emscripten: tell autotools we are cross-compiling. -fPIC IS required: the
 # extension is linked as a WASM side module (-sSIDE_MODULE=2) which needs
 # position-independent code for all linked objects.
@@ -56,30 +31,12 @@ else()
   set(HTSLIB_LDFLAGS "LDFLAGS=${MIINT_OSX_ARCH_CFLAGS}")
 endif()
 
-# Get the actual zlib library file for explicit linking This is needed because
-# HTSlib's configure uses -lz which may not find vcpkg's zlib
-if(ZLIB_LIBRARY_RELEASE)
-  set(ZLIB_LIBRARY_FILE "${ZLIB_LIBRARY_RELEASE}")
-elseif(ZLIB_LIBRARY)
-  set(ZLIB_LIBRARY_FILE "${ZLIB_LIBRARY}")
-else()
-  # Find first actual library file in ZLIB_LIBRARIES
-  set(ZLIB_LIBRARY_FILE "")
-  foreach(lib ${ZLIB_LIBRARIES})
-    if(EXISTS "${lib}" AND NOT ZLIB_LIBRARY_FILE)
-      set(ZLIB_LIBRARY_FILE "${lib}")
-    endif()
-  endforeach()
-endif()
-
 # Set LIBS to pass explicit library path to configure (needed for OSX with
 # vcpkg)
 if(ZLIB_LIBRARY_FILE)
   set(HTSLIB_LIBS "LIBS=${ZLIB_LIBRARY_FILE}")
-  message(STATUS "HTSlib will use explicit ZLIB library: ${ZLIB_LIBRARY_FILE}")
 else()
   set(HTSLIB_LIBS "")
-  message(WARNING "Could not determine explicit ZLIB library file for HTSlib")
 endif()
 
 # libdeflate (Linux opt-in): point htslib's configure at the vcpkg-installed

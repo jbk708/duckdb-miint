@@ -375,7 +375,8 @@ true
 # MaxThreads() == 1 and the core is single-threaded, so DuckDB's thread count
 # cannot reach the arithmetic. (Eigen's own parallelism is ruled out at compile
 # time by EIGEN_DONT_PARALLELIZE rather than at runtime, so no setting here can
-# exercise it -- see the rationale in cmake/system_deps.cmake.)
+# exercise it -- see docs/internals/embedded-tools.md, "The two Eigen
+# defines".)
 # ---------------------------------------------------------------------------
 
 statement ok

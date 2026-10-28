@@ -8,7 +8,7 @@ of verification, each catching different classes of bugs.
 
 - **emscripten** (emsdk) installed and activated (`emcc` in PATH)
 - **VCPKG_TOOLCHAIN_PATH** set, or `vcpkg/` symlinked in repo root
-- **rustup**. The build installs the pinned toolchain (1.86.0), its
+- **rustup**. The build installs the pinned toolchain (1.96.0), its
   `wasm32-unknown-emscripten` target and, for `wasm_eh`, its `rust-src`
   component; configure stops without rustup
 - **Node.js** for Levels 2 and 3; Level 4 needs **Node.js 22.12 or newer** and

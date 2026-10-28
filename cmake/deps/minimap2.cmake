@@ -1,8 +1,8 @@
 # minimap2 (v2.30): read alignment and indexing. Always built. Its ksw2 kernels
 # also back the align_pairwise_ksw2* functions.
 
-# Detect architecture for minimap2 SIMD support Use OSX_BUILD_ARCH for
-# cross-compilation, otherwise use host architecture
+# Detect architecture for minimap2 SIMD support: OSX_BUILD_ARCH on macOS,
+# otherwise the host architecture
 set(MINIMAP2_ARCH_FLAGS "")
 set(MINIMAP2_ARCH_CFLAGS "")
 set(MINIMAP2_FPIC "-fPIC")
@@ -26,25 +26,16 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
   set(MINIMAP2_ARCH_FLAGS "aarch64=1")
 endif()
 
-# Detect DuckDB's jemalloc (not present on musl/macOS/Windows builds).
-# DUCKDB_EXTENSION_JEMALLOC_SHOULD_LINK is set during extension registration,
-# before add_subdirectory, so it's available here. CMakeLists.txt also reads
-# MIINT_HAS_JEMALLOC, to add src/mm_alloc_stubs.c to the loadable extension and
-# tests.
-if(DUCKDB_EXTENSION_JEMALLOC_SHOULD_LINK)
-  set(MIINT_HAS_JEMALLOC TRUE)
-  set(MINIMAP2_ALLOC_FLAGS
-      "-DMIINT_USE_JEMALLOC -include ${CMAKE_CURRENT_SOURCE_DIR}/src/include/mm_alloc.h"
-  )
-  list(APPEND MIINT_DEFINITIONS MIINT_USE_JEMALLOC)
-  message(
-    STATUS "DuckDB jemalloc detected — minimap2 will use jemalloc allocator")
-else()
-  set(MIINT_HAS_JEMALLOC FALSE)
-  set(MINIMAP2_ALLOC_FLAGS "")
-  message(
-    STATUS "DuckDB jemalloc not detected — minimap2 will use system allocator")
-endif()
+# Route minimap2's allocations through DuckDB's jemalloc when DuckDB builds it
+# (64-bit Linux; not musl, macOS, Windows or WASM). DuckDB makes that choice
+# after it adds the extensions, so no variable can tell us here; TARGET_EXISTS
+# is evaluated at generate time, when duckdb_jemalloc exists or does not.
+# CMakeLists.txt adds src/mm_alloc_stubs.c under the same condition.
+set(MIINT_JEMALLOC "$<TARGET_EXISTS:duckdb_jemalloc>")
+set(MINIMAP2_ALLOC_FLAGS
+    "$<${MIINT_JEMALLOC}:-DMIINT_USE_JEMALLOC -include ${CMAKE_CURRENT_SOURCE_DIR}/src/include/mm_alloc.h>"
+)
+list(APPEND MIINT_DEFINITIONS "$<${MIINT_JEMALLOC}:MIINT_USE_JEMALLOC>")
 
 ExternalProject_Add(
   minimap2_build

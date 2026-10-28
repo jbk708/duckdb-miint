@@ -16,24 +16,15 @@
 find_program(CARGO cargo REQUIRED)
 message(STATUS "Found cargo: ${CARGO}")
 
-# emsdk 3.1.71 (the emsdk extension-ci-tools used for DuckDB v1.5) ships
-# binaryen v120, which predates the `bulk-memory-opt` and
-# `call-indirect-overlong` target-features that newer rustc/LLVM (>= LLVM 20,
-# i.e. Rust >= 1.87) stamp into wasm objects. At link time emcc forwards those
-# features to wasm-opt, and the older binaryen aborts with "Unknown option
-# '--enable-bulk-memory-opt'" — which builds the C++ extension to 100% and then
-# fails linking the Rust glue. Pin the glue's wasm cargo build to an LLVM-19-era
-# toolchain so the emitted objects stay within emsdk 3.1.71's binaryen feature
-# set. Matches the CI wasm-load job's `rust-toolchain@1.86.0`. Override only if
-# you have verified a different toolchain against emsdk 3.1.71.
-# extension-ci-tools builds DuckDB v2.0.0 extensions with emsdk 6.0.9, and the
-# glue builds under it with this pin.
+# The glue's wasm cargo build runs on an exact toolchain, not whatever "stable"
+# is today: a newer rustc can emit wasm target-features that the emsdk's
+# binaryen rejects at link time, and the -Z flags the wasm_eh build needs
+# (below) can change between releases. Verified against the emsdk that
+# extension-ci-tools uses for DuckDB v2.0 (6.0.9) with scripts/build_wasm.sh,
+# which builds wasm_eh and checks its imports. Re-run it when bumping either.
 set(MIINT_WASM_RUST_TOOLCHAIN
-    "1.86.0"
-    CACHE
-      STRING
-      "Rust toolchain used to cross-compile the rust glue for WASM (emsdk 3.1.71 binaryen compat)"
-)
+    "1.96.0"
+    CACHE STRING "Rust toolchain used to cross-compile the rust glue for WASM")
 
 set(GLUE_LIB_NAME "libmiint_rust_glue.a")
 set(GLUE_TARGET_DIR ${CMAKE_CURRENT_BINARY_DIR}/miint_rust_glue_target)
@@ -83,7 +74,7 @@ if(EMSCRIPTEN)
     file(
       WRITE ${GLUE_WASM_RUST_PIN_SH}
       [=[#!/bin/sh
-# Pin the miint rust-glue WASM build to an emsdk-3.1.71-compatible toolchain.
+# Install the pinned toolchain for the miint rust-glue WASM build.
 set -e
 ver="$1"
 if ! rustup toolchain list | grep -q "^${ver}"; then
@@ -107,7 +98,7 @@ fi
     set(GLUE_RUSTUP_TOOLCHAIN ${MIINT_WASM_RUST_TOOLCHAIN})
     message(
       STATUS
-        "Rust glue: pinning WASM build to toolchain ${MIINT_WASM_RUST_TOOLCHAIN} (emsdk 3.1.71 binaryen compat)"
+        "Rust glue: pinning WASM build to toolchain ${MIINT_WASM_RUST_TOOLCHAIN}"
     )
   elseif(MIINT_WASM_NATIVE_EH)
     message(
@@ -127,20 +118,12 @@ elseif(WIN32)
   endif()
   message(
     STATUS "Rust glue targeting x86_64-pc-windows-gnu for MinGW compatibility")
-elseif(APPLE AND OSX_BUILD_ARCH)
+elseif(APPLE AND OSX_BUILD_ARCH STREQUAL "arm64")
   find_program(RUSTUP rustup)
-  if(OSX_BUILD_ARCH STREQUAL "x86_64")
-    set(GLUE_CARGO_TARGET_FLAG "--target" "x86_64-apple-darwin")
-    set(GLUE_LIB_SUBDIR "x86_64-apple-darwin/release")
-    if(RUSTUP)
-      set(GLUE_CONFIGURE_CMD ${RUSTUP} target add x86_64-apple-darwin)
-    endif()
-  elseif(OSX_BUILD_ARCH STREQUAL "arm64")
-    set(GLUE_CARGO_TARGET_FLAG "--target" "aarch64-apple-darwin")
-    set(GLUE_LIB_SUBDIR "aarch64-apple-darwin/release")
-    if(RUSTUP)
-      set(GLUE_CONFIGURE_CMD ${RUSTUP} target add aarch64-apple-darwin)
-    endif()
+  set(GLUE_CARGO_TARGET_FLAG "--target" "aarch64-apple-darwin")
+  set(GLUE_LIB_SUBDIR "aarch64-apple-darwin/release")
+  if(RUSTUP)
+    set(GLUE_CONFIGURE_CMD ${RUSTUP} target add aarch64-apple-darwin)
   endif()
 endif()
 
@@ -181,9 +164,9 @@ if(EMSCRIPTEN)
   list(APPEND GLUE_RUSTFLAGS_LIST "-C" "link-arg=-sSIDE_MODULE=2")
 endif()
 
-# Wasm-native exceptions (MIINT_WASM_NATIVE_EH, above). Rust 1.86 offers them
-# only as an unstable flag, which needs std rebuilt from source (rust-src) and
-# RUSTC_BOOTSTRAP to accept -Z on a stable toolchain.
+# Wasm-native exceptions (MIINT_WASM_NATIVE_EH, above). The pinned rustc offers
+# them only as an unstable flag, which needs std rebuilt from source (rust-src)
+# and RUSTC_BOOTSTRAP to accept -Z on a stable toolchain.
 set(GLUE_CARGO_UNSTABLE_ARGS "")
 if(EMSCRIPTEN AND MIINT_WASM_NATIVE_EH)
   list(APPEND GLUE_RUSTFLAGS_LIST "-Zemscripten-wasm-eh")
