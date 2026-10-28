@@ -28,17 +28,7 @@ unique_ptr<FunctionData> ReadBIOMTableFunction::Bind(ClientContext &context, Tab
 		// Single string - could be a glob pattern
 		biom_paths = ExpandGlobPattern(fs, context, input.inputs[0].ToString());
 	} else if (input.inputs[0].type().id() == LogicalTypeId::LIST) {
-		// Array of strings - literal paths only (no glob expansion)
-		auto &list_children = ListValue::GetChildren(input.inputs[0]);
-		for (const auto &child : list_children) {
-			if (child.IsNull()) {
-				throw InvalidInputException("read_biom: file path list cannot contain NULL");
-			}
-			biom_paths.push_back(child.ToString());
-		}
-		if (biom_paths.empty()) {
-			throw InvalidInputException("read_biom: at least one file path must be provided");
-		}
+		biom_paths = ExpandPathList(fs, input.inputs[0], "read_biom");
 	} else {
 		throw InvalidInputException("read_biom: first argument must be VARCHAR or VARCHAR[]");
 	}

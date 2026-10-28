@@ -37,17 +37,7 @@ unique_ptr<FunctionData> ReadFastxTableFunction::Bind(ClientContext &context, Ta
 		sequence1_paths = std::move(result.paths);
 		sequence1_is_glob = result.is_glob;
 	} else if (input.inputs[0].type().id() == LogicalTypeId::LIST) {
-		// Array of strings - literal paths only (no glob expansion)
-		auto &list_children = ListValue::GetChildren(input.inputs[0]);
-		for (const auto &child : list_children) {
-			if (child.IsNull()) {
-				throw InvalidInputException("read_fastx: file path list cannot contain NULL");
-			}
-			sequence1_paths.push_back(child.ToString());
-		}
-		if (sequence1_paths.empty()) {
-			throw InvalidInputException("read_fastx: at least one file path must be provided");
-		}
+		sequence1_paths = ExpandPathList(fs, input.inputs[0], "read_fastx");
 	} else {
 		throw InvalidInputException("read_fastx: first argument must be VARCHAR or VARCHAR[]");
 	}
@@ -101,14 +91,7 @@ unique_ptr<FunctionData> ReadFastxTableFunction::Bind(ClientContext &context, Ta
 			seq2_paths = std::move(result.paths);
 			sequence2_is_glob = result.is_glob;
 		} else if (path2_value.type().id() == LogicalTypeId::LIST) {
-			// Array of strings - literal paths only
-			auto &list_children = ListValue::GetChildren(path2_value);
-			for (const auto &child : list_children) {
-				if (child.IsNull()) {
-					throw InvalidInputException("read_fastx: sequence2 list cannot contain NULL");
-				}
-				seq2_paths.push_back(child.ToString());
-			}
+			seq2_paths = ExpandPathList(fs, path2_value, "read_fastx", "sequence2 list");
 		} else {
 			throw InvalidInputException("sequence2 parameter must be VARCHAR or VARCHAR[]");
 		}

@@ -29,17 +29,7 @@ unique_ptr<FunctionData> ReadAlignmentsTableFunction::Bind(ClientContext &contex
 		// Single string - could be a glob pattern
 		sam_paths = ExpandGlobPattern(fs, context, input.inputs[0].ToString());
 	} else if (input.inputs[0].type().id() == LogicalTypeId::LIST) {
-		// Array of strings - literal paths only (no glob expansion)
-		auto &list_children = ListValue::GetChildren(input.inputs[0]);
-		for (const auto &child : list_children) {
-			if (child.IsNull()) {
-				throw InvalidInputException("read_alignments: file path list cannot contain NULL");
-			}
-			sam_paths.push_back(child.ToString());
-		}
-		if (sam_paths.empty()) {
-			throw InvalidInputException("read_alignments: at least one file path must be provided");
-		}
+		sam_paths = ExpandPathList(fs, input.inputs[0], "read_alignments");
 	} else {
 		throw InvalidInputException("read_alignments: first argument must be VARCHAR or VARCHAR[]");
 	}

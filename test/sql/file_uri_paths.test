@@ -1,0 +1,134 @@
+# name: test/sql/file_uri_paths.test
+# description: Readers expand a path as DuckDB does (a file: URI to its local path, ~ to home), and a file: COPY target is a local file
+# group: [sql]
+
+require miint
+
+# file:///p, file://localhost/p and file:/p all name /p, as in read_csv, and a literal path is expanded
+# as DuckDB's glob expands the paths it returns. These readers open a plain path only (kseq, the SFF
+# reader), so each query fails if the path reaches them unexpanded.
+query I
+SELECT count(*) FROM read_fastx('file://{WORKING_DIRECTORY}/data/fastq/small_a.fq');
+----
+2
+
+query I
+SELECT count(*) FROM read_fastx('file://localhost{WORKING_DIRECTORY}/data/fastq/small_a.fq');
+----
+2
+
+query I
+SELECT count(*) FROM read_fastx('file:{WORKING_DIRECTORY}/data/fastq/small_a.fq');
+----
+2
+
+query I
+SELECT count(*) FROM read_fastx('file://{WORKING_DIRECTORY}/data/fastq/small_a_r1.fq',
+                                sequence2 := 'file://{WORKING_DIRECTORY}/data/fastq/small_a_r2.fq');
+----
+1
+
+query II
+SELECT (SELECT count(*) FROM read_fastx('file://{WORKING_DIRECTORY}/data/fastq/small_a*.fq')),
+       (SELECT count(*) FROM read_fastx('data/fastq/small_a*.fq'));
+----
+4	4
+
+query I
+SELECT count(*) FROM read_sequences_sff('file://{WORKING_DIRECTORY}/data/sff/adapter_only_clip.sff');
+----
+2
+
+# The SAM readers open a local path with htslib, which takes file:///p and file://localhost/p itself
+# but refuses file:/p, so the file:/p form is the one that needs the expansion.
+query I
+SELECT count(*) FROM read_alignments('file:{WORKING_DIRECTORY}/data/sam/foo_has_header.sam');
+----
+4
+
+query I
+SELECT count(*) FROM read_sequences_sam('file:{WORKING_DIRECTORY}/data/sam/ubam_no_sq.sam');
+----
+3
+
+query I
+SELECT count(*) FROM read_alignment_header('file:{WORKING_DIRECTORY}/data/sam/foo_has_header.sam');
+----
+2
+
+# Each path in a list is expanded the same way (file:/p again for the SAM reader).
+query I
+SELECT count(*) FROM read_fastx(['file://{WORKING_DIRECTORY}/data/fastq/small_a.fq', 'data/fastq/small_a.fq']);
+----
+4
+
+query I
+SELECT count(*) FROM read_fastx(['file://{WORKING_DIRECTORY}/data/fastq/small_a_r1.fq'],
+                                sequence2 := ['file://{WORKING_DIRECTORY}/data/fastq/small_a_r2.fq']);
+----
+1
+
+query I
+SELECT count(*) FROM read_sequences_sff(['file://{WORKING_DIRECTORY}/data/sff/adapter_only_clip.sff']);
+----
+2
+
+query I
+SELECT count(*) FROM read_alignments(['file:{WORKING_DIRECTORY}/data/sam/foo_has_header.sam']);
+----
+4
+
+# read_gfa opens through DuckDB's file system, which reads a file: URI by itself; the filepath column
+# shows the path the reader was given, the local one.
+query I
+SELECT DISTINCT filepath = '{WORKING_DIRECTORY}/data/gfa/spec_example.gfa'
+FROM read_gfa(['file://{WORKING_DIRECTORY}/data/gfa/spec_example.gfa'], include_filepath := true);
+----
+true
+
+# A leading ~ names the directory of DuckDB's home_directory setting, as for read_csv.
+statement ok
+SET home_directory = '{WORKING_DIRECTORY}/data';
+
+query I
+SELECT count(*) FROM read_fastx('~/fastq/small_a.fq');
+----
+2
+
+query I
+SELECT count(*) FROM read_alignments('~/sam/foo_has_header.sam');
+----
+4
+
+query I
+SELECT count(*) FROM read_sequences_sam(['~/sam/ubam_no_sq.sam']);
+----
+3
+
+query I
+SELECT count(*) FROM read_alignment_header('~/sam/foo_has_header.sam');
+----
+2
+
+statement ok
+RESET home_directory;
+
+# A file: COPY target is a local file, so gzip output goes to the local BGZF writer, which takes a level
+# (a remote target would refuse COMPRESSION_LEVEL). It is given as file:/p, as for the SAM readers above.
+statement ok
+SET VARIABLE abs_test_dir = CASE WHEN '{TEST_DIR}' LIKE '/%' THEN '{TEST_DIR}' ELSE '{WORKING_DIRECTORY}/{TEST_DIR}' END;
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM read_fastx('data/fastq/small_a.fq'))
+TO ('file:' || getvariable('abs_test_dir') || '/uri_level.fq.gz') (FORMAT FASTQ, COMPRESSION_LEVEL 0);
+
+query I
+SELECT left(hex(content), 4) FROM read_blob('{TEST_DIR}/uri_level.fq.gz');
+----
+1F8B
+
+query II
+SELECT read_id, sequence1 FROM read_fastx('{TEST_DIR}/uri_level.fq.gz') ORDER BY read_id;
+----
+read_a1	AAAA
+read_a2	TTTT

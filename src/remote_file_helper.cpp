@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <random>
 #include <thread>
 #ifdef _WIN32
@@ -42,15 +41,43 @@ const std::vector<ResolvedFile> &ResolvedFileSet::Files() const {
 
 // ===== RemoteFileHelper =====
 
-static bool HasSchemePrefix(const std::string &path, const char *scheme) {
-	size_t len = std::strlen(scheme);
-	return path.size() > len && path.compare(0, len, scheme) == 0;
+static bool IsAsciiLetter(char c) {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// The length of the URI scheme `path` starts with ("s3" in "s3://..."), or 0 if it has none: an ASCII
+// letter, then ASCII letters, digits, '+', '-' or '.', then "://" (RFC 3986). One letter is a Windows
+// drive ("C://"). DuckDB's Path::IsRemote is not used: this file is also built into the C++ test binary,
+// which does not link DuckDB, and Path takes a scheme that starts with a digit.
+static size_t UriSchemeLength(const std::string &path) {
+	const size_t sep = path.find("://");
+	if (sep == std::string::npos || sep < 2 || !IsAsciiLetter(path[0])) {
+		return 0;
+	}
+	for (size_t i = 1; i < sep; i++) {
+		const char c = path[i];
+		if (!IsAsciiLetter(c) && !(c >= '0' && c <= '9') && c != '+' && c != '-' && c != '.') {
+			return 0;
+		}
+	}
+	return sep;
 }
 
 bool RemoteFileHelper::IsRemotePath(const std::string &path) {
-	return HasSchemePrefix(path, "https://") || HasSchemePrefix(path, "http://") || HasSchemePrefix(path, "s3://") ||
-	       HasSchemePrefix(path, "s3a://") || HasSchemePrefix(path, "s3n://") || HasSchemePrefix(path, "gcs://") ||
-	       HasSchemePrefix(path, "gs://") || HasSchemePrefix(path, "r2://") || HasSchemePrefix(path, "hf://");
+	const size_t len = UriSchemeLength(path);
+	if (len == 0) {
+		return false;
+	}
+	static constexpr char FILE_SCHEME[] = "file";
+	if (len != sizeof(FILE_SCHEME) - 1) {
+		return true;
+	}
+	for (size_t i = 0; i < len; i++) {
+		if ((path[i] | 0x20) != FILE_SCHEME[i]) {
+			return true;
+		}
+	}
+	return false;
 }
 
 ResolvedFile RemoteFileHelper::ResolveToLocal(const std::string &path) {

@@ -26,15 +26,7 @@ unique_ptr<FunctionData> BindLineScan(ClientContext &context, TableFunctionBindI
 	if (arg.type().id() == LogicalTypeId::VARCHAR) {
 		data->file_paths = ExpandGlobPatternWithInfo(fs, context, arg.ToString()).paths;
 	} else if (arg.type().id() == LogicalTypeId::LIST) {
-		for (const auto &child : ListValue::GetChildren(arg)) {
-			if (child.IsNull()) {
-				throw InvalidInputException(function_name + ": file path list cannot contain NULL");
-			}
-			data->file_paths.push_back(child.ToString());
-		}
-		if (data->file_paths.empty()) {
-			throw InvalidInputException(function_name + ": at least one file path must be provided");
-		}
+		data->file_paths = ExpandPathList(fs, arg, function_name);
 	} else {
 		throw InvalidInputException(function_name + ": first argument must be VARCHAR or VARCHAR[]");
 	}

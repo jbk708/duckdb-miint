@@ -181,11 +181,11 @@ foo-2	10M
 foo-3	150M
 foo-3	150M
 
-# Test 14: Error - COMPRESSION_LEVEL without BAM format
+# Test 14: Error - COMPRESSION_LEVEL for uncompressed SAM
 statement error
 COPY sam_test TO '{TEST_DIR}/error.sam' (FORMAT SAM, COMPRESSION_LEVEL 5, REFERENCE_LENGTHS 'ref_table');
 ----
-COMPRESSION_LEVEL parameter only applies to BAM format
+COMPRESSION_LEVEL applies only to gzip output
 
 # Test 15: Error - Invalid compression level (too high)
 statement error

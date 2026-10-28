@@ -3,6 +3,7 @@
 #include "SAMRecord.hpp"
 #include "remote_file_helper.hpp"
 #include "hfile_duckdb.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types.hpp"
@@ -111,15 +112,12 @@ public:
 			const auto &path = filepaths[file_idx];
 			try {
 				if (miint::RemoteFileHelper::IsRemotePath(path)) {
-					hFILE *hf = miint::hfile_duckdb_open(fs, path);
-					if (!hf) {
-						throw IOException("Failed to open remote file: " + path);
-					}
+					auto hf = miint::hfile_duckdb_open(fs, path);
 					if (ref_lengths.has_value()) {
-						readers[file_idx] =
-						    std::make_unique<miint::SAMReader>(hf, path, ref_lengths.value(), include_seq_qual);
+						readers[file_idx] = std::make_unique<miint::SAMReader>(std::move(hf), path, ref_lengths.value(),
+						                                                       include_seq_qual);
 					} else {
-						readers[file_idx] = std::make_unique<miint::SAMReader>(hf, path, include_seq_qual);
+						readers[file_idx] = std::make_unique<miint::SAMReader>(std::move(hf), path, include_seq_qual);
 					}
 				} else {
 					if (ref_lengths.has_value()) {
@@ -130,7 +128,7 @@ public:
 					}
 				}
 			} catch (std::exception &e) {
-				throw IOException("Error opening '%s': %s", path, e.what());
+				throw IOException("Error opening '%s': %s", path, ErrorData(e).RawMessage());
 			}
 		}
 	};

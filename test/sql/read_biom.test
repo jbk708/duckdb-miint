@@ -201,3 +201,14 @@ query I
 SELECT count(*) FROM (SELECT * FROM view_a UNION SELECT * FROM view_b);
 ----
 5
+
+# A file:// URI names the local file, which HDF5 opens by its plain path.
+query I
+SELECT count(*) FROM read_biom('file://{WORKING_DIRECTORY}/data/biom/file1.biom');
+----
+5
+
+query I
+SELECT count(*) FROM read_biom(['file://{WORKING_DIRECTORY}/data/biom/file1.biom']);
+----
+5

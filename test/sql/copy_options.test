@@ -1,0 +1,365 @@
+# name: test/sql/copy_options.test
+# description: Every miint COPY format takes its options under DuckDB's rules, so a mistake gets the same error in every format
+# group: [sql]
+
+require miint
+
+statement ok
+CREATE TABLE fq AS SELECT * FROM (VALUES
+    ('r1', 'ACGTACGT', [30, 30, 30, 30, 30, 30, 30, 30]::UTINYINT[], 'TTGGCCAA', [20, 20, 20, 20, 20, 20, 20, 20]::UTINYINT[])
+) AS t(read_id, sequence1, qual1, sequence2, qual2);
+
+statement ok
+CREATE TABLE sam_test AS SELECT * FROM read_alignments('data/sam/foo_has_header.sam');
+
+statement ok
+CREATE TABLE ref_table AS SELECT 'G1234' AS name, 20 AS length UNION ALL SELECT 'G000144735', 90;
+
+statement ok
+CREATE TABLE tree1 AS SELECT * FROM read_newick('data/newick/simple.nwk');
+
+# A bare boolean option means true, as DuckDB's HEADER does for CSV: it writes what the option set to
+# true writes.
+statement ok
+COPY fq TO '{TEST_DIR}/bare_interleave.fq' (FORMAT FASTQ, INTERLEAVE);
+
+statement ok
+COPY fq TO '{TEST_DIR}/true_interleave.fq' (FORMAT FASTQ, INTERLEAVE true);
+
+query I
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/bare_interleave.fq')) = (SELECT content FROM read_blob('{TEST_DIR}/true_interleave.fq'));
+----
+true
+
+statement ok
+COPY (SELECT read_id, sequence1, sequence2 FROM fq) TO '{TEST_DIR}/bare_interleave.fa' (FORMAT FASTA, INTERLEAVE);
+
+statement ok
+COPY (SELECT read_id, sequence1, sequence2 FROM fq) TO '{TEST_DIR}/true_interleave.fa' (FORMAT FASTA, INTERLEAVE true);
+
+query I
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/bare_interleave.fa')) = (SELECT content FROM read_blob('{TEST_DIR}/true_interleave.fa'));
+----
+true
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/bare_header.sam' (FORMAT SAM, INCLUDE_HEADER, REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/true_header.sam' (FORMAT SAM, INCLUDE_HEADER true, REFERENCE_LENGTHS 'ref_table');
+
+query I
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/bare_header.sam')) = (SELECT content FROM read_blob('{TEST_DIR}/true_header.sam'));
+----
+true
+
+# Bare EDGE_IDS reads as true, which asks for the edge_id column this selection leaves out.
+statement error
+COPY (SELECT node_index, name, branch_length, parent_index FROM tree1) TO '{TEST_DIR}/bare_edge_ids.nwk' (FORMAT NEWICK, EDGE_IDS);
+----
+EDGE_IDS option requires 'edge_id' column in input
+
+# READ_GROUP and TAGS are structs, whose arguments DuckDB does not count; the format refuses a
+# READ_GROUP with no value or with more than one.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bare_rg.bam' (FORMAT UBAM, READ_GROUP);
+----
+Copy option "read_group" requires a single argument
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/two_rg.bam' (FORMAT UBAM, READ_GROUP ({ID: 'a'}, {ID: 'b'}));
+----
+Copy option "read_group" requires a single argument
+
+# An option a format does not have is refused by DuckDB, with the closest names it does have.
+statement error
+COPY fq TO '{TEST_DIR}/unknown.fq' (FORMAT FASTQ, INTERLEAV true);
+----
+<REGEX>:(?s).*Unrecognized option "interleav".*"interleave".*
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/unknown.fa' (FORMAT FASTA, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+statement error
+COPY sam_test TO '{TEST_DIR}/unknown.sam' (FORMAT SAM, BOGUS 1, REFERENCE_LENGTHS 'ref_table');
+----
+Unrecognized option "bogus"
+
+statement error
+COPY sam_test TO '{TEST_DIR}/unknown.bam' (FORMAT BAM, BOGUS 1, REFERENCE_LENGTHS 'ref_table');
+----
+Unrecognized option "bogus"
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/unknown_ubam.bam' (FORMAT UBAM, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+statement error
+COPY tree1 TO '{TEST_DIR}/unknown.nwk' (FORMAT NEWICK, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+# COMPRESSION_LEVEL follows one rule in every format that takes it: a bare or NULL level is
+# refused, a level outside 0-9 is refused with the same message, and a quoted or fractional level is
+# cast as DuckDB casts its own options (Parquet's COMPRESSION_LEVEL included).
+statement error
+COPY fq TO '{TEST_DIR}/bare.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/bare.fa.gz' (FORMAT FASTA, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY sam_test TO '{TEST_DIR}/bare.bam' (FORMAT BAM, COMPRESSION_LEVEL, REFERENCE_LENGTHS 'ref_table');
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bare_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY tree1 TO '{TEST_DIR}/bare.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY fq TO '{TEST_DIR}/null.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL NULL);
+----
+NULL is not supported as a valid option for COPY option
+
+statement error
+COPY sam_test TO '{TEST_DIR}/null.bam' (FORMAT BAM, COMPRESSION_LEVEL NULL, REFERENCE_LENGTHS 'ref_table');
+----
+NULL is not supported as a valid option for COPY option
+
+statement error
+COPY fq TO '{TEST_DIR}/ten.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/ten.fa.gz' (FORMAT FASTA, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+statement error
+COPY sam_test TO '{TEST_DIR}/ten.bam' (FORMAT BAM, COMPRESSION_LEVEL 10, REFERENCE_LENGTHS 'ref_table');
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/ten_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+statement error
+COPY tree1 TO '{TEST_DIR}/ten.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+# '3' is level 3 and 1.6 is level 2. On records deflate has work to do, levels 1, 2 and 3 write
+# different files, so matching the level 3 and level 2 files identifies the level each was cast to.
+statement ok
+CREATE TABLE varied AS
+SELECT 'r' || i AS read_id,
+       translate(md5(i::VARCHAR) || md5((i * 7)::VARCHAR), '0123456789abcdef', 'ACGTACGTACGTACGT') AS sequence1,
+       list_transform(range(64), lambda x: (hash(i, x) % 41)::UTINYINT) AS qual1
+FROM range(2000) t(i);
+
+statement ok
+COPY varied TO '{TEST_DIR}/level1.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
+
+statement ok
+COPY varied TO '{TEST_DIR}/level2.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 2);
+
+statement ok
+COPY varied TO '{TEST_DIR}/level3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 3);
+
+statement ok
+COPY varied TO '{TEST_DIR}/level_str3.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL '3');
+
+statement ok
+COPY varied TO '{TEST_DIR}/level_frac.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1.6);
+
+query IIII
+SELECT (SELECT content FROM read_blob('{TEST_DIR}/level1.fq.gz')) <> (SELECT content FROM read_blob('{TEST_DIR}/level2.fq.gz')),
+       (SELECT content FROM read_blob('{TEST_DIR}/level2.fq.gz')) <> (SELECT content FROM read_blob('{TEST_DIR}/level3.fq.gz')),
+       (SELECT content FROM read_blob('{TEST_DIR}/level_str3.fq.gz')) = (SELECT content FROM read_blob('{TEST_DIR}/level3.fq.gz')),
+       (SELECT content FROM read_blob('{TEST_DIR}/level_frac.fq.gz')) = (SELECT content FROM read_blob('{TEST_DIR}/level2.fq.gz'));
+----
+true	true	true	true
+
+# BAM and UBAM accept the quoted level too.
+statement ok
+COPY sam_test TO '{TEST_DIR}/level_str3.bam' (FORMAT BAM, COMPRESSION_LEVEL '3', REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/level_str3_ubam.bam' (FORMAT UBAM, COMPRESSION_LEVEL '3');
+
+# NEWICK takes COMPRESSION_LEVEL too. Level 0 stores the tree as written, so its text appears in the
+# .gz bytes; the default level and level 9 compress it, so it does not. The tree has 2,000 tips: at the
+# default level, a tree of a few tips is stored uncompressed too.
+statement ok
+CREATE TABLE star AS
+SELECT 0::BIGINT AS node_index, NULL::VARCHAR AS name, NULL::DOUBLE AS branch_length, NULL::BIGINT AS parent_index
+UNION ALL
+SELECT i, 'tip' || i, (hash(i) % 1000) / 1000.0, 0 FROM range(1, 2001) t(i);
+
+statement ok
+COPY star TO '{TEST_DIR}/tree_plain.nwk' (FORMAT NEWICK);
+
+statement ok
+COPY star TO '{TEST_DIR}/tree_level0.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 0);
+
+statement ok
+COPY star TO '{TEST_DIR}/tree_default.nwk.gz' (FORMAT NEWICK);
+
+statement ok
+COPY star TO '{TEST_DIR}/tree_level9.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 9);
+
+query III
+SELECT contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_level0.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk')))),
+       contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_default.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk')))),
+       contains(hex((SELECT content FROM read_blob('{TEST_DIR}/tree_level9.nwk.gz'))), hex((SELECT content FROM read_blob('{TEST_DIR}/tree_plain.nwk'))));
+----
+true	false	false
+
+query I
+SELECT count(*) FROM read_newick('{TEST_DIR}/tree_level0.nwk.gz');
+----
+2001
+
+# As for FASTQ and FASTA, a level is refused where it would be ignored.
+statement error
+COPY tree1 TO '{TEST_DIR}/tree_plain_level.nwk' (FORMAT NEWICK, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to gzip output
+
+statement error
+COPY tree1 TO 's3://miint-no-such-bucket/tree.nwk.gz' (FORMAT NEWICK, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to local gzip output
+
+# COMPRESSION takes the same values in every format that writes text (FASTQ, FASTA, NEWICK and SAM),
+# case-insensitively, and refuses anything else with the same message.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/bad_comp.fq' (FORMAT FASTQ, COMPRESSION 'bzip2');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+statement error
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/bad_comp.fa' (FORMAT FASTA, COMPRESSION 'bzip2');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+statement error
+COPY tree1 TO '{TEST_DIR}/bad_comp.nwk' (FORMAT NEWICK, COMPRESSION 'bzip2');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+statement error
+COPY sam_test TO '{TEST_DIR}/bad_comp.sam' (FORMAT SAM, COMPRESSION 'bzip2', REFERENCE_LENGTHS 'ref_table');
+----
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+
+# zstd is refused the same way in all four, whether named or implied by a .zst path; a SAM written to
+# a .zst path would otherwise be plain text under a zstd name.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/zstd_named.fq' (FORMAT FASTQ, COMPRESSION 'zstd');
+----
+zstd compression is temporarily disabled
+
+statement error
+COPY sam_test TO '{TEST_DIR}/zstd_named.sam' (FORMAT SAM, COMPRESSION 'zstd', REFERENCE_LENGTHS 'ref_table');
+----
+zstd compression is temporarily disabled
+
+statement error
+COPY tree1 TO '{TEST_DIR}/zstd_path.nwk.zst' (FORMAT NEWICK);
+----
+zstd compression (.zst extension) is temporarily disabled
+
+statement error
+COPY sam_test TO '{TEST_DIR}/zstd_path.sam.zst' (FORMAT SAM, REFERENCE_LENGTHS 'ref_table');
+----
+zstd compression (.zst extension) is temporarily disabled
+
+# 'uncompressed', DuckDB's name for no compression, writes plain text even to a .gz path, and 'GZIP'
+# writes gzip to a plain path, in all four. Gzip output starts with the byte 1F; plain output with the
+# format's first character: '>' (3E) for FASTA, '@' (40) for FASTQ and for SAM's header, '(' (28) for Newick.
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/named_plain.fq.gz' (FORMAT FASTQ, COMPRESSION 'uncompressed');
+
+statement ok
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/named_plain.fa.gz' (FORMAT FASTA, COMPRESSION 'uncompressed');
+
+statement ok
+COPY tree1 TO '{TEST_DIR}/named_plain.nwk.gz' (FORMAT NEWICK, COMPRESSION 'uncompressed');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/named_plain.sam.gz' (FORMAT SAM, COMPRESSION 'uncompressed', REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/named_gzip.fq' (FORMAT FASTQ, COMPRESSION 'GZIP');
+
+statement ok
+COPY (SELECT read_id, sequence1 FROM fq) TO '{TEST_DIR}/named_gzip.fa' (FORMAT FASTA, COMPRESSION 'GZIP');
+
+statement ok
+COPY tree1 TO '{TEST_DIR}/named_gzip.nwk' (FORMAT NEWICK, COMPRESSION 'GZIP');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/named_gzip.sam' (FORMAT SAM, COMPRESSION 'GZIP', REFERENCE_LENGTHS 'ref_table');
+
+query II
+SELECT regexp_extract(filename, 'named_[a-z]+\.[a-z]+(\.gz)?$'), left(hex(content), 2)
+FROM read_blob('{TEST_DIR}/named_*') ORDER BY 1;
+----
+named_gzip.fa	1F
+named_gzip.fq	1F
+named_gzip.nwk	1F
+named_gzip.sam	1F
+named_plain.fa.gz	3E
+named_plain.fq.gz	40
+named_plain.nwk.gz	28
+named_plain.sam.gz	40
+
+# BAM is always BGZF-compressed: COMPRESSION 'gzip' or 'gz', in any case, says so and is accepted, while
+# any other value, which it would ignore, is refused with BAM's own message (the text formats' values do
+# not apply).
+statement ok
+COPY sam_test TO '{TEST_DIR}/comp_gzip.bam' (FORMAT BAM, COMPRESSION 'gzip', REFERENCE_LENGTHS 'ref_table');
+
+query I
+SELECT count(*) FROM read_alignments('{TEST_DIR}/comp_gzip.bam');
+----
+4
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/comp_gz.bam' (FORMAT BAM, COMPRESSION 'gz', REFERENCE_LENGTHS 'ref_table');
+
+statement ok
+COPY sam_test TO '{TEST_DIR}/comp_upper.bam' (FORMAT BAM, COMPRESSION 'GZIP', REFERENCE_LENGTHS 'ref_table');
+
+statement error
+COPY sam_test TO '{TEST_DIR}/comp_none.bam' (FORMAT BAM, COMPRESSION 'none', REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION 'none' does not apply; COMPRESSION_LEVEL 0 writes its BGZF blocks uncompressed
+
+statement error
+COPY sam_test TO '{TEST_DIR}/comp_bad.bam' (FORMAT BAM, COMPRESSION 'bzip2', REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION 'bzip2' does not apply
+
+statement error
+COPY sam_test TO '{TEST_DIR}/comp_zstd.bam' (FORMAT BAM, COMPRESSION 'zstd', REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION 'zstd' does not apply
