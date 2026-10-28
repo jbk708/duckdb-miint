@@ -3,7 +3,7 @@ set -e
 # Guard against the make-clean-build-target race (issue #83). A single `make`
 # invocation with both `clean` and a build goal lets -j run them concurrently,
 # and clean ends up rm-ing .o files mid-archive.
-if grep -nE '\bmake\b[^\n]*\bclean\b[^\n]*(\blib[A-Za-z0-9_]+\.a\b|\ball\b)' CMakeLists.txt; then
+if grep -rnE --include='*.cmake' --include=CMakeLists.txt '\bmake\b.*\bclean\b.*(\blib[A-Za-z0-9_]+\.a\b|\ball\b)' CMakeLists.txt cmake/; then
     echo "ERROR: BUILD_COMMAND has 'make ... clean <target>' on one line (race per #83)." >&2
     echo "Split into two sequential COMMAND steps." >&2
     exit 1
@@ -294,6 +294,20 @@ fi
 
 if conda run -n massql python3 -c "from massql import msql_engine" 2>/dev/null; then
     export MASSQL_PYTHON_AVAILABLE=1
+fi
+
+# Concurrent-LOAD test, opt-in because it takes minutes: `MIINT_LOAD_RACE_TEST=1 bash run_tests.sh`
+# (CI sets it nightly). The extension loads only into the DuckDB it was built for, so Python's
+# duckdb must match.
+if [ "${MIINT_LOAD_RACE_TEST:-0}" = "1" ]; then
+    export MIINT_TEST_PYTHON="${MIINT_TEST_PYTHON:-python3}"
+    if [ "v$("$MIINT_TEST_PYTHON" -c 'import duckdb; print(duckdb.__version__)' 2>/dev/null)" = \
+        "$(./build/release/duckdb -csv -noheader -c 'SELECT version();' 2>/dev/null)" ]; then
+        export DUCKDB_PYTHON_AVAILABLE=1
+    else
+        echo "ERROR: MIINT_LOAD_RACE_TEST=1 but $MIINT_TEST_PYTHON has no duckdb matching this build (set MIINT_TEST_PYTHON)" >&2
+        exit 1
+    fi
 fi
 
 # Download and cache MassQL test data if not present

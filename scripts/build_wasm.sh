@@ -149,7 +149,7 @@ if $VERIFY; then
         echo "--- Checking $t: $WASM_FILE ---"
 
         # A build with wasm-native exceptions (MIINT_WASM_NATIVE_EH, recorded by
-        # CMakeLists.txt) must not import Emscripten's JS exception helpers;
+        # cmake/deps/rust_glue.cmake) must not import Emscripten's JS exception helpers;
         # docs/internals/embedded-tools.md, "Emscripten exceptions", says why.
         CACHE="build/$t/CMakeCache.txt"
         NATIVE_EH=$(sed -n 's/^MIINT_WASM_NATIVE_EH:INTERNAL=//p' "$CACHE" 2>/dev/null || true)

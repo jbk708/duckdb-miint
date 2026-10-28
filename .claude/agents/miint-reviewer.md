@@ -131,7 +131,7 @@ Only rules whose trigger appears in the diff can fire.
 | A new `ext/` submodule, a submodule pointer bump, `ExternalProject_Add`, `find_package`, a vcpkg port, a `MIINT_ENABLE_*` option, an `#include` of a library not already linked | R5 |
 | `<unistd.h>`, `<sys/*.h>`, or a POSIX call (`getpid`, `fork`, `exec*`, `waitpid`, `mkdtemp`, shared memory, sockets) in `src/**` or `test/cpp/**` | R5 |
 | An `#include` added, moved or reordered inside an `#ifdef MIINT_HAS_*` block | R5 |
-| `CMakeLists.txt`, `extension_config.cmake`, `vcpkg.json`, `.github/workflows/**`, `scripts/**` | R5, R1 |
+| `CMakeLists.txt`, `cmake/**`, `extension_config.cmake`, `vcpkg.json`, `.github/workflows/**`, `scripts/**` | R5, R1 |
 | A remote-service client (`src/ena_*`, NCBI readers, HTTP/FTP transports), a new outbound request | R1, R4 |
 | SQL text built by concatenation in `src/**`, `python/**` or `scripts/**`; a value or identifier spliced into SQL | R1 |
 | A guard shaped as a denylist; a check that swallows errors; a fallback or presence-probe for a state that may be unreachable | R1 |

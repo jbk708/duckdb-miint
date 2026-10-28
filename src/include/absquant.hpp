@@ -342,7 +342,7 @@ enum class CellCountsMetric { CellsPerGOfGdna, CellsPerGOfSample, CellsPerUlOfSa
 //!
 //! The ONE place the set is enumerated. MetricName and DenominatorColumnName
 //! are exhaustive switches with no `default:`, but this build does not enable
-//! -Wswitch (CMakeLists.txt has -Wall/-Wextra commented out for the extension
+//! -Wswitch (-Wall/-Wextra are not enabled for the extension
 //! target), so a fifth enumerator would not be diagnosed there either. Deriving
 //! the parser and the accepted-value list from this array is what actually
 //! makes a half-added metric impossible, rather than restating the set in each

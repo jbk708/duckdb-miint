@@ -13,7 +13,7 @@ namespace {
 
 #if defined(MIINT_KREPP_OPENMP) && MIINT_KREPP_OPENMP == 1
 // Declared rather than pulled in from <omp.h>: this TU is compiled with
-// _WOPENMP=1 but WITHOUT the OpenMP flag (see CMakeLists.txt - the flag is
+// _WOPENMP=1 but WITHOUT the OpenMP flag (see cmake/deps/krepp.cmake - the flag is
 // scoped to the krepp archive), so _OPENMP is undefined here and omp.h is not
 // on the include path. These two symbols come from the libomp the krepp target
 // links, and their signatures are fixed by the OpenMP ABI.
