@@ -2,7 +2,7 @@
 
 MIINT supports reading FASTA, FASTQ, SAM, BAM, PAF, GFA, SFF, BIOM, mzML, mzXML, GFF, jplace and Newick, and the output directory of the myloasm assembler.  
 
-Every reader takes a path as DuckDB's own readers do, whether given alone, as a glob or in a list: a `file:` URI (`file:///p`, `file://localhost/p` or `file:/p`) names the local file `/p`, and a leading `~` names the directory of DuckDB's `home_directory` setting (by default `$HOME`). Index and database paths given to aligners and classifiers are not covered yet: give them as plain paths.
+A reader expands each path it is given as DuckDB's own readers do: a `file:` URI (`file:///p`, `file://localhost/p` or `file:/p`) names the local path `/p`, and a leading `~` names the directory of DuckDB's `home_directory` setting (by default your home directory). This holds for a single path, for each path in a list (a list's paths are read as written, never as globs), and for the files a glob matches. Index and database paths given to aligners and classifiers are passed to their libraries as given, so give those as plain paths.
 
 ## Table of contents
 

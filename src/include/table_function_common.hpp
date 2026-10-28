@@ -20,10 +20,6 @@ bool IsStdinPath(const std::string &path);
 // Check if a path has .gz extension (for gzip-compressed files)
 bool IsGzipped(const std::string &path);
 
-// Parse file paths parameter that can be VARCHAR or VARCHAR[]
-// Validates that at least one path is provided
-std::vector<std::string> ParseFilePathsParameter(const Value &input, const std::string &function_name);
-
 // Parse include_filepath named parameter (optional BOOLEAN, default false)
 bool ParseIncludeFilepathParameter(const named_argument_map_t &named_parameters);
 

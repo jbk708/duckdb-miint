@@ -67,7 +67,6 @@ TEST_CASE("BgzfWriteMode carries COMPRESSION_LEVEL into the mode, with or withou
 }
 
 // A target naming an existing FIFO gets no O_EXCL, and the gzip data written through it arrives intact.
-// (A file:// target arrives here as its path: DuckDB expands the COPY target before the writer sees it.)
 TEST_CASE("gzip COPY streams to a named pipe without O_EXCL EEXIST", "[copy][bgzf][pipe]") {
 	char dir_tmpl[] = "/tmp/miint_pipe_XXXXXX";
 	const char *dir = mkdtemp(dir_tmpl);

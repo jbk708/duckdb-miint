@@ -11,7 +11,8 @@ namespace miint {
 // Works for both local files and remote URLs (https://, s3://, etc.) — DuckDB's
 // FileSystem dispatches to the appropriate I/O backend (local, httpfs, etc.).
 //
-// Caller passes result to SAMReader's hFILE constructor, or releases it to hts_hopen().
+// Caller passes result to SAMReader's hFILE constructor, or passes get() to hts_hopen() and releases it
+// once that succeeds (htslib leaves the hFILE to the caller when it fails).
 // The hFILE takes ownership of the FileHandle; closing the hFILE (hclose(), or hts_close()
 // once htslib has it) cleans it up via the hFILE backend's close callback.
 //

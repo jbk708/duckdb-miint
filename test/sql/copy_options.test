@@ -293,7 +293,8 @@ COPY sam_test TO '{TEST_DIR}/zstd_path.sam.zst' (FORMAT SAM, REFERENCE_LENGTHS '
 zstd compression (.zst extension) is temporarily disabled
 
 # 'uncompressed', DuckDB's name for no compression, writes plain text even to a .gz path, and 'GZIP'
-# writes gzip to a plain path, in all four. Gzip output starts with the bytes 1F 8B.
+# writes gzip to a plain path, in all four. Gzip output starts with the byte 1F; plain output with the
+# format's first character: '>' (3E) for FASTA, '@' (40) for FASTQ and for SAM's header, '(' (28) for Newick.
 statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM fq) TO '{TEST_DIR}/named_plain.fq.gz' (FORMAT FASTQ, COMPRESSION 'uncompressed');
 
@@ -319,20 +320,20 @@ statement ok
 COPY sam_test TO '{TEST_DIR}/named_gzip.sam' (FORMAT SAM, COMPRESSION 'GZIP', REFERENCE_LENGTHS 'ref_table');
 
 query II
-SELECT regexp_extract(filename, 'named_[a-z]+\.[a-z]+(\.gz)?$'), left(hex(content), 4) = '1F8B'
+SELECT regexp_extract(filename, 'named_[a-z]+\.[a-z]+(\.gz)?$'), left(hex(content), 2)
 FROM read_blob('{TEST_DIR}/named_*') ORDER BY 1;
 ----
-named_gzip.fa	true
-named_gzip.fq	true
-named_gzip.nwk	true
-named_gzip.sam	true
-named_plain.fa.gz	false
-named_plain.fq.gz	false
-named_plain.nwk.gz	false
-named_plain.sam.gz	false
+named_gzip.fa	1F
+named_gzip.fq	1F
+named_gzip.nwk	1F
+named_gzip.sam	1F
+named_plain.fa.gz	3E
+named_plain.fq.gz	40
+named_plain.nwk.gz	28
+named_plain.sam.gz	40
 
-# BAM is always BGZF-compressed: COMPRESSION 'gzip' says so and is accepted, while 'none', which it
-# would ignore, is refused, and anything else gets the shared message.
+# BAM is always BGZF-compressed: COMPRESSION 'gzip' says so and is accepted, while any other value,
+# which it would ignore, is refused with BAM's own message (the text formats' values do not apply).
 statement ok
 COPY sam_test TO '{TEST_DIR}/comp_gzip.bam' (FORMAT BAM, COMPRESSION 'gzip', REFERENCE_LENGTHS 'ref_table');
 
@@ -349,4 +350,9 @@ COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION 'none' does not apply;
 statement error
 COPY sam_test TO '{TEST_DIR}/comp_bad.bam' (FORMAT BAM, COMPRESSION 'bzip2', REFERENCE_LENGTHS 'ref_table');
 ----
-COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed', got 'bzip2'
+COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION 'bzip2' does not apply
+
+statement error
+COPY sam_test TO '{TEST_DIR}/comp_zstd.bam' (FORMAT BAM, COMPRESSION 'zstd', REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION 'zstd' does not apply

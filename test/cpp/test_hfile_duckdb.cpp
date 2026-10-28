@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 #include <cstdio>
 #include <string>
 #include <type_traits>
@@ -279,10 +280,9 @@ TEST_CASE("hFILE_duckdb: SAMReader hFILE constructor with headerless SAM", "[hfi
 
 // ===== Tests: SAMReader owns the hFILE it is given =====
 
-// The opener's hFILE is held by an owner from the moment it is opened until SAMReader takes it. With a raw
-// pointer, an exception between the two (allocating the SAMReader) left the hFILE, and the file it holds
-// open, behind. That failure cannot be provoked here, so the type is what is pinned: no constructor takes
-// a raw hFILE.
+// The opener's hFILE is held by an owner from the moment it is opened until SAMReader takes it, so it is
+// closed even if allocating the SAMReader throws. That failure cannot be provoked here, so the type is
+// what is pinned: no constructor takes a raw hFILE.
 TEST_CASE("hFILE_duckdb: SAMReader takes an hFILE only from an owner", "[hfile_duckdb]") {
 	STATIC_REQUIRE_FALSE(std::is_constructible<miint::SAMReader, hFILE *, const std::string &>::value);
 	STATIC_REQUIRE_FALSE(std::is_constructible<miint::SAMReader, hFILE *, const std::string &,
@@ -320,10 +320,16 @@ static const struct hFILE_backend counting_backend_fails = {counting_read_fails,
 static const struct hFILE_backend counting_backend = {counting_read, nullptr, test_hfile_seek_noseek, nullptr,
                                                       counting_close};
 
+// With no path, the hFILE's reads fail.
 static miint::HFilePtr counting_hfile_open(const char *path, int *closes) {
+	FILE *f = nullptr;
+	if (path) {
+		f = fopen(path, "rb");
+		REQUIRE(f != nullptr);
+	}
 	auto *fp = reinterpret_cast<hFILE_counting *>(hfile_init(sizeof(hFILE_counting), "r", 0));
 	REQUIRE(fp != nullptr);
-	fp->fp = path ? fopen(path, "rb") : nullptr;
+	fp->fp = f;
 	fp->closes = closes;
 	fp->base.backend = path ? &counting_backend : &counting_backend_fails;
 	return miint::HFilePtr(&fp->base);
@@ -336,17 +342,20 @@ TEST_CASE("hFILE_duckdb: SAMReader closes the hFILE once when it cannot read the
 
 	SECTION("htslib cannot open the stream") {
 		int closes = 0;
-		CHECK_THROWS(miint::SAMReader(counting_hfile_open(nullptr, &closes), "unreadable.sam"));
+		CHECK_THROWS_WITH(miint::SAMReader(counting_hfile_open(nullptr, &closes), "unreadable.sam"),
+		                  "Failed to open hFILE as SAM/BAM stream");
 		CHECK(closes == 1);
 	}
 	SECTION("htslib cannot open the stream, reference lengths given") {
 		int closes = 0;
-		CHECK_THROWS(miint::SAMReader(counting_hfile_open(nullptr, &closes), "unreadable.sam", references));
+		CHECK_THROWS_WITH(miint::SAMReader(counting_hfile_open(nullptr, &closes), "unreadable.sam", references),
+		                  "Failed to open hFILE as SAM/BAM stream");
 		CHECK(closes == 1);
 	}
 	SECTION("the stream has no header") {
 		int closes = 0;
-		CHECK_THROWS(miint::SAMReader(counting_hfile_open("data/sam/foo_no_header.sam", &closes), "foo.sam"));
+		CHECK_THROWS_WITH(miint::SAMReader(counting_hfile_open("data/sam/foo_no_header.sam", &closes), "foo.sam"),
+		                  "SAM file missing required header");
 		CHECK(closes == 1);
 	}
 }

@@ -1,11 +1,12 @@
 # name: test/sql/file_uri_paths.test
-# description: A file: URI names the local file it points to in every reader and writer, as it does in DuckDB's own
+# description: Readers expand a path as DuckDB does (a file: URI to its local path, ~ to home), and a file: COPY target is a local file
 # group: [sql]
 
 require miint
 
-# file:///p, file://localhost/p and file:/p all name /p, as in read_csv. A literal path is read the
-# way a glob already was: DuckDB's glob hands back plain paths.
+# file:///p, file://localhost/p and file:/p all name /p, as in read_csv, and a literal path is expanded
+# as DuckDB's glob expands the paths it returns. These readers open a plain path only (kseq, the SFF
+# reader), so each query fails if the path reaches them unexpanded.
 query I
 SELECT count(*) FROM read_fastx('file://{WORKING_DIRECTORY}/data/fastq/small_a.fq');
 ----
@@ -38,13 +39,24 @@ SELECT count(*) FROM read_sequences_sff('file://{WORKING_DIRECTORY}/data/sff/ada
 ----
 2
 
-# read_alignment_header takes one path, expanded the same way.
+# The SAM readers open a local path with htslib, which takes file:///p and file://localhost/p itself
+# but refuses file:/p, so the file:/p form is the one that needs the expansion.
+query I
+SELECT count(*) FROM read_alignments('file:{WORKING_DIRECTORY}/data/sam/foo_has_header.sam');
+----
+4
+
+query I
+SELECT count(*) FROM read_sequences_sam('file:{WORKING_DIRECTORY}/data/sam/ubam_no_sq.sam');
+----
+3
+
 query I
 SELECT count(*) FROM read_alignment_header('file:{WORKING_DIRECTORY}/data/sam/foo_has_header.sam');
 ----
 2
 
-# A list of paths is read the same way, path by path, in every reader that takes one.
+# Each path in a list is expanded the same way.
 query I
 SELECT count(*) FROM read_fastx(['file://{WORKING_DIRECTORY}/data/fastq/small_a.fq', 'data/fastq/small_a.fq']);
 ----
@@ -62,11 +74,19 @@ SELECT count(*) FROM read_sequences_sff(['file://{WORKING_DIRECTORY}/data/sff/ad
 2
 
 query I
-SELECT count(*) FROM read_gfa(['file://{WORKING_DIRECTORY}/data/gfa/spec_example.gfa']);
+SELECT count(*) FROM read_alignments(['file:{WORKING_DIRECTORY}/data/sam/foo_has_header.sam']);
 ----
-10
+4
 
-# The same expansion gives ~ the directory DuckDB's home_directory setting names, as for read_csv.
+# read_gfa opens through DuckDB's file system, which reads a file: URI by itself; the filepath column
+# shows the path the reader was given, the local one.
+query I
+SELECT DISTINCT filepath = '{WORKING_DIRECTORY}/data/gfa/spec_example.gfa'
+FROM read_gfa(['file://{WORKING_DIRECTORY}/data/gfa/spec_example.gfa'], include_filepath := true);
+----
+true
+
+# A leading ~ names the directory of DuckDB's home_directory setting, as for read_csv.
 statement ok
 SET home_directory = '{WORKING_DIRECTORY}/data';
 
@@ -76,6 +96,16 @@ SELECT count(*) FROM read_fastx('~/fastq/small_a.fq');
 2
 
 query I
+SELECT count(*) FROM read_alignments('~/sam/foo_has_header.sam');
+----
+4
+
+query I
+SELECT count(*) FROM read_sequences_sam(['~/sam/ubam_no_sq.sam']);
+----
+3
+
+query I
 SELECT count(*) FROM read_alignment_header('~/sam/foo_has_header.sam');
 ----
 2
@@ -83,14 +113,15 @@ SELECT count(*) FROM read_alignment_header('~/sam/foo_has_header.sam');
 statement ok
 RESET home_directory;
 
-# A file:// target is a local file, so gzip output goes to the local BGZF writer, which takes a level:
-# a remote target would refuse COMPRESSION_LEVEL.
+# A file: COPY target is a local file, so gzip output goes to the local BGZF writer, which takes a level
+# (a remote target would refuse COMPRESSION_LEVEL). The file:/p form is used because htslib would open
+# file:///p by itself; the writer is handed /p.
 statement ok
 SET VARIABLE abs_test_dir = CASE WHEN '{TEST_DIR}' LIKE '/%' THEN '{TEST_DIR}' ELSE '{WORKING_DIRECTORY}/{TEST_DIR}' END;
 
 statement ok
 COPY (SELECT read_id, sequence1, qual1 FROM read_fastx('data/fastq/small_a.fq'))
-TO ('file://' || getvariable('abs_test_dir') || '/uri_level.fq.gz') (FORMAT FASTQ, COMPRESSION_LEVEL 0);
+TO ('file:' || getvariable('abs_test_dir') || '/uri_level.fq.gz') (FORMAT FASTQ, COMPRESSION_LEVEL 0);
 
 query I
 SELECT left(hex(content), 4) FROM read_blob('{TEST_DIR}/uri_level.fq.gz');

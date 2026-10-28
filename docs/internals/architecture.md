@@ -42,7 +42,7 @@ For headerless SAM files and SAM writing:
 - Returns `unordered_map<string, uint64_t>` for header construction
 
 ### Shared Table Function Utilities
-`src/include/table_function_common.hpp` / `.cpp` provides `ParseFilePathsParameter`, `IsStdinPath`, `SetResultVector*`, and similar helpers. Prefer these over re-implementing per-function.
+`src/include/table_function_common.hpp` / `.cpp` provides `ExpandGlobPattern` / `ExpandGlobPatternWithInfo` (a VARCHAR path or glob) and `ExpandPathList` (a VARCHAR[] of literal paths), which expand every path as DuckDB does (a `file:` URI to its local path, `~` to home), plus `IsStdinPath`, `SetResultVector*`, and similar helpers. Prefer these over re-implementing per-function: a reader that reads its path argument itself skips the expansion.
 
 A reader whose rows each come from one line of a text file (`read_paf`, `read_gfa`) builds on `src/include/line_file_scan.hpp`. `MakeLineScanFunction` declares the table function with its shared global state and a file-size row estimate; `BindLineScan` resolves the path, glob or list argument and `include_filepath`; `ScanLines` claims files per thread, reads them through DuckDB's file system (gzip, bgzip and remote paths alike), caps a chunk at 16 MiB of lines, and reports a parse error as `<function>: <file>: line N: <defect>`. The reader supplies only a DuckDB-free line parser and the code that writes one row. Its parse step is kept separate from its write step so that only parse errors are labelled with a line.
 
