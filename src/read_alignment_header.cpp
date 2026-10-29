@@ -19,7 +19,9 @@ unique_ptr<FunctionData> ReadAlignmentHeaderTableFunction::Bind(ClientContext &c
 	if (input.inputs[0].IsNull()) {
 		throw InvalidInputException("read_alignment_header: path cannot be NULL");
 	}
-	data->path = input.inputs[0].ToString();
+	auto &fs = FileSystem::GetFileSystem(context);
+	// Expanded as every other reader expands a literal path (a file: URI to its local path, ~ to home).
+	data->path = fs.ExpandPath(input.inputs[0].ToString());
 	if (data->path.empty()) {
 		throw InvalidInputException("read_alignment_header: path cannot be empty");
 	}
@@ -33,7 +35,6 @@ unique_ptr<FunctionData> ReadAlignmentHeaderTableFunction::Bind(ClientContext &c
 		                            data->path);
 	}
 
-	auto &fs = FileSystem::GetFileSystem(context);
 	if (!fs.FileExists(data->path)) {
 		throw IOException("File not found: " + data->path);
 	}

@@ -31,16 +31,7 @@ unique_ptr<FunctionData> ReadSequencesSamTableFunction::Bind(ClientContext &cont
 		auto result = ExpandGlobPatternWithInfo(fs, context, input.inputs[0].ToString());
 		file_paths = std::move(result.paths);
 	} else if (input.inputs[0].type().id() == LogicalTypeId::LIST) {
-		auto &list_children = ListValue::GetChildren(input.inputs[0]);
-		for (const auto &child : list_children) {
-			if (child.IsNull()) {
-				throw InvalidInputException("read_sequences_sam: file path list cannot contain NULL");
-			}
-			file_paths.push_back(child.ToString());
-		}
-		if (file_paths.empty()) {
-			throw InvalidInputException("read_sequences_sam: at least one file path must be provided");
-		}
+		file_paths = ExpandPathList(fs, input.inputs[0], "read_sequences_sam");
 	} else {
 		throw InvalidInputException("read_sequences_sam: first argument must be VARCHAR or VARCHAR[]");
 	}

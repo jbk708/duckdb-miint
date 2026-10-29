@@ -42,7 +42,7 @@ For headerless SAM files and SAM writing:
 - Returns `unordered_map<string, uint64_t>` for header construction
 
 ### Shared Table Function Utilities
-`src/include/table_function_common.hpp` / `.cpp` provides `ParseFilePathsParameter`, `IsStdinPath`, `SetResultVector*`, and similar helpers. Prefer these over re-implementing per-function.
+`src/include/table_function_common.hpp` / `.cpp` provides `ExpandGlobPattern` / `ExpandGlobPatternWithInfo` (a VARCHAR path or glob) and `ExpandPathList` (a VARCHAR[] of literal paths), which expand every path as DuckDB does (a `file:` URI to its local path, `~` to home), plus `IsStdinPath`, `SetResultVector*`, and similar helpers. Prefer these over re-implementing per-function: a reader that reads its path argument itself skips the expansion.
 
 A reader whose rows each come from one line of a text file (`read_paf`, `read_gfa`) builds on `src/include/line_file_scan.hpp`. `MakeLineScanFunction` declares the table function with its shared global state and a file-size row estimate; `BindLineScan` resolves the path, glob or list argument and `include_filepath`; `ScanLines` claims files per thread, reads them through DuckDB's file system (gzip, bgzip and remote paths alike), caps a chunk at 16 MiB of lines, and reports a parse error as `<function>: <file>: line N: <defect>`. The reader supplies only a DuckDB-free line parser and the code that writes one row. Its parse step is kept separate from its write step so that only parse errors are labelled with a line.
 
@@ -107,10 +107,9 @@ Implementation in `src/SAMReader.cpp`:
 - Validation (scores must fit in valid range)
 
 ### Compression Support
-All COPY formats:
-- Auto-detect from `.gz` extension
-- Manual override via the `COMPRESSION` parameter
-- Buffered writing for performance
+- FASTQ, FASTA, SAM and NEWICK detect gzip output from a `.gz` extension; `COMPRESSION` overrides it.
+- BAM and UBAM are always BGZF-compressed.
+- BIOM's `COMPRESSION` sets HDF5's internal gzip compression; there is no `.gz` detection.
 
 ### Stop Position Calculation
 SAM alignments compute `stop_position` using HTSlib's `bam_endpos()`:
@@ -207,10 +206,11 @@ steps the computation one wave at a time.
 ### Adding a new COPY format
 1. Create `copy_<format>.cpp` and header
 2. Implement `CopyFunction` with `Bind()`, `InitGlobal()`, `Sink()`, `Finalize()`
-3. Use `copy_format_common.cpp` utilities for buffering/compression
-4. Register in `LoadInternal()`
-5. Add to `MIINT_EXTENSION_SOURCES` ([build-system.md](build-system.md))
-6. Create comprehensive SQL tests (basic, compression, edge cases)
+3. Declare every option in a `copy_options` callback with `DeclareCopyOption` (`src/include/copy_option_parsing.hpp`), and read them in `Bind()` with that header's helpers, ending the if-chain with `ThrowUnreadCopyOption`. Without `copy_options`, DuckDB checks no option: an unknown one reaches `Bind()`, and a bare one arrives with no value.
+4. Use `copy_format_common.cpp` utilities for buffering/compression
+5. Register in `LoadInternal()`
+6. Add to `MIINT_EXTENSION_SOURCES` ([build-system.md](build-system.md))
+7. Create comprehensive SQL tests (basic, compression, edge cases)
 
 ### Adding scalar/aggregate functions
 1. Implement in appropriate source file

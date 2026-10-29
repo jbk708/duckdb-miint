@@ -20,10 +20,6 @@ bool IsStdinPath(const std::string &path);
 // Check if a path has .gz extension (for gzip-compressed files)
 bool IsGzipped(const std::string &path);
 
-// Parse file paths parameter that can be VARCHAR or VARCHAR[]
-// Validates that at least one path is provided
-std::vector<std::string> ParseFilePathsParameter(const Value &input, const std::string &function_name);
-
 // Parse include_filepath named parameter (optional BOOLEAN, default false)
 bool ParseIncludeFilepathParameter(const named_argument_map_t &named_parameters);
 
@@ -39,10 +35,18 @@ unique_ptr<NodeStatistics> EstimateFileScanCardinality(const std::vector<std::st
 
 // Expand a glob pattern into a sorted list of file paths
 // - If pattern contains glob characters (*, ?, []), expands and sorts alphabetically
-// - If pattern is a literal path, returns it as-is
+// - If pattern is a literal path, returns it as DuckDB's file system expands it, as its glob does for
+//   the paths it returns: a file: URI becomes the local path it names, and a leading ~ the home
+//   directory. Every other path, remote URIs and stdin included, is returned as given.
 // - Throws IOException if glob matches zero files
 // - Throws InvalidInputException if pattern could match stdin paths
 std::vector<std::string> ExpandGlobPattern(FileSystem &fs, ClientContext &context, const std::string &pattern);
+
+// The paths of a VARCHAR[] argument: literal paths (no glob expansion), each expanded as a literal
+// path is above. Throws InvalidInputException, naming function_name (and list_name for a NULL), for a
+// NULL element or an empty list.
+std::vector<std::string> ExpandPathList(FileSystem &fs, const Value &list, const std::string &function_name,
+                                        const std::string &list_name = "file path list");
 
 // Result of glob expansion with metadata
 struct GlobExpansionResult {

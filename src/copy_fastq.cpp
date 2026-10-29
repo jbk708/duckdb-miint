@@ -26,6 +26,7 @@ struct FastqCopyBindData : public SequenceCopyBindData {
 		result->id_as_sequence_index = id_as_sequence_index;
 		result->include_comment = include_comment;
 		result->compression = compression;
+		result->compression_level = compression_level;
 		result->flush_size = flush_size;
 		result->file_path = file_path;
 		result->has_r2_columns = has_r2_columns;
@@ -42,9 +43,10 @@ struct FastqCopyBindData : public SequenceCopyBindData {
 		auto &other = other_p.Cast<FastqCopyBindData>();
 		return interleave == other.interleave && id_as_sequence_index == other.id_as_sequence_index &&
 		       include_comment == other.include_comment && qual_offset == other.qual_offset &&
-		       compression == other.compression && file_path == other.file_path &&
-		       has_r2_columns == other.has_r2_columns && split_output == other.split_output &&
-		       flush_size == other.flush_size && names == other.names && read_id_type == other.read_id_type;
+		       compression == other.compression && compression_level == other.compression_level &&
+		       file_path == other.file_path && has_r2_columns == other.has_r2_columns &&
+		       split_output == other.split_output && flush_size == other.flush_size && names == other.names &&
+		       read_id_type == other.read_id_type;
 	}
 };
 
@@ -92,9 +94,6 @@ static unique_ptr<FunctionData> FastqCopyBind(ClientContext &context, CopyFuncti
 	for (auto &option : input.info.options) {
 		if (option.first == "qual_offset") {
 			qual_offset_param = option.second[0];
-		} else if (!(option.first == "interleave") && !(option.first == "id_as_sequence_index") &&
-		           !(option.first == "include_comment") && !(option.first == "compression")) {
-			throw BinderException("Unknown option for COPY FORMAT FASTQ: %s", option.first.GetIdentifierName());
 		}
 	}
 
@@ -104,6 +103,7 @@ static unique_ptr<FunctionData> FastqCopyBind(ClientContext &context, CopyFuncti
 	result->id_as_sequence_index = common_params.id_as_sequence_index;
 	result->include_comment = common_params.include_comment;
 	result->compression = common_params.compression;
+	result->compression_level = common_params.compression_level;
 	result->flush_size = common_params.flush_size;
 
 	// {ORIENTATION} in the path => split R1/R2 files; otherwise a single (optionally interleaved) file.
@@ -369,8 +369,14 @@ static void FastqCopyFinalize(ClientContext &context, FunctionData &bind_data, G
 //===--------------------------------------------------------------------===//
 // Register Function
 //===--------------------------------------------------------------------===//
+static void FastqCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareSequenceCopyOptions(input);
+	DeclareCopyOption(input, "qual_offset", LogicalType::BIGINT);
+}
+
 CopyFunction CopyFastqFunction::GetFunction() {
 	CopyFunction func("fastq");
+	func.copy_options = FastqCopyOptions;
 	func.copy_to_bind = FastqCopyBind;
 	func.copy_to_initialize_local = FastqCopyInitializeLocal;
 	func.copy_to_initialize_global = FastqCopyInitializeGlobal;

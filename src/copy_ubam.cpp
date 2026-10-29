@@ -1,5 +1,6 @@
 #include "copy_ubam.hpp"
 #include "copy_format_common.hpp" // ResolveSequenceRecordId (read_id VARCHAR/BIGINT/UUID dispatch)
+#include "copy_option_parsing.hpp"
 #include "htslib_raii.hpp"
 #include "id_column_utils.hpp" // IsAllowedIdType, AllowedIdTypeList
 #include "duckdb/common/exception.hpp"
@@ -180,6 +181,7 @@ static unique_ptr<FunctionData> UBAMCopyBind(ClientContext &context, CopyFunctio
 	auto result = make_uniq<UBAMCopyBindData>();
 	result->file_path = input.info.file_path;
 	result->names = IdentifiersToStrings(names);
+	RefuseRemoteCopyTarget("UBAM", result->file_path);
 
 	// Locate required columns (case-insensitive, matching the SAM/BAM writer).
 	for (idx_t i = 0; i < names.size(); i++) {
@@ -217,20 +219,18 @@ static unique_ptr<FunctionData> UBAMCopyBind(ClientContext &context, CopyFunctio
 	// Options.
 	for (auto &option : input.info.options) {
 		if (option.first == "read_group") {
-			ParseReadGroup(option.second[0], result->rg_line, result->rg_id);
+			ParseReadGroup(CopyOptionValue(option.first, option.second), result->rg_line, result->rg_id);
 			result->has_read_group = true;
 		} else if (option.first == "tags") {
-			ParseTags(option.second[0], IdentifiersToStrings(names), result->tags, sql_types);
+			ParseTags(CopyOptionValue(option.first, option.second), IdentifiersToStrings(names), result->tags,
+			          sql_types);
 		} else if (option.first == "compression_level") {
-			result->compression_level = option.second[0].GetValue<int32_t>();
-			if (result->compression_level < 0 || result->compression_level > 9) {
-				throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", result->compression_level);
-			}
+			result->compression_level = CopyOptionCompressionLevel(option.second);
 		} else if (option.first == "reference_lengths") {
 			throw BinderException("COPY FORMAT UBAM does not accept REFERENCE_LENGTHS: a uBAM is headerless "
 			                      "(unaligned reads, no @SQ). Use FORMAT BAM for aligned records.");
 		} else {
-			throw BinderException("Unknown option for COPY FORMAT UBAM: %s", option.first.GetIdentifierName());
+			ThrowUnreadCopyOption("UBAM", option.first);
 		}
 	}
 
@@ -456,8 +456,18 @@ static void UBAMCopyFinalize(ClientContext &context, FunctionData &bind_data, Gl
 //===--------------------------------------------------------------------===//
 // Registration
 //===--------------------------------------------------------------------===//
+// READ_GROUP and TAGS are structs, checked by ParseReadGroup and ParseTags. REFERENCE_LENGTHS is
+// declared only to be refused with the reason, which DuckDB's unknown-option error would not give.
+static void UBAMCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareCopyOption(input, "read_group", LogicalType::ANY);
+	DeclareCopyOption(input, "tags", LogicalType::ANY);
+	DeclareCompressionLevelCopyOption(input);
+	DeclareCopyOption(input, "reference_lengths", LogicalType::ANY);
+}
+
 CopyFunction CopyUBAMFunction::GetFunction() {
 	CopyFunction function("ubam");
+	function.copy_options = UBAMCopyOptions;
 	function.copy_to_bind = UBAMCopyBind;
 	function.copy_to_initialize_global = UBAMCopyInitializeGlobal;
 	function.copy_to_initialize_local = UBAMCopyInitializeLocal;

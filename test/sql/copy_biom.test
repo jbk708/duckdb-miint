@@ -275,6 +275,109 @@ TO '{TEST_DIR}/output_overwrite_test.biom' (FORMAT BIOM);
 ----
 Cannot overwrite existing file
 
+# An option BIOM does not have is refused and named, and GENERATED_BY with no value is refused.
+statement error
+COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO '{TEST_DIR}/bogus.biom' (FORMAT BIOM, BOGUS 1);
+----
+Unrecognized option "bogus"
+
+statement error
+COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO '{TEST_DIR}/bare.biom' (FORMAT BIOM, GENERATED_BY);
+----
+<REGEX>:.*Copy option "?generated_by"? requires an argument of type VARCHAR.*
+
+# The HDF5 writer writes local files only, so a remote target is refused at bind.
+statement error
+COPY (SELECT feature_id, sample_id, value FROM test_biom_single) TO 'foo://miint-test/x.biom' (FORMAT BIOM);
+----
+COPY FORMAT BIOM writes local files only
+
+# A file:// target is the local file it names: BIOM writes the path DuckDB resolves for the COPY, as
+# every other format does, so HDF5 is handed a plain path.
+statement ok
+SET VARIABLE abs_test_dir = CASE WHEN '{TEST_DIR}' LIKE '/%' THEN '{TEST_DIR}' ELSE '{WORKING_DIRECTORY}/{TEST_DIR}' END;
+
+statement ok
+COPY test_biom_basic TO ('file://' || getvariable('abs_test_dir') || '/uri.biom') (FORMAT BIOM);
+
+query III
+SELECT feature_id, sample_id, value FROM read_biom('{TEST_DIR}/uri.biom') ORDER BY ALL;
+----
+Feature1	Sample1	1.0
+Feature1	Sample2	2.0
+Feature2	Sample1	3.0
+
+# HDF5's failures name the file and HDF5's reason, rather than escaping as an unknown exception.
+statement error
+COPY test_biom_basic TO '{TEST_DIR}/no_such_dir/x.biom' (FORMAT BIOM);
+----
+<REGEX>:IO Error: COPY FORMAT BIOM: cannot write '.*no_such_dir/x\.biom': H5Fcreate failed: No such file or directory.*
+
+# PARTITION_BY writes a .biom file per partition, and DuckDB finalizes the partitions' files at once
+# (by its own scheduling, whatever the thread count). Every HDF5 call is serialized, so none of them
+# fails or corrupts another; the write is repeated so that a lost serialization fails this test almost
+# surely, not now and then. Each partition holds 25 features (i % 50 has the parity of i % 8) by 7 samples.
+loop run 0 10
+
+statement ok
+COPY (SELECT 'F' || (i % 50) AS feature_id, 'S' || (i % 7) AS sample_id, 1.0::DOUBLE AS value, i % 8 AS grp
+      FROM range(200000) t(i))
+TO '{TEST_DIR}/biom_parts_${run}' (FORMAT BIOM, PARTITION_BY (grp));
+
+query III
+SELECT count(DISTINCT filepath), count(*), sum(value)
+FROM read_biom('{TEST_DIR}/biom_parts_${run}/*/*.biom', include_filepath := true);
+----
+8	1400	200000.0
+
+endloop
+
+# PER_THREAD_OUTPUT writes a .biom file per thread that sinks rows. range() runs on one thread, so the
+# rows come from a table of more than three row groups, which four threads scan.
+statement ok
+SET threads = 4;
+
+statement ok
+CREATE TABLE biom_many AS
+SELECT 'F' || (i % 50) AS feature_id, 'S' || (i % 7) AS sample_id, 1.0::DOUBLE AS value FROM range(500000) t(i);
+
+statement ok
+COPY biom_many TO '{TEST_DIR}/biom_threads' (FORMAT BIOM, PER_THREAD_OUTPUT true);
+
+query II
+SELECT count(DISTINCT filepath) > 1, sum(value) FROM read_biom('{TEST_DIR}/biom_threads/*.biom', include_filepath := true);
+----
+true	500000.0
+
+statement ok
+RESET threads;
+
+statement ok
+DROP TABLE biom_many;
+
+# Test 21: concurrent COPY TO BIOM and read_biom return correct values
+concurrentloop i 0 8
+
+loop j 0 10
+
+statement ok
+COPY (SELECT 'F' || (r % 50) AS feature_id, 'S' || (r // 50) AS sample_id, (r + 1)::DOUBLE AS value FROM range(2000) t(r))
+TO '{TEST_DIR}/concurrent_{i}_{j}.biom' (FORMAT BIOM);
+
+query IIIR
+SELECT COUNT(*), COUNT(DISTINCT feature_id), COUNT(DISTINCT sample_id), SUM(value) FROM read_biom('{TEST_DIR}/concurrent_{i}_{j}.biom');
+----
+2000	50	40	2001000.0
+
+query IR
+SELECT COUNT(*), SUM(value) FROM read_biom('data/biom/test.biom');
+----
+15	27.0
+
+endloop
+
+endloop
+
 # Cleanup
 statement ok
 DROP TABLE test_biom_basic;

@@ -39,27 +39,6 @@ static bool GlobCouldMatchStdin(const std::string &pattern) {
 	return false;
 }
 
-std::vector<std::string> ParseFilePathsParameter(const Value &input, const std::string &function_name) {
-	std::vector<std::string> paths;
-
-	if (input.type().id() == LogicalTypeId::VARCHAR) {
-		paths.push_back(input.ToString());
-	} else if (input.type().id() == LogicalTypeId::LIST) {
-		auto &list_children = ListValue::GetChildren(input);
-		for (const auto &child : list_children) {
-			paths.push_back(child.ToString());
-		}
-	} else {
-		throw InvalidInputException(function_name + ": first argument must be VARCHAR or VARCHAR[]");
-	}
-
-	if (paths.empty()) {
-		throw InvalidInputException(function_name + ": at least one file path must be provided");
-	}
-
-	return paths;
-}
-
 bool ParseIncludeFilepathParameter(const named_argument_map_t &named_parameters) {
 	auto fp_param = named_parameters.find("include_filepath");
 	if (fp_param != named_parameters.end() && !fp_param->second.IsNull()) {
@@ -88,32 +67,21 @@ unique_ptr<NodeStatistics> EstimateFileScanCardinality(const std::vector<std::st
 }
 
 std::vector<std::string> ExpandGlobPattern(FileSystem &fs, ClientContext &context, const std::string &pattern) {
-	// Check if this is a glob pattern
-	if (!FileSystem::HasGlob(pattern)) {
-		// Not a glob pattern, return as-is (validation happens elsewhere)
-		return {pattern};
-	}
+	return ExpandGlobPatternWithInfo(fs, context, pattern).paths;
+}
 
-	// Only check for stdin paths when it's actually a glob pattern
-	if (GlobCouldMatchStdin(pattern)) {
-		throw InvalidInputException("Glob patterns cannot include stdin paths");
-	}
-
-	// Expand the glob pattern
-	auto files = fs.GlobFiles(pattern, FileGlobOptions::ALLOW_EMPTY);
-
-	if (files.empty()) {
-		throw IOException("No files matched pattern: " + pattern);
-	}
-
-	// Extract paths and sort alphabetically
+std::vector<std::string> ExpandPathList(FileSystem &fs, const Value &list, const std::string &function_name,
+                                        const std::string &list_name) {
 	std::vector<std::string> paths;
-	paths.reserve(files.size());
-	for (const auto &file : files) {
-		paths.push_back(file.path);
+	for (const auto &child : ListValue::GetChildren(list)) {
+		if (child.IsNull()) {
+			throw InvalidInputException(function_name + ": " + list_name + " cannot contain NULL");
+		}
+		paths.push_back(fs.ExpandPath(child.ToString()));
 	}
-	std::sort(paths.begin(), paths.end());
-
+	if (paths.empty()) {
+		throw InvalidInputException(function_name + ": at least one file path must be provided");
+	}
 	return paths;
 }
 
@@ -127,8 +95,8 @@ GlobExpansionResult ExpandGlobPatternWithInfo(FileSystem &fs, ClientContext &con
 	}
 
 	if (!result.is_glob) {
-		// Not a glob pattern, return as-is
-		result.paths = {pattern};
+		// Not a glob pattern: expanded as DuckDB's glob expands one
+		result.paths = {fs.ExpandPath(pattern)};
 		return result;
 	}
 

@@ -240,10 +240,11 @@ if $VERIFY; then
                     if ($NATIVE_EH) console.log('  Exceptions: wasm-native, no JS exception-handling imports');
                 }
 
-                // For information, not a check: Rust functions the loader mis-links
-                // when used as function pointers (docs/internals/embedded-tools.md,
-                // \"Emscripten exceptions\"): an orig\$X export whose X contains a
-                // '\$', with X also imported as GOT.func.X.
+                // For information, not a check: Rust functions a loader built without
+                // WASM_BIGINT would mis-link when used as function pointers; the v2
+                // runtimes are not built that way (docs/internals/embedded-tools.md,
+                // \"Runtimes built without WASM_BIGINT\"). An orig\$X export whose X
+                // contains a '\$', with X also imported as GOT.func.X.
                 const gotFunc = new Set(imports.filter(i => i.module === 'GOT.func').map(i => i.name));
                 const truncated = exports.map(e => e.name).filter(n => n.startsWith('orig\$'))
                     .map(n => n.slice(5)).filter(x => x.includes('\$') && gotFunc.has(x));

@@ -2,6 +2,7 @@
 #include <iostream>
 #include "remote_file_helper.hpp"
 #include "table_function_common.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/file_open_flags.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/vector_size.hpp"
@@ -160,16 +161,7 @@ unique_ptr<FunctionData> ReadNewickTableFunction::Bind(ClientContext &context, T
 		auto result = ExpandGlobPatternWithInfo(fs, context, input.inputs[0].ToString());
 		file_paths = std::move(result.paths);
 	} else if (input.inputs[0].type().id() == LogicalTypeId::LIST) {
-		auto &list_children = ListValue::GetChildren(input.inputs[0]);
-		for (const auto &child : list_children) {
-			if (child.IsNull()) {
-				throw InvalidInputException("read_newick: file path list cannot contain NULL");
-			}
-			file_paths.push_back(child.ToString());
-		}
-		if (file_paths.empty()) {
-			throw InvalidInputException("read_newick: at least one file path must be provided");
-		}
+		file_paths = ExpandPathList(fs, input.inputs[0], "read_newick");
 	} else {
 		throw InvalidInputException("read_newick: first argument must be VARCHAR or VARCHAR[]");
 	}
@@ -319,7 +311,7 @@ void ReadNewickTableFunction::Execute(ClientContext &context, TableFunctionInput
 			local_state.current_rows = TreeToRows(tree);
 			local_state.current_row_idx = 0;
 		} catch (const std::exception &e) {
-			throw IOException("Error parsing newick file '" + path + "': " + e.what());
+			throw IOException("Error parsing newick file '" + path + "': " + ErrorData(e).RawMessage());
 		}
 
 		local_state.has_file = false; // Ready to claim next file when done

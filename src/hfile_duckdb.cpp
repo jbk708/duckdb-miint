@@ -3,8 +3,10 @@
 #ifdef MIINT_STATIC_BUILD
 
 #include <cerrno>
+#include <cstring>
 #include <memory>
 #include <htslib-1.22.1/hfile_internal.h>
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/file_system.hpp"
 
 using duckdb::FileHandle;
@@ -64,27 +66,21 @@ static int duckdb_hfile_close(hFILE *fpv) {
 static const struct hFILE_backend duckdb_backend = {duckdb_hfile_read, nullptr, duckdb_hfile_seek, nullptr,
                                                     duckdb_hfile_close};
 
-hFILE *hfile_duckdb_open(FileSystem &fs, const string &path) {
-	try {
-		auto handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
-		if (!handle) {
-			errno = ENOENT;
-			return nullptr;
-		}
-
-		auto *fp = reinterpret_cast<hFILE_duckdb *>(hfile_init(sizeof(hFILE_duckdb), "r", 0));
-		if (!fp) {
-			return nullptr;
-		}
-
-		// Placement-new the unique_ptr into the already-allocated struct
-		new (&fp->handle) unique_ptr<FileHandle>(std::move(handle));
-		fp->base.backend = &duckdb_backend;
-		return &fp->base;
-	} catch (...) {
-		errno = EIO;
-		return nullptr;
+HFilePtr hfile_duckdb_open(FileSystem &fs, const string &path) {
+	auto handle = fs.OpenFile(path, FileOpenFlags::FILE_FLAGS_READ);
+	if (!handle) {
+		throw duckdb::IOException("Cannot open file \"%s\"", path);
 	}
+
+	auto *fp = reinterpret_cast<hFILE_duckdb *>(hfile_init(sizeof(hFILE_duckdb), "r", 0));
+	if (!fp) {
+		throw duckdb::IOException("Cannot open file \"%s\": %s", path, strerror(errno));
+	}
+
+	// Placement-new the unique_ptr into the already-allocated struct
+	new (&fp->handle) unique_ptr<FileHandle>(std::move(handle));
+	fp->base.backend = &duckdb_backend;
+	return HFilePtr(&fp->base);
 }
 
 } // namespace miint

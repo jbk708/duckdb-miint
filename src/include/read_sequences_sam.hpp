@@ -3,6 +3,7 @@
 #include "QualScore.hpp"
 #include "remote_file_helper.hpp"
 #include "hfile_duckdb.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/typedefs.hpp"
 #include "duckdb/common/types.hpp"
@@ -57,18 +58,16 @@ public:
 			for (const auto &path : paths) {
 				try {
 					if (miint::RemoteFileHelper::IsRemotePath(path)) {
-						hFILE *hf = miint::hfile_duckdb_open(fs, path);
-						if (!hf) {
-							throw IOException("Failed to open remote file: " + path);
-						}
-						readers.push_back(std::make_unique<miint::SAMReader>(hf, path, /*include_seq_qual=*/true,
+						auto hf = miint::hfile_duckdb_open(fs, path);
+						readers.push_back(std::make_unique<miint::SAMReader>(std::move(hf), path,
+						                                                     /*include_seq_qual=*/true,
 						                                                     /*require_references=*/false));
 					} else {
 						readers.push_back(std::make_unique<miint::SAMReader>(path, /*include_seq_qual=*/true,
 						                                                     /*require_references=*/false));
 					}
 				} catch (std::exception &e) {
-					throw IOException("Error opening '%s': %s", path, e.what());
+					throw IOException("Error opening '%s': %s", path, ErrorData(e).RawMessage());
 				}
 				file_sequence_counters.emplace_back(1);
 			}

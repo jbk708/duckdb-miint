@@ -22,6 +22,7 @@ struct FastaCopyBindData : public SequenceCopyBindData {
 		result->id_as_sequence_index = id_as_sequence_index;
 		result->include_comment = include_comment;
 		result->compression = compression;
+		result->compression_level = compression_level;
 		result->flush_size = flush_size;
 		result->file_path = file_path;
 		result->has_r2_columns = has_r2_columns;
@@ -37,9 +38,9 @@ struct FastaCopyBindData : public SequenceCopyBindData {
 		auto &other = other_p.Cast<FastaCopyBindData>();
 		return interleave == other.interleave && id_as_sequence_index == other.id_as_sequence_index &&
 		       include_comment == other.include_comment && compression == other.compression &&
-		       file_path == other.file_path && has_r2_columns == other.has_r2_columns &&
-		       split_output == other.split_output && flush_size == other.flush_size && names == other.names &&
-		       read_id_type == other.read_id_type;
+		       compression_level == other.compression_level && file_path == other.file_path &&
+		       has_r2_columns == other.has_r2_columns && split_output == other.split_output &&
+		       flush_size == other.flush_size && names == other.names && read_id_type == other.read_id_type;
 	}
 };
 
@@ -76,20 +77,13 @@ static unique_ptr<FunctionData> FastaCopyBind(ClientContext &context, CopyFuncti
 
 	// Parse common parameters
 	CommonCopyParameters common_params;
-
-	for (auto &option : input.info.options) {
-		if (!(option.first == "interleave") && !(option.first == "id_as_sequence_index") &&
-		    !(option.first == "include_comment") && !(option.first == "compression")) {
-			throw BinderException("Unknown option for COPY FORMAT FASTA: %s", option.first.GetIdentifierName());
-		}
-	}
-
 	common_params.ParseFromOptions(input.info.options, result->file_path);
 
 	result->interleave = common_params.interleave;
 	result->id_as_sequence_index = common_params.id_as_sequence_index;
 	result->include_comment = common_params.include_comment;
 	result->compression = common_params.compression;
+	result->compression_level = common_params.compression_level;
 	result->flush_size = common_params.flush_size;
 
 	// {ORIENTATION} in the path => split R1/R2 files; otherwise a single (optionally interleaved) file.
@@ -310,8 +304,13 @@ static void FastaCopyFinalize(ClientContext &context, FunctionData &bind_data, G
 //===--------------------------------------------------------------------===//
 // Register Function
 //===--------------------------------------------------------------------===//
+static void FastaCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareSequenceCopyOptions(input);
+}
+
 CopyFunction CopyFastaFunction::GetFunction() {
 	CopyFunction func("fasta");
+	func.copy_options = FastaCopyOptions;
 	func.copy_to_bind = FastaCopyBind;
 	func.copy_to_initialize_local = FastaCopyInitializeLocal;
 	func.copy_to_initialize_global = FastaCopyInitializeGlobal;

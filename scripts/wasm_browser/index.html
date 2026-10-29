@@ -7,7 +7,7 @@
 // instantiate(mainModule, pthreadWorker), open({allowUnsignedExtensions}).
 // The pin below must run the DuckDB core the extension targets; docs/UPDATING.md
 // bumps it with DuckDB.
-import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev64.0/+esm';
+import * as duckdb from 'https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.33.1-dev110.0/+esm';
 
 let conn = null;
 
@@ -16,11 +16,11 @@ const withTimeout = (p, ms, what) => Promise.race([
 
 const fmt = v => (v === null || v === undefined ? 'NULL' : String(v));
 
-// The extension is built for the eh bundle (wasm_eh), which the playground gets
-// on a page without cross-origin isolation; any other bundle is a different test.
+// The extension is built for wasm_eh, which duckdb-wasm's base bundle runs on a
+// page without cross-origin isolation; any other bundle is a different test.
 async function boot(expectedVersion) {
   const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
-  if (!/\/duckdb-eh\.wasm$/.test(bundle.mainModule)) throw new Error(`expected eh bundle, got ${bundle.mainModule}`);
+  if (!/\/duckdb-base\.wasm$/.test(bundle.mainModule)) throw new Error(`expected base bundle, got ${bundle.mainModule}`);
   const workerUrl = URL.createObjectURL(
     new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), new Worker(workerUrl));

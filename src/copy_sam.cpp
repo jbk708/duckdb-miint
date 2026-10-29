@@ -1,4 +1,6 @@
 #include "copy_sam.hpp"
+#include "copy_format_common.hpp"
+#include "copy_option_parsing.hpp"
 #include "htslib_raii.hpp"
 #include "id_column_codec.hpp"
 #include "id_column_utils.hpp"
@@ -111,7 +113,7 @@ struct SAMCopyBindData : public FunctionData {
 	bool include_header = true;
 	bool use_gzip = false;
 	SAMOutputFormat format = SAMOutputFormat::SAM;
-	int compression_level = -1; // -1 means use HTSlib default (6 for BAM)
+	int compression_level = -1; // -1 means use HTSlib default (6), for BAM and gzip SAM
 	string file_path;
 	vector<string> names;
 	std::optional<string> reference_lengths_table;
@@ -162,6 +164,8 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 	result->file_path = input.info.file_path;
 	result->names = IdentifiersToStrings(names);
 	result->format = default_format;
+	const char *format_name = default_format == SAMOutputFormat::BAM ? "BAM" : "SAM";
+	RefuseRemoteCopyTarget(format_name, result->file_path);
 
 	// Detect and cache column indices
 	result->indices.FindIndices(IdentifiersToStrings(names));
@@ -231,33 +235,17 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 	}
 
 	// Parse options
-	bool compression_specified = false;
+	Value compression_param;
+	const vector<Value> *compression_level_values = nullptr;
 	for (auto &option : input.info.options) {
 		if (option.first == "include_header") {
-			result->include_header = option.second[0].GetValue<bool>();
+			result->include_header = CopyOptionFlag(option.second);
 		} else if (option.first == "compression") {
-			compression_specified = true;
-			auto comp_value = option.second[0].ToString();
-			if (StringUtil::CIEquals(comp_value, "gzip") || StringUtil::CIEquals(comp_value, "gz")) {
-				result->use_gzip = true;
-			} else if (StringUtil::CIEquals(comp_value, "none") || StringUtil::CIEquals(comp_value, "uncompressed")) {
-				result->use_gzip = false;
-			} else {
-				throw BinderException("Unknown compression type for COPY FORMAT SAM: %s (supported: gzip, none)",
-				                      comp_value);
-			}
+			compression_param = option.second[0];
 		} else if (option.first == "compression_level") {
-			result->compression_level = option.second[0].GetValue<int32_t>();
-			if (result->compression_level < 0 || result->compression_level > 9) {
-				throw BinderException("COMPRESSION_LEVEL must be between 0 and 9, got %d", result->compression_level);
-			}
+			compression_level_values = &option.second;
 		} else if (option.first == "reference_lengths") {
-			const auto &table_value = option.second[0];
-			if (table_value.type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("reference_lengths must be a VARCHAR (table or view name)");
-			}
-
-			result->reference_lengths_table = table_value.ToString();
+			result->reference_lengths_table = option.second[0].ToString();
 
 			// Validate table or view exists (use TABLE_ENTRY lookup which returns either)
 			EntryLookupInfo lookup_info(CatalogType::TABLE_ENTRY,
@@ -271,12 +259,7 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 				throw BinderException("'%s' is not a table or view", result->reference_lengths_table.value());
 			}
 		} else if (option.first == "sequence_data") {
-			const auto &table_value = option.second[0];
-			if (table_value.type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("SEQUENCE_DATA must be a VARCHAR (table or view name)");
-			}
-
-			result->sequence_data_table = table_value.ToString();
+			result->sequence_data_table = option.second[0].ToString();
 
 			// Validate table or view exists
 			EntryLookupInfo sd_lookup(CatalogType::TABLE_ENTRY,
@@ -290,13 +273,8 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 				throw BinderException("'%s' is not a table or view", result->sequence_data_table.value());
 			}
 		} else {
-			throw BinderException("Unknown option for COPY FORMAT SAM: %s", option.first.GetIdentifierName());
+			ThrowUnreadCopyOption(format_name, option.first);
 		}
-	}
-
-	// Validate COMPRESSION_LEVEL only makes sense for BAM
-	if (result->compression_level != -1 && result->format != SAMOutputFormat::BAM) {
-		throw BinderException("COMPRESSION_LEVEL parameter only applies to BAM format");
 	}
 
 	// BAM files must have headers (binary format requirement)
@@ -317,10 +295,22 @@ static unique_ptr<FunctionData> SAMCopyBindInternal(ClientContext &context, Copy
 		                      "(e.g., REFERENCE_LENGTHS='ref_table')");
 	}
 
-	// Auto-detect compression from file extension if not specified (for SAM format)
-	if (!compression_specified && result->format == SAMOutputFormat::SAM) {
-		if (result->file_path.size() >= 3 && result->file_path.substr(result->file_path.size() - 3) == ".gz") {
-			result->use_gzip = true;
+	// BAM is always BGZF, so it takes any level; SAM takes one only for gzip output, as FASTQ does.
+	if (result->format == SAMOutputFormat::SAM) {
+		const auto compression = DetectCompressionType(result->file_path, compression_param);
+		result->use_gzip = compression == FileCompressionType::GZIP;
+		if (compression_level_values) {
+			result->compression_level = GzipCompressionLevel(*compression_level_values, compression, result->file_path);
+		}
+	} else {
+		// COMPRESSION 'gzip' or 'gz' only says what BAM always is; any other value is refused, not ignored.
+		if (!compression_param.IsNull() && !IsGzipCompressionName(compression_param.ToString())) {
+			throw BinderException("COPY FORMAT BAM is always BGZF-compressed, so COMPRESSION '%s' does not apply; "
+			                      "COMPRESSION_LEVEL 0 writes its BGZF blocks uncompressed",
+			                      compression_param.ToString());
+		}
+		if (compression_level_values) {
+			result->compression_level = CopyOptionCompressionLevel(*compression_level_values);
 		}
 	}
 
@@ -369,9 +359,10 @@ static unique_ptr<GlobalFunctionData> SAMCopyInitializeGlobal(ClientContext &con
 			// Default BAM compression (HTSlib default level 6)
 			mode = "wb";
 		}
+	} else if (fdata.use_gzip) {
+		mode = fdata.compression_level >= 0 ? "wz" + std::to_string(fdata.compression_level) : "wz";
 	} else {
-		// SAM format
-		mode = fdata.use_gzip ? "wz" : "w";
+		mode = "w";
 	}
 
 	// Open file for writing
@@ -975,8 +966,17 @@ static void SAMCopyFinalize(ClientContext &context, FunctionData &bind_data, Glo
 //===--------------------------------------------------------------------===//
 // Function Definition
 //===--------------------------------------------------------------------===//
+static void SAMCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareCopyOption(input, "include_header", LogicalType::BOOLEAN);
+	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
+	DeclareCompressionLevelCopyOption(input);
+	DeclareCopyOption(input, "reference_lengths", LogicalType::VARCHAR);
+	DeclareCopyOption(input, "sequence_data", LogicalType::VARCHAR);
+}
+
 CopyFunction CopySAMFunction::GetFunction() {
 	CopyFunction function("sam");
+	function.copy_options = SAMCopyOptions;
 	function.copy_to_bind = SAMCopyBind;
 	function.copy_to_initialize_global = SAMCopyInitializeGlobal;
 	function.copy_to_initialize_local = SAMCopyInitializeLocal;
@@ -990,6 +990,7 @@ CopyFunction CopySAMFunction::GetFunction() {
 
 CopyFunction CopySAMFunction::GetBAMFunction() {
 	CopyFunction function("bam");
+	function.copy_options = SAMCopyOptions;
 	function.copy_to_bind = BAMCopyBind;
 	function.copy_to_initialize_global = SAMCopyInitializeGlobal;
 	function.copy_to_initialize_local = SAMCopyInitializeLocal;

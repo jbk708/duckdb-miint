@@ -1,0 +1,62 @@
+# name: test/sql/remote_path_errors.test
+# description: A URI whose scheme no DuckDB file system serves fails with DuckDB's reason, as plain text, and formats that write only local files refuse remote targets at bind
+# group: [sql]
+
+require miint
+
+# A path with a URI scheme goes to DuckDB's file systems. For a scheme none of them serves, DuckDB
+# falls back to its local file system, which opens the path as written and fails, the same as for
+# DuckDB's own formats (compare COPY ... TO 'foo://...csv').
+statement error
+COPY (SELECT 1 AS a) TO 'foo://miint-test/x.csv';
+----
+Cannot open file "foo://miint-test/x.csv"
+
+statement error
+COPY (SELECT 'r' AS read_id, 'ACGT' AS sequence1) TO 'foo://miint-test/x.fa.gz' (FORMAT FASTA);
+----
+Cannot open file "foo://miint-test/x.fa.gz"
+
+statement error
+SELECT * FROM read_fastx('foo://miint-test/x.fq');
+----
+Cannot open file "foo://miint-test/x.fq"
+
+# Readers that name the file give DuckDB's reason as plain text rather than DuckDB's serialized error.
+statement error
+SELECT * FROM read_alignments('foo://miint-test/x.sam');
+----
+Error opening 'foo://miint-test/x.sam': Cannot open file "foo://miint-test/x.sam"
+
+statement error
+SELECT * FROM read_sequences_sam('foo://miint-test/x.sam');
+----
+Error opening 'foo://miint-test/x.sam': Cannot open file "foo://miint-test/x.sam"
+
+statement error
+SELECT * FROM read_newick('foo://miint-test/t.nwk');
+----
+Error parsing newick file 'foo://miint-test/t.nwk': Cannot open file "foo://miint-test/t.nwk"
+
+# SAM, BAM and UBAM are written by htslib, which writes local files only, so a remote target is
+# refused at bind rather than failing inside htslib.
+statement ok
+CREATE TABLE sam_test AS SELECT * FROM read_alignments('data/sam/foo_has_header.sam');
+
+statement ok
+CREATE TABLE ref_table AS SELECT 'G1234' AS name, 20 AS length UNION ALL SELECT 'G000144735', 90;
+
+statement error
+COPY sam_test TO 'foo://miint-test/x.sam' (FORMAT SAM, REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT SAM writes local files only
+
+statement error
+COPY sam_test TO 'foo://miint-test/x.bam' (FORMAT BAM, REFERENCE_LENGTHS 'ref_table');
+----
+COPY FORMAT BAM writes local files only
+
+statement error
+COPY (SELECT 'r' AS read_id, 'ACGT' AS sequence1, [30, 30, 30, 30]::UTINYINT[] AS qual1) TO 'foo://miint-test/x.ubam' (FORMAT UBAM);
+----
+COPY FORMAT UBAM writes local files only

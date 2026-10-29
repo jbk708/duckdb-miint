@@ -10,6 +10,7 @@
 // UUID::ToString, AllowedIdTypeList, exception types, and UnifiedVectorFormat --
 // id_column_utils.hpp transitively provides all of them.
 #include "id_column_utils.hpp"
+#include "copy_option_parsing.hpp"
 
 // htslib's BGZF handle; defined in <htslib/bgzf.h>, only included in the .cpp.
 struct BGZF;
@@ -20,6 +21,11 @@ namespace duckdb {
 // Constants
 //===--------------------------------------------------------------------===//
 constexpr idx_t DEFAULT_COPY_FLUSH_SIZE = 1024 * 1024; // 1MB default buffer size
+// FASTQ/FASTA gzip level when COMPRESSION_LEVEL is not given. COPY usually writes whole read sets,
+// such as every read that survives a host filter; there, level 1 compressed about three times as fast
+// as level 6 (wall time of a COPY from read_fastx; 10 M pairs of 150 bp reads, split R1/R2 output,
+// 8 threads, libdeflate) and wrote files about 9% larger.
+constexpr int SEQUENCE_DEFAULT_GZIP_LEVEL = 1;
 
 //===--------------------------------------------------------------------===//
 // File Handle Wrapper (handles both compressed and uncompressed)
@@ -29,8 +35,10 @@ public:
 	// compression_threads > 1 enables htslib bgzf multithreaded compression for
 	// LOCAL gzip output (bgzf is gzip-compatible and bgzf_mt preserves block
 	// order). Uncompressed output and remote (scheme://) gzip targets keep the
-	// BufferedFileWriter path.
-	CopyFileHandle(FileSystem &fs, const string &path, FileCompressionType compression, int compression_threads = 1);
+	// BufferedFileWriter path. compression_level applies to local gzip output only; it has no
+	// default, so no caller silently gets a level it did not choose.
+	CopyFileHandle(FileSystem &fs, const string &path, FileCompressionType compression, int compression_threads,
+	               int compression_level);
 	~CopyFileHandle();
 
 	void Write(const_data_ptr_t data, idx_t size);
@@ -66,7 +74,11 @@ void FlushFormatBuffer(FormatWriterState &local_state, CopyFileHandle &file, mut
 //===--------------------------------------------------------------------===//
 // Common Helper Functions
 //===--------------------------------------------------------------------===//
+// COMPRESSION for the formats that write text: the value given, or, with none (a NULL compression_param),
+// gzip for a path ending in .gz. A binary or HDF5 format checks its own values.
 FileCompressionType DetectCompressionType(const string &file_path, const Value &compression_param);
+// Whether a COMPRESSION value names gzip: 'gzip' or 'gz', in any case.
+bool IsGzipCompressionName(const string &name);
 string SubstituteOrientation(const string &path, const string &orientation);
 bool HasOrientationPlaceholder(const string &path);
 
@@ -93,10 +105,18 @@ struct CommonCopyParameters {
 	bool id_as_sequence_index = false;
 	bool include_comment = false;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
+	int compression_level = SEQUENCE_DEFAULT_GZIP_LEVEL;
 	idx_t flush_size = DEFAULT_COPY_FLUSH_SIZE;
 
 	void ParseFromOptions(const identifier_map_t<vector<Value>> &options, const string &file_path);
 };
+
+//! The options COPY FORMAT FASTQ and FASTA share, for their copy_options.
+void DeclareSequenceCopyOptions(CopyOptionsInput &input);
+
+//! COMPRESSION_LEVEL for output written through CopyFileHandle. Refused where it would be ignored:
+//! uncompressed output, and remote targets, which DuckDB's gzip writer compresses at its own level.
+int GzipCompressionLevel(const vector<Value> &values, FileCompressionType compression, const string &file_path);
 
 //===--------------------------------------------------------------------===//
 // Common Validation Functions
@@ -184,6 +204,7 @@ struct SequenceCopyBindData : public FunctionData {
 	bool id_as_sequence_index = false;
 	bool include_comment = false;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
+	int compression_level = SEQUENCE_DEFAULT_GZIP_LEVEL; // COMPRESSION_LEVEL, for local gzip output
 	idx_t flush_size = DEFAULT_COPY_FLUSH_SIZE;
 	string file_path;
 	// Whether the input *schema* carries R2 columns (sequence2 [+ qual2 for FASTQ]). This does
@@ -213,9 +234,10 @@ struct SequenceCopyGlobalState : public GlobalFunctionData {
 	FileSystem *fs = nullptr;
 	string r2_path;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
-	// Worker threads for bgzf gzip compression (follows DuckDB's thread count);
-	// captured at global-init so the lazily-created R2 file uses the same value.
+	// Worker threads for bgzf gzip compression (follows DuckDB's thread count) and the gzip level;
+	// captured at global-init so the lazily-created R2 file uses the same values.
 	int compression_threads = 1;
+	int compression_level = SEQUENCE_DEFAULT_GZIP_LEVEL;
 	// Consistency tracking across all threads: a single COPY must be either all single-end or
 	// all paired-end. Both set true -> inconsistent input (checked at finalize).
 	bool saw_paired = false;

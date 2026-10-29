@@ -81,14 +81,14 @@ statement error
 COPY (SELECT read_id, comment, sequence1, qual1 FROM test_single)
 TO '{TEST_DIR}/error.fq' (FORMAT FASTQ, COMPRESSION 'invalid');
 ----
-compression must be
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed'
 
 # Test 7: Error - invalid compression type (bzip2 not supported)
 statement error
 COPY (SELECT read_id, comment, sequence1, qual1 FROM test_single)
 TO '{TEST_DIR}/error2.fq' (FORMAT FASTQ, COMPRESSION 'bzip2');
 ----
-compression must be
+COMPRESSION must be 'gzip', 'gz', 'none' or 'uncompressed'
 
 # Test 8: Verify gzip backward compatibility (existing .gz auto-detect still works)
 statement ok
@@ -101,6 +101,192 @@ FROM read_fastx('{TEST_DIR}/backward_compat.fq.gz') ORDER BY sequence_index;
 ----
 1	read_a1	AAAA	[40, 40, 40, 40]	NULL
 2	read_a2	TTTT	[39, 39, 39, 39]	NULL
+
+# The records vary (md5-derived bases, hashed qualities) so levels 1-9 write different sizes, and
+# span dozens of bgzf blocks.
+statement ok
+CREATE TABLE varied AS
+SELECT i AS sequence_index, 'r' || i AS read_id,
+       translate(md5(i::VARCHAR) || md5((i * 7)::VARCHAR) || md5((i * 13)::VARCHAR),
+                 '0123456789abcdef', 'ACGTACGTACGTACGT') AS sequence1,
+       list_transform(range(96), lambda x: (hash(i, x) % 41)::UTINYINT) AS qual1,
+       translate(md5((i * 3)::VARCHAR) || md5((i * 11)::VARCHAR) || md5((i * 17)::VARCHAR),
+                 '0123456789abcdef', 'TGCATGCATGCATGCA') AS sequence2,
+       list_transform(range(96), lambda x: (hash(i, x, 2) % 41)::UTINYINT) AS qual2
+FROM range(20000) t(i);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/level1.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/level9.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 9);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/level_default.fq.gz' (FORMAT FASTQ);
+
+# Level 0 stores blocks without deflating them, on the multi-threaded writer and on the
+# single-threaded one alike (htslib has a level-0 path in each), so each file is larger than the
+# same records written uncompressed.
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/plain.fq' (FORMAT FASTQ);
+
+statement ok
+SET threads = 4;
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/level0.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 0);
+
+statement ok
+SET threads = 1;
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/level0_t1.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 0);
+
+statement ok
+RESET threads;
+
+# The level reaches the compressor: were it parsed and dropped, both files would be the same size.
+query I
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/level9.fq.gz'));
+----
+true
+
+# Leaving COMPRESSION_LEVEL out writes level 1.
+query I
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/level_default.fq.gz')) = (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz'));
+----
+true
+
+query III
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/level0.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/plain.fq')),
+       (SELECT size FROM read_blob('{TEST_DIR}/level0_t1.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/plain.fq')),
+       (SELECT size FROM read_blob('{TEST_DIR}/level1.fq.gz')) < (SELECT size FROM read_blob('{TEST_DIR}/plain.fq'));
+----
+true	true	true
+
+# Every level is lossless: each file reads back as exactly the records written.
+query IIII
+SELECT (SELECT count(*) FROM read_fastx('{TEST_DIR}/level1.fq.gz')),
+       (SELECT count(*) FROM read_fastx('{TEST_DIR}/level9.fq.gz')),
+       (SELECT count(*) FROM read_fastx('{TEST_DIR}/level0.fq.gz')),
+       (SELECT count(*) FROM read_fastx('{TEST_DIR}/level0_t1.fq.gz'));
+----
+20000	20000	20000	20000
+
+query IIII
+SELECT (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level1.fq.gz')),
+       (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level9.fq.gz')),
+       (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level0.fq.gz')),
+       (SELECT count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/level0_t1.fq.gz'));
+----
+20000	20000	20000	20000
+
+query I
+SELECT count(*) FROM (
+  (SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/level1.fq.gz')
+   EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
+  UNION ALL
+  (SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/level9.fq.gz')
+   EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
+  UNION ALL
+  (SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/level0.fq.gz')
+   EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
+  UNION ALL
+  (SELECT read_id, sequence1, qual1 FROM read_fastx('{TEST_DIR}/level0_t1.fq.gz')
+   EXCEPT SELECT read_id, sequence1, qual1 FROM varied)
+);
+----
+0
+
+# Split output opens the R2 file separately, on its first R2 record; it gets the level too.
+statement ok
+COPY (SELECT read_id, sequence1, qual1, sequence2, qual2 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/split1.{ORIENTATION}.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
+
+statement ok
+COPY (SELECT read_id, sequence1, qual1, sequence2, qual2 FROM varied ORDER BY sequence_index)
+TO '{TEST_DIR}/split9.{ORIENTATION}.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 9);
+
+query II
+SELECT (SELECT size FROM read_blob('{TEST_DIR}/split1.R1.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/split9.R1.fq.gz')),
+       (SELECT size FROM read_blob('{TEST_DIR}/split1.R2.fq.gz')) > (SELECT size FROM read_blob('{TEST_DIR}/split9.R2.fq.gz'));
+----
+true	true
+
+query II
+SELECT count(*), count(DISTINCT read_id) FROM read_fastx('{TEST_DIR}/split1.R1.fq.gz', sequence2 := '{TEST_DIR}/split1.R2.fq.gz');
+----
+20000	20000
+
+query I
+SELECT count(*) FROM (
+  SELECT read_id, sequence1, qual1, sequence2, qual2
+  FROM read_fastx('{TEST_DIR}/split1.R1.fq.gz', sequence2 := '{TEST_DIR}/split1.R2.fq.gz')
+  EXCEPT SELECT read_id, sequence1, qual1, sequence2, qual2 FROM varied
+);
+----
+0
+
+# Refused at bind, before any file is opened: a level outside 0-9.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level10.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 10);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got 10
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/level10.fq.gz');
+----
+0
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_neg.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL -1);
+----
+COMPRESSION_LEVEL must be between 0 and 9, got -1
+
+# A missing or NULL level names no level, so it is refused rather than read as the default.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_bare.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL);
+----
+<REGEX>:.*Copy option "?compression_level"? requires an argument of type BIGINT.*
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/level_null.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL NULL);
+----
+NULL is not supported as a valid option for COPY option
+
+# A level on output that is not compressed would be ignored, so it is refused.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/plain_level.fq' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to gzip output
+
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO '{TEST_DIR}/none_level.fq.gz' (FORMAT FASTQ, COMPRESSION 'none', COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to gzip output
+
+# Remote targets are gzipped by DuckDB's own writer, which takes no level; refused at bind, so
+# no connection is made.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO 's3://miint-no-such-bucket/level.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to local gzip output
+
+# Every URI scheme but file:// is remote, so an az:// target (DuckDB's Azure file system) is refused
+# like an s3:// one.
+statement error
+COPY (SELECT read_id, sequence1, qual1 FROM varied) TO 'az://miint-no-such-container/level.fq.gz' (FORMAT FASTQ, COMPRESSION_LEVEL 1);
+----
+COMPRESSION_LEVEL applies only to local gzip output
+
+statement ok
+DROP TABLE varied;
 
 # Cleanup
 statement ok

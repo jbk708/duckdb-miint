@@ -2,6 +2,8 @@
 
 MIINT supports reading FASTA, FASTQ, SAM, BAM, PAF, GFA, SFF, BIOM, mzML, mzXML, GFF, jplace and Newick, and the output directory of the myloasm assembler.  
 
+A reader expands each path it is given as DuckDB's own readers do: a `file:` URI names the local path it spells (`file:///p`, `file://localhost/p` and `file:/p` name `/p`; on Windows, `file:///C:/p` names `C:/p`), and a leading `~` names the directory of DuckDB's `home_directory` setting (by default your home directory). This holds for a single path, for each path in a list (a list's paths are literal paths, never globs), and for the files a glob matches. Index and database paths given to aligners and classifiers are passed to their libraries as given, so give those as plain paths.
+
 ## Table of contents
 
 - [FASTA / FASTQ](#fasta-and-fastq) - FASTA and FASTQ sequence files.

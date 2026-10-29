@@ -1,5 +1,6 @@
 #include "copy_newick.hpp"
 #include "copy_format_common.hpp"
+#include "bgzf_write_mode.hpp"
 #include "NewickTree.hpp"
 #include "placement_table_reader.hpp"
 #include "duckdb/common/exception.hpp"
@@ -16,6 +17,7 @@ struct NewickCopyBindData : public FunctionData {
 	std::string file_path;
 	bool include_edge_ids = false;
 	FileCompressionType compression = FileCompressionType::UNCOMPRESSED;
+	int compression_level = ::miint::DEFAULT_GZIP_LEVEL; // COMPRESSION_LEVEL, for local gzip output
 
 	// Placements are read at bind time (not during finalize) to avoid deadlocks
 	// when executing queries during an active COPY operation.
@@ -35,6 +37,7 @@ struct NewickCopyBindData : public FunctionData {
 		result->file_path = file_path;
 		result->include_edge_ids = include_edge_ids;
 		result->compression = compression;
+		result->compression_level = compression_level;
 		result->placements = placements;
 		result->node_index_idx = node_index_idx;
 		result->parent_index_idx = parent_index_idx;
@@ -49,10 +52,10 @@ struct NewickCopyBindData : public FunctionData {
 		// Note: we don't compare placements for equality - if all other fields match,
 		// we consider the bind data equal (placements are derived from the table reference)
 		return file_path == other.file_path && include_edge_ids == other.include_edge_ids &&
-		       compression == other.compression && placements.size() == other.placements.size() &&
-		       node_index_idx == other.node_index_idx && parent_index_idx == other.parent_index_idx &&
-		       name_idx == other.name_idx && branch_length_idx == other.branch_length_idx &&
-		       edge_id_idx == other.edge_id_idx;
+		       compression == other.compression && compression_level == other.compression_level &&
+		       placements.size() == other.placements.size() && node_index_idx == other.node_index_idx &&
+		       parent_index_idx == other.parent_index_idx && name_idx == other.name_idx &&
+		       branch_length_idx == other.branch_length_idx && edge_id_idx == other.edge_id_idx;
 	}
 };
 
@@ -63,6 +66,7 @@ struct NewickCopyGlobalState : public GlobalFunctionData {
 	std::mutex lock;
 	std::string file_path;
 	FileCompressionType compression;
+	int compression_level;
 	bool include_edge_ids;
 
 	// Placements are copied from bind data (read at bind time)
@@ -74,9 +78,10 @@ struct NewickCopyGlobalState : public GlobalFunctionData {
 	// Collected node data from all threads
 	std::vector<miint::NodeInput> nodes;
 
-	NewickCopyGlobalState(const std::string &path, FileCompressionType comp, bool edge_ids,
+	NewickCopyGlobalState(const std::string &path, FileCompressionType comp, int level, bool edge_ids,
 	                      std::vector<miint::Placement> placements_p)
-	    : file_path(path), compression(comp), include_edge_ids(edge_ids), placements(std::move(placements_p)) {
+	    : file_path(path), compression(comp), compression_level(level), include_edge_ids(edge_ids),
+	      placements(std::move(placements_p)) {
 	}
 };
 
@@ -123,35 +128,32 @@ static unique_ptr<FunctionData> NewickCopyBind(ClientContext &context, CopyFunct
 
 	// Parse parameters
 	Value compression_param;
+	const vector<Value> *compression_level_values = nullptr;
 	bool edge_ids_specified = false;
 	std::optional<std::string> placements_table;
 	for (auto &option : input.info.options) {
-		auto loption = StringUtil::Lower(option.first.GetIdentifierName());
-		if (loption == "edge_ids") {
-			if (option.second.size() != 1 || option.second[0].type().id() != LogicalTypeId::BOOLEAN) {
-				throw BinderException("EDGE_IDS option requires a boolean value");
-			}
-			result->include_edge_ids = BooleanValue::Get(option.second[0]);
+		if (option.first == "edge_ids") {
+			result->include_edge_ids = CopyOptionFlag(option.second);
 			edge_ids_specified = true;
-		} else if (loption == "compression") {
-			if (option.second.size() != 1 || option.second[0].type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("COMPRESSION option requires a string value");
-			}
+		} else if (option.first == "compression") {
 			compression_param = option.second[0];
-		} else if (loption == "placements") {
-			if (option.second.size() != 1 || option.second[0].type().id() != LogicalTypeId::VARCHAR) {
-				throw BinderException("PLACEMENTS option requires a string value (table or view name)");
-			}
+		} else if (option.first == "compression_level") {
+			compression_level_values = &option.second;
+		} else if (option.first == "placements") {
 			placements_table = option.second[0].ToString();
 			// Validate placements table/view exists and has correct schema
 			ValidatePlacementTableSchema(context, placements_table.value());
 		} else {
-			throw BinderException("Unknown option for COPY FORMAT NEWICK: %s", option.first.GetIdentifierName());
+			ThrowUnreadCopyOption("NEWICK", option.first);
 		}
 	}
 
 	// Use common compression detection (handles auto-detection from .gz extension)
 	result->compression = DetectCompressionType(result->file_path, compression_param);
+	if (compression_level_values) {
+		result->compression_level =
+		    GzipCompressionLevel(*compression_level_values, result->compression, result->file_path);
+	}
 
 	// Default: include edge_ids if edge_id column exists
 	if (!edge_ids_specified) {
@@ -183,7 +185,8 @@ static unique_ptr<FunctionData> NewickCopyBind(ClientContext &context, CopyFunct
 static unique_ptr<GlobalFunctionData> NewickCopyInitializeGlobal(ClientContext &context, FunctionData &bind_data,
                                                                  const string &file_path) {
 	auto &fdata = bind_data.Cast<NewickCopyBindData>();
-	return make_uniq<NewickCopyGlobalState>(file_path, fdata.compression, fdata.include_edge_ids, fdata.placements);
+	return make_uniq<NewickCopyGlobalState>(file_path, fdata.compression, fdata.compression_level,
+	                                        fdata.include_edge_ids, fdata.placements);
 }
 
 //===--------------------------------------------------------------------===//
@@ -360,7 +363,7 @@ static void NewickCopyFinalize(ClientContext &context, FunctionData &bind_data, 
 
 	// Open file and write (CopyFileHandle handles compression)
 	auto &fs = FileSystem::GetFileSystem(context);
-	gstate.file = make_uniq<CopyFileHandle>(fs, gstate.file_path, gstate.compression);
+	gstate.file = make_uniq<CopyFileHandle>(fs, gstate.file_path, gstate.compression, 1, gstate.compression_level);
 	gstate.file->WriteString(newick);
 	gstate.file->Close();
 }
@@ -368,8 +371,16 @@ static void NewickCopyFinalize(ClientContext &context, FunctionData &bind_data, 
 //===--------------------------------------------------------------------===//
 // Register Function
 //===--------------------------------------------------------------------===//
+static void NewickCopyOptions(ClientContext &context, CopyOptionsInput &input) {
+	DeclareCopyOption(input, "edge_ids", LogicalType::BOOLEAN);
+	DeclareCopyOption(input, "compression", LogicalType::VARCHAR);
+	DeclareCompressionLevelCopyOption(input);
+	DeclareCopyOption(input, "placements", LogicalType::VARCHAR);
+}
+
 CopyFunction CopyNewickFunction::GetFunction() {
 	CopyFunction func("newick");
+	func.copy_options = NewickCopyOptions;
 	func.copy_to_bind = NewickCopyBind;
 	func.copy_to_initialize_local = NewickCopyInitializeLocal;
 	func.copy_to_initialize_global = NewickCopyInitializeGlobal;
