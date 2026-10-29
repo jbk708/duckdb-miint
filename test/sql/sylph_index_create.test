@@ -138,6 +138,15 @@ statement error
 SELECT * FROM sylph_index_create('refs', '{TEST_DIR}/err.syldb', genome_id := 'not_a_column');
 ----
 
+# order_by defaults to read_fastx's sequence_index, so a source without that column names another.
+statement ok
+CREATE TABLE refs_no_index AS SELECT read_id, sequence1, filepath FROM refs;
+
+statement error
+SELECT * FROM sylph_index_create('refs_no_index', '{TEST_DIR}/err.syldb', genome_id := 'filepath');
+----
+<REGEX>:Binder Error: sylph_index_create: genome_id/order_by column check failed: .*sequence_index.*
+
 # Unsupported k.
 statement error
 SELECT * FROM sylph_index_create('refs', '{TEST_DIR}/err.syldb', genome_id := 'filepath', k := 30);
