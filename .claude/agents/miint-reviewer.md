@@ -119,6 +119,7 @@ Only rules whose trigger appears in the diff can fire.
 | `ArrowAppender`, an `ArrowArrayStream` produced or handed to an external API, a stream release callback, a hand-built `ArrowArray` | R2, R3 |
 | A sink operator, `GetSinkProgress`, `table_scan_progress`, multi-second blocking work in Sink, Finalize or InitGlobal | R2 |
 | A `threads` parameter, a thread count passed to an embedded tool, `MaxThreads()` | R2 |
+| A `catch` of `std::exception` or `std::runtime_error` whose `what()` goes into a new message or a stored error string; a worker thread's catch that keeps an error for the join | R2 |
 | Raw pointers or C handles from an embedded library (`mm_idx_t*`, `bam1_t*`, `htsFile*`, `bgzf`), `make_shared` / `make_uniq` near them, a destructor, member declaration order in a state struct | R3 |
 | A mutex, condition variable, atomic, or shared state between DuckDB threads; a query issued while a lock is held | R3 |
 | `GetString()` / `GetData<string_t>` / `FlatVector::GetData` on an input vector; recursion over data-driven depth | R3 |
@@ -199,6 +200,7 @@ Safety must not rest on convention or a comment; and a guard must be real, so do
 - **Output schema** [soft]: `NULL` versus `''` for a missing value; one value per cell (a list type or rows, never a separator-joined string or a composite string key); an output column that collides with a passed-through one (`docs/internals/per-sample-pattern.md`, "Reserved output-column names"); a column nothing reads.
 - **Arrow export is sized by bytes.** An Arrow batch is sized by bytes against a ceiling just under a power of two, and `memory_limit` does not bound Arrow export buffers (`docs/internals/duckdb-engine-notes.md`, "Arrow export"). Flag a row-count batch size on an Arrow-exporting path, a large row hint passed as `ArrowAppender`'s `initial_capacity` to an appender a byte ceiling closes early, and docs offering `memory_limit` as the bound.
 - **Progress.** An operator whose Sink or Finalize blocks for seconds without reporting progress overrides `GetSinkProgress` to return `ProgressData::SetInvalid()`; a table function without a progress callback already reports none, and an early-stopping fit's iteration count is not a progress fraction (`docs/internals/duckdb-engine-notes.md`, "Progress reporting").
+- **A caught DuckDB exception is unwrapped.** A catch a DuckDB exception can reach (`std::exception`, `std::runtime_error`) that builds a message or a stored error string from it uses `ErrorData(e).RawMessage()`: `what()` is DuckDB's serialized form, and the user sees JSON inside the new message (`docs/internals/duckdb-engine-notes.md`, "Exceptions"). A worker thread's error is carried to the join as a `std::exception_ptr`. A catch around DuckDB-free code may keep `what()`.
 - **Threads follow DuckDB.** A function does not add its own `threads` parameter where DuckDB's setting applies [soft: ask what it adds]. An embedded tool that runs its own worker threads takes its count from DuckDB's setting [soft: ask how the count relates to DuckDB's own workers].
 
 ### R3 — C++ safety and concurrency [strong]
