@@ -303,13 +303,9 @@ protected:
 		};
 
 		miint::LifecycleOutcome outcome;
-		bool transport_failure = false;
-		string transport_error;
-		try {
-			outcome = miint::SubmitLifecycle(miint::ENAAction::CANCEL, opts, post_fn);
-		} catch (const std::exception &e) {
-			transport_failure = true;
-			transport_error = ErrorData(e).RawMessage();
+		const auto submitted = SubmitCapturingTransportFailure(
+		    outcome, [&] { return miint::SubmitLifecycle(miint::ENAAction::CANCEL, opts, post_fn); });
+		if (submitted.transport_failure) {
 			outcome.action = miint::ENAAction::CANCEL;
 			// `resolved_target.accession` is the post-Reports-translation
 			// value on the alias path and the user-supplied accession on the
@@ -321,43 +317,32 @@ protected:
 			outcome.target = resolved_target.accession;
 		}
 
-		const bool success = !transport_failure && outcome.success;
-		auto error_messages = outcome.error_messages;
-		if (transport_failure && error_messages.empty()) {
-			error_messages.push_back(transport_error);
-		}
-
 		// Always log — even on failure — so the audit trail captures every
-		// attempted CANCEL. The submit + log + error-aggregation block below
-		// duplicates the equivalent block in
-		// `ena_lifecycle_functions.cpp::ExecuteLifecycle`. We don't share a
-		// helper because the two call sites disagree on catalog plumbing —
-		// the table-fn version resolves the catalog by user-supplied name
-		// (and silently skips logging when not attached); here the catalog
-		// is baked into the operator at plan time. A shared helper would
-		// require parameterising over both shapes and isn't worth it for
-		// a ~30-line block. See L1b reviewer-fixes in
-		// localdocs/ena-lifecycle-plan.md.
+		// attempted CANCEL. The log and error reporting below match
+		// `ena_lifecycle_functions.cpp::ExecuteLifecycle`, but the two find
+		// the catalog differently: the table function resolves it by the
+		// user-supplied name (and skips logging when it is not attached),
+		// while here the catalog is fixed in the operator at plan time.
 		SubmissionLogPayload payload;
 		payload.object_type = object_type;
 		payload.action = miint::ActionName(outcome.action);
 		payload.n_objects = 1;
-		payload.success = success;
+		payload.success = submitted.success;
 		payload.duration_ms = outcome.duration_ms;
 		payload.envelope_payload = outcome.envelope_payload;
 		payload.raw_receipt = outcome.raw_receipt;
 		payload.era_accession = outcome.era_accession;
-		payload.error_messages = error_messages;
+		payload.error_messages = submitted.error_messages;
 		payload.target = outcome.target;
 		RecordSubmissionLog(catalog, creds, payload);
 
 		gs.emitted = true;
-		if (transport_failure) {
-			throw InvalidInputException("DELETE FROM ena.%s: %s", object_type, transport_error);
+		if (submitted.transport_failure) {
+			throw InvalidInputException("DELETE FROM ena.%s: %s", object_type, submitted.transport_error);
 		}
-		if (!success) {
+		if (!submitted.success) {
 			string detail;
-			for (const auto &m : error_messages) {
+			for (const auto &m : submitted.error_messages) {
 				if (!detail.empty()) {
 					detail += "; ";
 				}

@@ -243,13 +243,9 @@ void ExecuteLifecycle(ClientContext &context, TableFunctionInput &data, DataChun
 		return client.PostJSONReceiveXML(url, body, user, password);
 	};
 
-	bool transport_failure = false;
-	string transport_error;
-	try {
-		gs.outcome = SubmitLifecycle(bd.action, opts, post_fn);
-	} catch (const std::exception &e) {
-		transport_failure = true;
-		transport_error = duckdb::ErrorData(e).RawMessage();
+	const auto submitted =
+	    duckdb::SubmitCapturingTransportFailure(gs.outcome, [&] { return SubmitLifecycle(bd.action, opts, post_fn); });
+	if (submitted.transport_failure) {
 		// Pre-POST exceptions (envelope-validation or transport setup) leave
 		// `gs.outcome` default-initialized — fill in the fields we know the
 		// log row needs so the audit trail still identifies the action+target.
@@ -259,16 +255,7 @@ void ExecuteLifecycle(ClientContext &context, TableFunctionInput &data, DataChun
 		gs.outcome.target = resolved_accession;
 		gs.outcome.hold_until_date = bd.until_date;
 	}
-
-	const bool success = !transport_failure && gs.outcome.success;
-	auto error_messages = gs.outcome.error_messages;
-	if (transport_failure && error_messages.empty()) {
-		error_messages.push_back(transport_error);
-	}
-	// Make the emitted row's `error_messages` reflect what we actually
-	// computed (pre-existing logic was a no-op, but the assignment matters
-	// once we add transport_error to the list above).
-	gs.outcome.error_messages = error_messages;
+	gs.outcome.error_messages = submitted.error_messages;
 
 	// submission_log integration. Default catalog "ena" is silently skipped
 	// when not attached (one-shot CANCEL from a no-ATTACH session). An
@@ -287,22 +274,22 @@ void ExecuteLifecycle(ClientContext &context, TableFunctionInput &data, DataChun
 		payload.object_type = bd.refname_kind;
 		payload.action = ActionName(gs.outcome.action);
 		payload.n_objects = 1;
-		payload.success = success;
+		payload.success = submitted.success;
 		payload.duration_ms = gs.outcome.duration_ms;
 		payload.envelope_payload = gs.outcome.envelope_payload;
 		payload.raw_receipt = gs.outcome.raw_receipt;
 		payload.era_accession = gs.outcome.era_accession;
-		payload.error_messages = error_messages;
+		payload.error_messages = submitted.error_messages;
 		payload.target = gs.outcome.target;
 		duckdb::RecordSubmissionLog(*catalog, log_creds, payload);
 	}
 
-	if (transport_failure) {
-		throw InvalidInputException("%s: %s", bd.fn_name, transport_error);
+	if (submitted.transport_failure) {
+		throw InvalidInputException("%s: %s", bd.fn_name, submitted.transport_error);
 	}
-	if (!success) {
+	if (!submitted.success) {
 		string detail;
-		for (const auto &m : error_messages) {
+		for (const auto &m : submitted.error_messages) {
 			if (!detail.empty()) {
 				detail += "; ";
 			}
