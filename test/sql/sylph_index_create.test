@@ -120,6 +120,32 @@ SELECT num_genomes FROM sylph_index_create(
 ----
 3
 
+# order_by picks the genome's contig_name: its contig with the lowest value, and on a tie (as
+# when a genome comes from several files, each numbered from 1) the name that sorts last, as
+# docs/profiling.md says. K12's one contig is split into two halves to make a two-contig genome.
+statement ok
+CREATE TABLE k12_halves AS
+  WITH k12 AS (SELECT sequence1, length(sequence1) AS n
+               FROM read_fastx('data/sylph/tiny_refs/e.coli-K12.fasta.gz'))
+  SELECT 'g' AS genome, 'a_ctg' AS read_id, sequence1[1:n // 2] AS sequence1, 0 AS a_first, 1 AS tied FROM k12
+  UNION ALL
+  SELECT 'g', 'z_ctg', sequence1[n // 2 + 1:], 1, 1 FROM k12;
+
+statement ok
+SELECT * FROM sylph_index_create('k12_halves', '{TEST_DIR}/a_first.syldb', genome_id := 'genome', order_by := 'a_first');
+
+statement ok
+SELECT * FROM sylph_index_create('k12_halves', '{TEST_DIR}/tied.syldb', genome_id := 'genome', order_by := 'tied');
+
+query TT
+SELECT 'a_first', contig_name FROM sylph_profile('k12_reads', '{TEST_DIR}/a_first.syldb')
+UNION ALL
+SELECT 'tied', contig_name FROM sylph_profile('k12_reads', '{TEST_DIR}/tied.syldb')
+ORDER BY 1;
+----
+a_first	a_ctg
+tied	z_ctg
+
 # --- error handling -------------------------------------------------------
 
 # genome_id is required.

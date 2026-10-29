@@ -113,7 +113,7 @@ Sketching is done from in-memory sequence bytes via the same sylph 1.0.0-miint R
 - `c` (INTEGER, default 200): FracMinHash subsampling rate. Must be ≥ the `c` of any sample sketch profiled against the database.
 - `min_spacing` (INTEGER, default 30): Minimum k-mer spacing; thins densely-seeded regions.
 - `pseudotax` (BOOLEAN, default true): Track min-spacing-dropped k-mers so the database supports pseudotax/profiling mode. Set false for query-only databases. Not allowed with a two-stage output, which always needs profiling k-mers.
-- `threads` (INTEGER, default 0): Number of genomes sketched at once, each on its own thread. 0 uses DuckDB's `threads` setting; a value limits this call only, without changing the setting. The count is capped at the number of genomes.
+- `threads` (INTEGER, default 0): Number of genomes sketched at once, each on its own thread. 0 uses DuckDB's `threads` setting; another value sets the count for this call only, above or below that setting, without changing it. The count is capped at the number of genomes.
 - `screen_c` (INTEGER, default 3000, two-stage only): FracMinHash rate of the stage-1 screen index. Must be ≥ `c`; larger is a smaller, faster, more permissive screen. Matches `--screen-c` on `sylph convert-db-two-screen`.
 - `min_sparse_kmers` (INTEGER, default 50, two-stage only): Minimum screen k-mers per genome; genomes that would fall short at `screen_c` get a denser, genome-specific screen rate. Matches `--min-sparse-kmers`.
 

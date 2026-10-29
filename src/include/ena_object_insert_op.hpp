@@ -214,8 +214,8 @@ public:
 		if (!validate_only) {
 			RunAliasCollisionCheck(built.specs, client, opts);
 		}
-		// Dispatch by Content-Type. V2 JSON is used only for projects; samples
-		// + experiment + run + analysis go through XML. Samples were on JSON until live wwwdev surfaced an
+		// Dispatch by Content-Type. V2 JSON is used only for projects; samples,
+		// experiments, runs and analyses go through XML. Samples were on JSON until live wwwdev surfaced an
 		// XSD-ordering bug in V2's JSON-to-XML dispatcher (DESCRIPTION
 		// emitted before SAMPLE_NAME); experiment/run/analysis already
 		// required XML because the JSON dispatcher NPEs for SRA-side
