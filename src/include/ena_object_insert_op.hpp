@@ -214,7 +214,7 @@ public:
 		if (!validate_only) {
 			RunAliasCollisionCheck(built.specs, client, opts);
 		}
-		// Dispatch by Content-Type. Post L4b-fix (2026-05-07), V2 JSON is
+		// Dispatch by Content-Type. Since 2026-05-07, V2 JSON is
 		// used only for projects; samples + experiment + run + analysis go
 		// through XML. Samples were on JSON until live wwwdev surfaced an
 		// XSD-ordering bug in V2's JSON-to-XML dispatcher (DESCRIPTION
@@ -282,8 +282,8 @@ public:
 
 		// VALIDATE leaves outcome.rows empty (no per-object accessions in the
 		// receipt). AppendReturningRows asserts rows.size() == specs.size() in
-		// debug builds, so guard the call rather than weaken that invariant —
-		// it's load-bearing for the ADD path.
+		// debug builds, so guard the call rather than weaken that invariant,
+		// which the ADD path relies on.
 		if (return_chunk && !outcome.rows.empty()) {
 			Derived::AppendReturningRows(state.return_collection, state.return_types, built.specs, outcome);
 		}

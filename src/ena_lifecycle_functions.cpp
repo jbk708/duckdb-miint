@@ -55,7 +55,7 @@ struct LifecycleBindData : public TableFunctionData {
 	string fn_name; // for error messages — owned string so plan-cache serialization is safe
 	string secret_name;
 	string accession;              // server-assigned ID — wins over refname when both set
-	string refname;                // user-supplied alias; translated → accession at execute via Reports API (L5)
+	string refname;                // user-supplied alias; translated → accession at execute via Reports API
 	string refname_kind;           // required when refname is set: 'projects' / 'samples' / 'experiments' / 'runs'
 	string until_date;             // HOLD only; ignored for CANCEL/RELEASE
 	string catalog_name;           // resolved name; "ena" by default
@@ -188,17 +188,17 @@ void ExecuteLifecycle(ClientContext &context, TableFunctionInput &data, DataChun
 
 	ENAClient client(*context.db);
 
-	// L5: when the user supplied refname (alias) instead of accession, hit
+	// When the user supplied refname (alias) instead of accession, hit
 	// the Webin Reports API to translate before envelope build. The envelope
-	// builder rejects refname on lifecycle actions (decision #12) — that's
+	// builder rejects refname on lifecycle actions — that's
 	// defense-in-depth; by the time we hand `LifecycleSubmitOptions` over,
 	// `target.accession` is set and `target.refname` is empty.
 	string resolved_accession = bd.accession;
 	if (!bd.refname.empty()) {
 		const auto kind = miint::AliasObjectKindFromTableName(bd.refname_kind);
 		// Reports base must match the endpoint the lifecycle POST will hit
-		// (each server only sees its own account's records); see decision
-		// notes in ena_reports_client.hpp.
+		// (each server only sees its own account's records); see
+		// ena_reports_client.hpp.
 		const auto reports_base = miint::ResolveReportsBaseForEndpoint(creds.endpoint);
 		// Lifetime contract for the fetcher closure: `client` lives on this
 		// stack frame and the fetcher is invoked synchronously by
@@ -264,7 +264,7 @@ void ExecuteLifecycle(ClientContext &context, TableFunctionInput &data, DataChun
 	if (auto *catalog = duckdb::FindAttachedENACatalog(context, bd.fn_name, bd.catalog_name, bd.catalog_explicit)) {
 		duckdb::ResolvedENACredentials log_creds = creds;
 		duckdb::SubmissionLogPayload payload;
-		// Audit-log object_type: when the user supplied `kind => '…'` (the L5
+		// Audit-log object_type: when the user supplied `kind => '…'` (the
 		// alias-targeted path), use the explicit kind so the audit row matches
 		// the per-table convention used by the DELETE-by-alias path. The
 		// accession-targeted path leaves it empty — the lifecycle table fns
@@ -338,7 +338,7 @@ unique_ptr<FunctionData> BindHold(ClientContext &ctx, TableFunctionBindInput &in
 void AddLifecycleNamedParameters(TableFunction &tf, bool include_until) {
 	AddNamedParameter(tf, "secret", LogicalType::VARCHAR);
 	AddNamedParameter(tf, "accession", LogicalType::VARCHAR);
-	// L5: alias-based UX. `refname` is translated to accession at execute via
+	// Alias-based UX. `refname` is translated to accession at execute via
 	// the Webin Reports API; `kind` is required alongside (one of 'projects' /
 	// 'samples' / 'experiments' / 'runs'). Aliases are unique per-account-per-
 	// kind, so the kind disambiguates a reused alias.

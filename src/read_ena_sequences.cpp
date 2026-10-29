@@ -604,8 +604,8 @@ void ReadENASequencesTableFunction::FillOutputFromBatch(DataChunk &output, const
 // final skip notices are emitted.
 //
 // `lateral_sequence_counter` is reset to 1 when a new outer row is consumed
-// (Phase 1) AND on open-retry / mid-stream retry (matching the literal path's
-// counter reset invariant #4 in localdocs/PLAN-ena-lateral.md). Within a
+// (Phase 1) AND on open-retry / mid-stream retry (as the literal path resets
+// its counter on a retry). Within a
 // single outer row, the counter increments monotonically across pending_runs
 // so sequence_index is globally unique per outer row.
 OperatorResultType ReadENASequencesTableFunction::ExecuteInOut(ExecutionContext &context, TableFunctionInput &data_p,
@@ -690,7 +690,7 @@ OperatorResultType ReadENASequencesTableFunction::ExecuteInOut(ExecutionContext 
 	}
 
 	// Phase 2: ensure we have an open reader on the current pending run.
-	// Retry-once-on-open mirrors Execute (literal path, invariant #3).
+	// Retry-once-on-open mirrors Execute (the literal path).
 	if (!local.current_reader) {
 		if (local.pending_runs.empty()) {
 			local.row_consumed = true;

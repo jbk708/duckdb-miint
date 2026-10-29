@@ -247,9 +247,9 @@ protected:
 
 		miint::ENAClient client(*client_context.db);
 
-		// L5: alias-targeted DELETE — translate refname → accession via the
+		// Alias-targeted DELETE — translate refname → accession via the
 		// Webin Reports API before envelope build. The envelope-builder
-		// rejection of `target_refname` (decision #12) stays as defense-in-
+		// rejection of `target_refname` stays as defense-in-
 		// depth; by the time we hand the spec over, target.accession is set
 		// and target.refname is empty. The kind is implicit from the table
 		// being DELETEd from (vs. the lifecycle table fns where the kind is
@@ -258,8 +258,8 @@ protected:
 		if (!resolved_target.refname.empty() && resolved_target.accession.empty()) {
 			const auto kind = miint::AliasObjectKindFromTableName(object_type);
 			// Reports base must match the endpoint the lifecycle POST will hit
-			// (each server only sees its own account's records); see decision
-			// notes in ena_reports_client.hpp.
+			// (each server only sees its own account's records); see
+			// ena_reports_client.hpp.
 			const auto reports_base = miint::ResolveReportsBaseForEndpoint(creds.endpoint);
 			// Lifetime contract for the fetcher closure: `client` lives on
 			// this stack frame and the fetcher is invoked synchronously by

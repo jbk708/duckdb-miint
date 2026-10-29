@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
 // SQL surface for ENA Webin V2 MODIFY actions. Wires the four MODIFY family
-// members: ena_modify_project (L4a) + ena_modify_sample (L4b) +
-// ena_modify_experiment (L4c) + ena_modify_run (L4d). See
-// ena_modify_functions.hpp for the contract.
+// members: ena_modify_project, ena_modify_sample, ena_modify_experiment and
+// ena_modify_run. See ena_modify_functions.hpp for the contract.
 
 #include "ena_modify_functions.hpp"
 
@@ -169,7 +168,7 @@ void ExecuteModifyProject(ClientContext &context, TableFunctionInput &data, Data
 	miint::ENAPostFn post_fn = [&client](const string &url, const string &body, const string &user,
 	                                     const string &password, const string &content_type) {
 		// Projects use JSON (V2's JSON dispatcher handles projects correctly).
-		// Samples (post L4b-fix), experiments, and runs go through XML —
+		// Samples (since 2026-05-07), experiments, and runs go through XML —
 		// samples because V2's JSON-to-XML dispatcher misorders DESCRIPTION
 		// vs. SAMPLE_NAME (XSD violation), the SRA-side objects because the
 		// JSON dispatcher NPEs on them. The content-type dispatch matches
@@ -439,7 +438,7 @@ void ExecuteModifySample(ClientContext &context, TableFunctionInput &data, DataC
 		payload.era_accession = gs.outcome.era_accession;
 		payload.error_messages = submitted.error_messages;
 		// `target` is the user-supplied accession (audit ground truth),
-		// matching the L4a ena_modify_project convention (decision #23).
+		// matching ena_modify_project.
 		payload.target = bd.accession;
 		payload.object_aliases.reserve(gs.outcome.rows.size());
 		payload.object_accessions.reserve(gs.outcome.rows.size());
@@ -504,8 +503,8 @@ void AddModifySampleNamedParameters(TableFunction &tf) {
 // ===========================================================================
 //
 // MODIFY semantics for experiments: re-submit the full updated experiment XML
-// identified by ERX accession. The L4a/L4b template applies — bind-time
-// require everything `ValidateExperimentSpec` and `AppendXmlExperiment` would
+// identified by ERX accession. As for projects and samples, bind requires
+// everything `ValidateExperimentSpec` and `AppendXmlExperiment` would
 // otherwise surface mid-Execute. Cross-references (`study_ref`,
 // `sample_descriptor`) are XSD-mandatory; each is a single VARCHAR that
 // accepts either an ENA accession or a parent's alias. The naming and
@@ -727,8 +726,8 @@ void ExecuteModifyExperiment(ClientContext &context, TableFunctionInput &data, D
 		payload.raw_receipt = gs.outcome.raw_receipt;
 		payload.era_accession = gs.outcome.era_accession;
 		payload.error_messages = submitted.error_messages;
-		// `target` is the user-supplied accession (audit ground truth,
-		// decision #23 — same convention as L4a/L4b).
+		// `target` is the user-supplied accession (audit ground truth, as for
+		// projects and samples).
 		payload.target = bd.accession;
 		payload.object_aliases.reserve(gs.outcome.rows.size());
 		payload.object_accessions.reserve(gs.outcome.rows.size());
@@ -800,13 +799,13 @@ void AddModifyExperimentNamedParameters(TableFunction &tf) {
 // ===========================================================================
 //
 // MODIFY semantics for runs: re-submit the full updated run XML identified by
-// ERR accession. The L4a/L4b/L4c template applies. `files` is
+// ERR accession. The pattern of the other three applies. `files` is
 // `LIST<STRUCT<filename VARCHAR, filetype VARCHAR, md5 VARCHAR>>`,
 // extracted at bind via `duckdb::ExtractENARunFilesList` so the per-entry
 // invariants (non-empty filename/filetype/checksum, no NULL entries) surface
 // as `BinderException`s before secret resolution. `experiment_ref` matches the
 // INSERT-path column name; single VARCHAR each, accession-vs-refname
-// disambiguated at Execute via `miint::ResolveENAExperimentRef` (decision #36).
+// disambiguated at Execute via `miint::ResolveENAExperimentRef`.
 
 struct ModifyRunBindData : public TableFunctionData {
 	string secret_name;
@@ -925,7 +924,7 @@ void ExecuteModifyRun(ClientContext &context, TableFunctionInput &data, DataChun
 		// so a non-XML content_type here indicates a future trait/dispatch
 		// refactor that broke the contract; throw at the violation point
 		// rather than route to a JSON path that itself fails server-side.
-		// Mirrors decision #37 (ena_modify_experiment).
+		// The same check as ena_modify_experiment's.
 		if (content_type != "application/xml") {
 			throw duckdb::InternalException("ena_modify_run: post_fn received content_type='%s'; runs are XML-only",
 			                                content_type);
@@ -951,7 +950,7 @@ void ExecuteModifyRun(ClientContext &context, TableFunctionInput &data, DataChun
 		payload.raw_receipt = gs.outcome.raw_receipt;
 		payload.era_accession = gs.outcome.era_accession;
 		payload.error_messages = submitted.error_messages;
-		// `target` is the user-supplied accession (audit ground truth, decision #23).
+		// `target` is the user-supplied accession (audit ground truth).
 		payload.target = bd.accession;
 		payload.object_aliases.reserve(gs.outcome.rows.size());
 		payload.object_accessions.reserve(gs.outcome.rows.size());

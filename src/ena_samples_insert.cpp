@@ -20,7 +20,7 @@ struct SampleSubmitTraits {
 		return "SAMPLE";
 	}
 	static std::string BuildEnvelope(const SubmissionSpec &env) {
-		// L4b-fix flipped samples to XML on 2026-05-07. wwwdev's JSON-to-XML
+		// Samples moved to XML on 2026-05-07. wwwdev's JSON-to-XML
 		// dispatcher emits <DESCRIPTION> before <SAMPLE_NAME>, violating
 		// SRA.sample.xsd. Emitting XML directly lets us control element order.
 		// Projects remain on JSON (V2 handles them correctly); experiments,
