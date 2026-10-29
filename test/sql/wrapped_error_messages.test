@@ -16,13 +16,18 @@ ATTACH '' AS ena (TYPE ENA, SECRET 'ena_dummy');
 statement ok
 SET enable_external_access = false;
 
-# read_jplace_newick lets an IO Error through and wraps any other error from reading or parsing
-# a file. Bind skips the existence check for a remote path, so the open fails in the scan, inside
-# the wrapper.
+# read_newick and read_jplace_newick wrap only a failure to parse the tree, so a failure to open
+# the file, here a Permission Error rather than an IO Error, comes through as itself instead of as
+# a parse error. Bind skips the existence check for a remote path, so the open fails in the scan.
 statement error
 SELECT * FROM read_jplace_newick(['https://example.invalid/t.jplace']);
 ----
-Error parsing tree from jplace file 'https://example.invalid/t.jplace': Cannot access file "https://example.invalid/t.jplace" - file system operations are disabled by configuration
+<REGEX>:Permission Error: Cannot access file "https://example\.invalid/t\.jplace" - file system operations are disabled by configuration.*
+
+statement error
+SELECT * FROM read_newick(['https://example.invalid/t.nwk']);
+----
+<REGEX>:Permission Error: Cannot access file "https://example\.invalid/t\.nwk" - file system operations are disabled by configuration.*
 
 # ENA submissions: the Webin request fails, and the function names the failure.
 statement error
