@@ -116,9 +116,8 @@ struct RefDescriptor {
 // happens to start with an accession prefix would otherwise be silently
 // misclassified — the server then can't find it.
 //
-// The named wrappers below (`ResolveENAStudyRef`, `ResolveENASampleRef`,
-// `ResolveENAExperimentRef`) carry the canonical prefix lists per object
-// kind so callers don't repeat them. Use the wrappers; expose the
+// The named wrappers below carry the canonical prefix lists per object kind
+// so callers don't repeat them. Use the wrappers; expose the
 // generic primitive only for tests + future kinds where the wrapper hasn't
 // landed yet.
 RefDescriptor ResolveENARefDescriptor(const std::string &value, std::initializer_list<const char *> accession_prefixes);
@@ -221,14 +220,14 @@ struct SubmissionSpec {
 // `projects`. Samples were on the JSON path until 2026-05-07, when a live
 // wwwdev probe surfaced an XSD-ordering bug in V2's JSON-to-XML dispatcher
 // (`<DESCRIPTION>` was emitted before `<SAMPLE_NAME>`, violating
-// `SRA.sample.xsd`), so samples moved to `BuildEnvelopeXML`. The
+// `SRA.sample.xsd`), so samples go through `BuildEnvelopeXML`. The
 // `samples` / `experiments` / `runs` array emitters remain here and are still
 // exercised by unit tests, but no production caller routes those object kinds
 // through this path.
 std::string BuildEnvelopeJSON(const SubmissionSpec &env);
 
-// Build the V2 XML envelope. Production wire format for samples (since
-// 2026-05-07) + experiments + runs. Same `SubmissionSpec` input shape as
+// Build the V2 XML envelope. Production wire format for samples +
+// experiments + runs. Same `SubmissionSpec` input shape as
 // `BuildEnvelopeJSON`; populated `samples` / `experiments` / `runs` arrays
 // are emitted under `<SAMPLE_SET>` / `<EXPERIMENT_SET>` / `<RUN_SET>` in
 // SRA.submission.xsd order. `projects` in the spec are ignored here — submit

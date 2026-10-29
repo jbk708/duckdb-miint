@@ -47,8 +47,8 @@ namespace duckdb {
 // The build is a synchronous side effect performed in InitGlobal: the distinct
 // genome ids are enumerated, then N worker threads claim genomes off a shared
 // counter and sketch one at a time (a per-genome query materializes only that
-// genome) into per-thread builders (`threads` controls the count, default = all
-// cores); the builders are merged and written once. Peak memory is ~one genome
+// genome) into per-thread builders (`threads` controls the count, default =
+// DuckDB's threads setting); the builders are merged and written once. Peak memory is ~one genome
 // per worker plus the finalized sketches (the output size), not the corpus.
 // Execute only emits the status row.
 class SylphIndexCreateTableFunction {

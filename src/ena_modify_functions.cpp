@@ -168,7 +168,7 @@ void ExecuteModifyProject(ClientContext &context, TableFunctionInput &data, Data
 	miint::ENAPostFn post_fn = [&client](const string &url, const string &body, const string &user,
 	                                     const string &password, const string &content_type) {
 		// Projects use JSON (V2's JSON dispatcher handles projects correctly).
-		// Samples (since 2026-05-07), experiments, and runs go through XML —
+		// Samples, experiments, and runs go through XML —
 		// samples because V2's JSON-to-XML dispatcher misorders DESCRIPTION
 		// vs. SAMPLE_NAME (XSD violation), the SRA-side objects because the
 		// JSON dispatcher NPEs on them. The content-type dispatch matches
@@ -799,7 +799,7 @@ void AddModifyExperimentNamedParameters(TableFunction &tf) {
 // ===========================================================================
 //
 // MODIFY semantics for runs: re-submit the full updated run XML identified by
-// ERR accession. The pattern of the other three applies. `files` is
+// ERR accession. The other ena_modify_* functions' pattern applies. `files` is
 // `LIST<STRUCT<filename VARCHAR, filetype VARCHAR, md5 VARCHAR>>`,
 // extracted at bind via `duckdb::ExtractENARunFilesList` so the per-entry
 // invariants (non-empty filename/filetype/checksum, no NULL entries) surface

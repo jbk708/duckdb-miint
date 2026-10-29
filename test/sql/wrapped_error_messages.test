@@ -1,5 +1,5 @@
 # name: test/sql/wrapped_error_messages.test
-# description: An error that wraps a DuckDB error gives that error's message as text, not DuckDB's serialized form of it
+# description: An error that wraps a DuckDB error gives that error's message as text, not DuckDB's serialized form of it, and a reader that cannot open a file reports DuckDB's error as itself
 # group: [sql]
 
 require miint
